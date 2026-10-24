@@ -32,6 +32,12 @@ const PANEL = "[data-toolbar-rev]";
 /** An annotation-backed run in the prose: tapping one opens the toolbar in
  *  edit mode, which is where 删除笔记 has anything to act on. */
 const MARK = '[data-reading-content] a[href^="#note-"]';
+/** The placement's own two clearances, mirrored from `SelectionToolbar.tsx`:
+ *  the panel keeps `EDGE` off the reading area and `GAP` off the words. The
+ *  "is there room for it clear of the passage" arithmetic below is the
+ *  placement's, so it has to spend the same two. */
+const EDGE = 12;
+const GAP = 2;
 
 /** Room for the retried navigation below. The first attempt spends its whole
  *  budget before the second one starts, and the body of each test still needs
@@ -244,8 +250,16 @@ test("the note field never pushes the panel off the page or over the words", asy
       // which leaves 150px above the words and 81px below: neither fits). The
       // cases with room are the ones held to it, and they are the ones the old
       // placement failed.
+      //
+      // "Room" is the placement's own arithmetic, not the raw gap: the panel
+      // keeps `EDGE` (12) clear of the area and `GAP` (2) off the words, so the
+      // space it can actually occupy is the raw gap less both. Without that the
+      // guard claims a placement exists in the 14px band where it does not —
+      // which is what CI's 500px round measured (186px panel into a 190px raw
+      // gap: the panel clamps to the area's top and lands 8px onto the words).
       const panelHeight = box.bottom - box.top;
-      const room = Math.max(picked.selTop - picked.areaTop, picked.areaBottom - picked.selBottom);
+      const room =
+        Math.max(picked.selTop - picked.areaTop, picked.areaBottom - picked.selBottom) - EDGE - GAP;
       if (room >= panelHeight) {
         expect(
           box.bottom <= picked.selTop || box.top >= picked.selBottom,
