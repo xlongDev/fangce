@@ -295,6 +295,11 @@ export const MAX_FONT_SIZE = 26;
  */
 export type PageNumberScope = "off" | "chapter" | "book";
 
+/** Where the indicator sits in the bottom gutter. The page box is centred and
+ *  the indicator is a line of small type under it, so all three positions are
+ *  in the same gutter — only the corner changes. */
+export type PageNumberPosition = "left" | "center" | "right";
+
 /** Chip labels for the 页码 row, in display order. */
 export const PAGE_NUMBER_SCOPES: { key: PageNumberScope; label: string }[] = [
   { key: "off", label: "隐藏" },
@@ -302,6 +307,13 @@ export const PAGE_NUMBER_SCOPES: { key: PageNumberScope; label: string }[] = [
   // The label does not say 约; the indicator itself does, every time, which is
   // where a reader who forgot what they picked will see it.
   { key: "book", label: "全书" },
+];
+
+/** Chip labels for the indicator's position row. */
+export const PAGE_NUMBER_POSITIONS: { key: PageNumberPosition; label: string }[] = [
+  { key: "left", label: "左下" },
+  { key: "center", label: "居中" },
+  { key: "right", label: "右下" },
 ];
 
 /**
@@ -499,13 +511,19 @@ export const DEFAULT_READER_SETTINGS = {
   fontSize: 18,
   speechRate: 1,
   speechVoiceURI: null,
-  speechGranularity: "sentence",
+  // 词语: the wash follows the voice word by word, so it reads as *where the
+  // voice is* rather than which sentence it is somewhere inside. v14 carries
+  // this to installed stores.
+  speechGranularity: "word",
   fontFamily: "book",
   lineHeightIdx: 1,
   paraGapIdx: 1,
   marginX: DEFAULT_MARGIN_X,
   marginY: DEFAULT_MARGIN_Y,
-  indent: false,
+  // On: the two-em indent is the one paragraph style a Chinese page is
+  // expected to carry, and the control only exists while the reader has taken
+  // the layout back (跟随书籍 hides the whole group). v14 carries this too.
+  indent: true,
   bodyBold: false,
   writingMode: "auto",
   bookTypography: true,
@@ -582,7 +600,7 @@ export const useReaderSettings = create<ReaderState>()(
       // no bump — the default merge layers the persisted state over the
       // initial one.
       name: "fangce.reader",
-      version: 13,
+      version: 14,
       // v1 stored the auto-scroll speed as an index into [40, 80, 160, 320];
       // v2 stored the margin as an index into [16, 32, 48, 64]. Margins are
       // continuous px now and the scale was rebased (old 特宽 = new 标准).
@@ -616,6 +634,9 @@ export const useReaderSettings = create<ReaderState>()(
       // v13: the page palette is no longer snapshotted on first run — 跟随主题
       //   is the default again, and the pin the snapshot left in the top-level
       //   slot is dropped back to `null`.
+      // v14: 段首缩进 ships on and the read-aloud wash ships 词语. Both are
+      //   written into the migrate body for v12's reason — the defaults only
+      //   reach a machine that has never run this build.
       migrate: (persisted) => {
         const state = persisted as Partial<ReaderState> & {
           autoScrollIdx?: number;
@@ -721,6 +742,18 @@ export const useReaderSettings = create<ReaderState>()(
         // to `null` and the page follows the theme the way a fresh install
         // does. Per-book values are real choices and are left alone.
         next.pageTheme = null;
+        // v14: 段首缩进 ships on, and the voice washes 词语 rather than 句子.
+        // Same lesson as v12: a changed default only reaches a fresh install
+        // unless it is also written here.
+        //
+        // `indent` only in the top-level slot. It is in `BOOK_SETTINGS`, so a
+        // reader's own toggle lives in `byBook[bookId]` — a stored `false`
+        // there is a choice and stays; the shared slot is never anything but
+        // the default.
+        next.indent = true;
+        // `speechGranularity` is app-wide and the panel is its only writer, so
+        // a stored `sentence` is the old default and means "never chose".
+        if (next.speechGranularity === "sentence") next.speechGranularity = "word";
         return next;
       },
     },

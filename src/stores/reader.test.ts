@@ -256,6 +256,42 @@ describe("v13 page-theme un-pin migration", () => {
   });
 });
 
+/**
+ * v14 carries two more default changes to installed stores — 段首缩进 on, and
+ * the read-aloud wash on 词语. Same two-step as v12 and v13.
+ */
+function v14(persisted: Record<string, unknown>): Record<string, unknown> {
+  const options = useReaderSettings.persist.getOptions();
+  if (!options.migrate) throw new Error("the store lost its migrate function");
+  return options.migrate(persisted, 13) as unknown as Record<string, unknown>;
+}
+
+describe("v14 indent and wash-granularity migration", () => {
+  it("turns 段首缩进 on for an installed store", () => {
+    // The shared slot is only ever the default: the panel writes `indent` to
+    // `byBook[bookId]` (it is in `BOOK_SETTINGS`), so a `false` here is the
+    // old default rather than a choice.
+    expect(v14({ indent: false }).indent).toBe(true);
+    expect(v14({}).indent).toBe(true);
+  });
+
+  it("leaves a book's own 段首缩进 alone", () => {
+    // A `false` under `byBook` was written from the panel — the reader turned
+    // it off while reading that book, and that is a choice.
+    const byBook = { b1: { indent: false }, b2: { indent: true } };
+    expect(v14({ byBook }).byBook).toEqual(byBook);
+  });
+
+  it("takes a stored 句子 to 词语", () => {
+    // `speechGranularity` is app-wide and the panel is its only writer, so a
+    // stored `sentence` is the old default: "never chose".
+    expect(v14({ speechGranularity: "sentence" }).speechGranularity).toBe("word");
+    // The two the reader could have picked deliberately stay put.
+    expect(v14({ speechGranularity: "paragraph" }).speechGranularity).toBe("paragraph");
+    expect(v14({ speechGranularity: "word" }).speechGranularity).toBe("word");
+  });
+});
+
 describe("shipped defaults", () => {
   it("opens a book paged, and leaves a PDF in the colours it was published with", () => {
     // The two asks, as the *fresh install* sees them. The migration tests above
@@ -278,5 +314,12 @@ describe("shipped defaults", () => {
     expect(DEFAULT_READER_SETTINGS.pageTheme).toBeNull();
     expect(pageIsNight(DEFAULT_READER_SETTINGS.pageTheme, false)).toBe(false);
     expect(pageIsNight(DEFAULT_READER_SETTINGS.pageTheme, true)).toBe(true);
+  });
+
+  it("gives a book an indented first line and washes the spoken word", () => {
+    // What the reader sees the first time they take the layout back
+    // (段首缩进 only exists under 自定义) and the first time the voice runs.
+    expect(DEFAULT_READER_SETTINGS.indent).toBe(true);
+    expect(DEFAULT_READER_SETTINGS.speechGranularity).toBe("word");
   });
 });
