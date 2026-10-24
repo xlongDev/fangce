@@ -362,6 +362,27 @@ test("coming back to the book hands the voice back to the reader", async ({ page
   await expect.poll(() => gapToFooter(page)).toBeGreaterThan(12);
 });
 
+/** Pins 朗读高亮 to 句子 before the voice starts.
+ *
+ *  The wash is only this file's probe for *where the voice is*, and at 词语 it
+ *  is painted from the engine's own `boundary` event — which the stub voice
+ *  above never fires, so there is no mark to find and every reading comes back
+ *  `-1`. The default became 词语 in b529333; this test is about the landing,
+ *  not the wash's granularity (the word path is unit-tested in speech.test.ts).
+ */
+async function useSentenceWash(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "阅读设置" }).first().click();
+  await page.waitForTimeout(600);
+  const row = page
+    .locator("aside div")
+    .filter({ has: page.getByText("朗读高亮", { exact: true }) })
+    .last();
+  await row.getByRole("button", { name: "句子", exact: true }).click();
+  await page.waitForTimeout(300);
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(700);
+}
+
 test("coming back lands on the sentence being read, not on the chapter's top", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await openBook(page, "/?demo=1", DEMO_BOOK);
@@ -369,6 +390,7 @@ test("coming back lands on the sentence being read, not on the chapter's top", a
   // in a paged layout the paragraph it lands on can sit in the next column —
   // "visible on both axes" is a scroll-layout fact.
   await useScrollLayout(page);
+  await useSentenceWash(page);
   await startSpeaking(page);
   await goToShelf(page);
 
