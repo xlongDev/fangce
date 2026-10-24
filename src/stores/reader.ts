@@ -206,6 +206,12 @@ interface ReaderState {
   recordPace: (sample: PaceSample) => void;
   /** How much of the "N / M 页" page indicator to show in paged layouts. */
   pageNumbers: PageNumberScope;
+  /** Which corner of the bottom gutter that indicator sits in. */
+  pageNumberPosition: PageNumberPosition;
+  /** Whether the indicator waits for the pointer: off the page until the
+   *  reader hovers the page, so a page number never sits on the paper
+   *  uninvited. */
+  pageIndicatorAutoHide: boolean;
   /**
    * Where the page's palette comes from — the app theme, or a fixed choice.
    * `null` is 跟随主题 and the shipped default: the page wears whatever the
@@ -554,6 +560,8 @@ export const DEFAULT_READER_SETTINGS = {
   readingSpeed: DEFAULT_READING_SPEED,
   paceSamples: [],
   pageNumbers: "off",
+  pageNumberPosition: "center",
+  pageIndicatorAutoHide: true,
   pageTheme: null,
   pdfFill: true,
   pdfNight: "follow",

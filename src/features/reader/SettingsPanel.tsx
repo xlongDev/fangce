@@ -26,6 +26,7 @@ import {
   MIN_RULER_OPACITY,
   MIN_RULER_SCROLL_TRIGGER,
   MARGIN_X_PRESETS,
+  PAGE_NUMBER_POSITIONS,
   PAGE_NUMBER_SCOPES,
   PAGE_THEMES,
   PDF_NIGHTS,
@@ -479,6 +480,28 @@ export function SettingsPanel({
             value={settings.pageNumbers}
             onChange={(value) => update({ pageNumbers: value })}
           />
+          {/* Where it sits, only while there is something to place: the row is
+              a second line of the same group, the way 页边距 stacks its two
+              sliders under one label. */}
+          {settings.pageNumbers !== "off" && (
+            <>
+              <div className="mt-1.5 flex w-full flex-wrap gap-1.5">
+                <Chips
+                  options={PAGE_NUMBER_POSITIONS}
+                  value={settings.pageNumberPosition}
+                  onChange={(value) => update({ pageNumberPosition: value })}
+                />
+              </div>
+              <div className="mt-1.5 flex w-full items-center gap-3">
+                <p className="text-text-3 min-w-0 flex-1 text-[12px]">自动隐藏，悬浮时显示</p>
+                <GlassSwitch
+                  checked={settings.pageIndicatorAutoHide}
+                  onCheckedChange={(next) => update({ pageIndicatorAutoHide: next })}
+                  ariaLabel="页码自动隐藏"
+                />
+              </div>
+            </>
+          )}
         </Group>
         <Group label="翻页动画">
           <Chips

@@ -165,6 +165,16 @@ const WHEEL_START_PX = 48;
 const SCRUB_COMMIT = 0.35;
 
 /**
+ * Stillness (ms) before the pointer and the page number step off the page.
+ *
+ * Three seconds is the length of a glance: long enough that the number is still
+ * there when the reader looks up from a paragraph, short enough that it is gone
+ * before it reads as part of the page. foliate's own cursor hider waits the same
+ * three seconds (`CURSOR_HIDE_MS` in view.js), so one stillness clears both.
+ */
+const IDLE_MS = 3000;
+
+/**
  * Stand-in for the book's image list while the query is in flight. A fresh
  * `[]` per render would re-create every callback that reads it.
  */
@@ -286,6 +296,8 @@ export function ReaderView({
     rsvpWpm,
     paceSamples,
     pageNumbers,
+    pageNumberPosition,
+    pageIndicatorAutoHide,
     pdfFill,
     pdfNight: pdfNightAxis,
     pdfGap,
@@ -658,6 +670,42 @@ export function ReaderView({
   const reportPace = useReadingPace();
   /** Hover-reveal flip affordance for paged modes; hides itself after 2s idle. */
   const [flipHint, setFlipHint] = useState(false);
+  /** Stillness: true once the pointer has not moved over the page for `IDLE_MS`.
+   *  What an auto-hidden page indicator waits on, and what takes the pointer
+   *  itself off the paper — the page is what the reader is looking at, not the
+   *  chrome. The drawer is portalled inside this box, so working in it counts
+   *  as activity too. */
+  const [idle, setIdle] = useState(false);
+  const idleTimer = useRef<number | null>(null);
+  /** Where the last real move was, so a move that went nowhere is not one. */
+  const lastMove = useRef({ x: -1, y: -1 });
+  /**
+   * Any real pointer activity in the page restarts the clock.
+   *
+   * A move the browser invents does not count: WebKit synthesizes mousemoves
+   * when content scrolls under a resting pointer (a keyboard or wheel page
+   * turn), and those would keep the number on the page for as long as the
+   * reader flipped through chapters without touching the mouse. foliate's own
+   * cursor hider applies the same screen-coordinate guard.
+   */
+  const wake = useCallback((event?: { screenX: number; screenY: number }) => {
+    if (event) {
+      if (event.screenX === lastMove.current.x && event.screenY === lastMove.current.y) return;
+      lastMove.current = { x: event.screenX, y: event.screenY };
+    }
+    setIdle(false);
+    if (idleTimer.current !== null) window.clearTimeout(idleTimer.current);
+    idleTimer.current = window.setTimeout(() => setIdle(true), IDLE_MS);
+  }, []);
+  // The clock starts when the page opens: the number is there to be read, and
+  // then it steps aside on its own without anyone having to move a mouse. Only
+  // the timer is armed here — `idle` already starts false, so no state write.
+  useEffect(() => {
+    idleTimer.current = window.setTimeout(() => setIdle(true), IDLE_MS);
+    return () => {
+      if (idleTimer.current !== null) window.clearTimeout(idleTimer.current);
+    };
+  }, []);
   /** 1-based position inside the chapter's column count, for the page indicator. */
   const [pageInfo, setPageInfo] = useState<{ page: number; pages: number } | null>(null);
 
@@ -2226,13 +2274,23 @@ export function ReaderView({
       {topChrome}
 
       {/* Reading viewport. In paged modes the flip arrows reveal on hover or
-          pointer-down and fade out after 2s, so they never sit on the text. */}
+          pointer-down and fade out after 2s, so they never sit on the text.
+          After `IDLE_MS` of stillness the pointer and the page number step off
+          the page too — the cursor goes with `cursor: none`, which covers the
+          prose and PDF paths; a foliate section is an iframe, so foliate hides
+          the cursor inside it on its own clock. */}
       <div
         ref={viewportRef}
         data-reading-viewport
         className="relative flex min-h-0 flex-1"
+        style={{ cursor: idle ? "none" : undefined }}
         onMouseMove={revealFlipHintOnMove}
-        onPointerDown={revealFlipHint}
+        onPointerMove={wake}
+        onPointerEnter={() => wake()}
+        onPointerDown={() => {
+          revealFlipHint();
+          wake();
+        }}
         onMouseLeave={() => setFlipHint(false)}
       >
         <div
@@ -2336,6 +2394,10 @@ export function ReaderView({
               // A click on a book's text happens inside foliate's iframe and
               // never reaches this document — the pane learns about it here.
               onActivate: pair?.onActivate,
+              // So does a move over it: the page number's 3-second clock is
+              // restarted from the section's own document, because the pane
+              // hears nothing while the pointer is on a foliate book.
+              onPointerInBook: wake,
             }}
             plate={{ image: plate }}
             prose={{
@@ -2416,7 +2478,23 @@ export function ReaderView({
         {paged && shownPages && (
           <p
             data-page-indicator
-            className="pointer-events-none absolute bottom-3 left-1/2 z-30 -translate-x-1/2 text-xs tabular-nums opacity-70"
+            className={cn(
+              // All three positions sit in the same bottom gutter; only the
+              // corner moves. 居中 is the original, and the only one that needs
+              // a transform.
+              "pointer-events-none absolute bottom-3 z-30 text-xs tabular-nums",
+              // Auto-hidden it waits out `IDLE_MS` of stillness. Coming back is
+              // quick (200ms) and leaving is slower and softer (500ms, 2px): a
+              // number that vanishes fast reads as a glitch, and one that
+              // drifts out of the page reads as the page letting go of it.
+              "transition-[opacity,translate] motion-reduce:transition-none",
+              pageIndicatorAutoHide && idle
+                ? "translate-y-0.5 opacity-0 duration-500 ease-in-out"
+                : "opacity-70 duration-200 ease-out",
+              pageNumberPosition === "left" && "left-3",
+              pageNumberPosition === "center" && "left-1/2 -translate-x-1/2",
+              pageNumberPosition === "right" && "right-3",
+            )}
             style={{ color: surface.fg }}
           >
             {shownPages.estimated && "约 "}

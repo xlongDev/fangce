@@ -376,6 +376,13 @@ type Props = {
    *  it so 对照阅读 can hand the window's controls to the pane that was
    *  clicked. */
   onActivate?: () => void;
+  /**
+   * The pointer moved inside a section. Same reason as `onActivate` — an
+   * iframe keeps its own events — and what restarts the page number's
+   * stillness clock: a foliate book's text is not the host's own element, so
+   * the pane's `pointermove` never fires while the pointer is on the page.
+   */
+  onPointerInBook?: (event: PointerEvent) => void;
 };
 
 /**
@@ -778,6 +785,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     onLocationChange,
     onTocLoaded,
     onActivate,
+    onPointerInBook,
   },
   ref,
 ) {
@@ -804,12 +812,15 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   const imageReport = useRef(onImageOpen);
   // And for the pane activation, which the per-section handler calls.
   const activateReport = useRef(onActivate);
+  // And for pointer movement inside a section, relayed out of the iframe.
+  const moveReport = useRef(onPointerInBook);
   useEffect(() => {
     selectReport.current = onSelect;
     clickReport.current = onAnnotationClick;
     imageReport.current = onImageOpen;
     activateReport.current = onActivate;
-  }, [onSelect, onAnnotationClick, onImageOpen, onActivate]); // Read through a ref inside the open effect: layout and style changes are
+    moveReport.current = onPointerInBook;
+  }, [onSelect, onAnnotationClick, onImageOpen, onActivate, onPointerInBook]); // Read through a ref inside the open effect: layout and style changes are
   // applied by the dedicated effects below, and reopening the book on a
   // settings switch would lose the reading position.
   const layoutRef = useRef(layout);
@@ -1126,6 +1137,12 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       // decides which pane owns the keyboard — without it a book could be
       // selected and scrolled while the window kept answering for the other.
       doc.addEventListener("pointerdown", () => activateReport.current?.(), true);
+      // The reader's pointer, moving over the book. A section is an iframe and
+      // a document keeps its own events: the host never sees a move, which is
+      // why the page number's stillness clock cannot be restarted from the
+      // pane (a prose book needs no such thing — its text is the pane). Same
+      // door as the pointer-down above.
+      doc.addEventListener("pointermove", (move) => moveReport.current?.(move), true);
     },
     [captureSelection, onSectionClick],
   );
@@ -1241,6 +1258,12 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         view.addEventListener("draw-annotation", onDrawAnnotation);
         view.addEventListener("show-annotation", onShowAnnotation);
         view.addEventListener("create-overlay", onOverlay);
+        // The reader takes the pointer off the page after `IDLE_MS` of
+        // stillness, same as the page number does. The pane's own
+        // `cursor: none` cannot reach a section — it is an iframe, and a
+        // document decides the cursor for its own content — so foliate's
+        // hider is armed here and clones itself onto every section it loads.
+        view.setAttribute("autohide-cursor", "");
         host.append(view);
         await view.open(book);
         // Before `init`, never after: foliate reads a section's `writing-mode`

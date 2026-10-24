@@ -192,6 +192,10 @@ export const makeBook = async file => {
 }
 
 class CursorAutohider {
+    // How long the pointer has to be still before it comes off the page. The
+    // reader's own chrome (the page number) waits the same three seconds, so
+    // one stillness clears both at once.
+    static HIDE_MS = 3000
     #timeout
     #el
     #check
@@ -207,7 +211,7 @@ class CursorAutohider {
             this.#state.x = screenX, this.#state.y = screenY
             this.show()
             if (this.#timeout) clearTimeout(this.#timeout)
-            if (check()) this.#timeout = setTimeout(this.hide.bind(this), 1000)
+            if (check()) this.#timeout = setTimeout(this.hide.bind(this), CursorAutohider.HIDE_MS)
         }, false)
     }
     cloneFor(el) {

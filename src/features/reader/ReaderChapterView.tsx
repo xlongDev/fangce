@@ -125,6 +125,9 @@ export function ReaderChapterView({
      *  where this document cannot hear it). 对照阅读 uses it to hand the
      *  window's controls to the pane that was clicked. */
     onActivate?: () => void;
+    /** The pointer moved inside a section — same iframe problem, and what
+     *  restarts the page number's stillness clock on a foliate book. */
+    onPointerInBook?: (event: PointerEvent) => void;
   };
   plate: {
     /** Set when the chapter is a part-title page; otherwise `null`. */
@@ -267,6 +270,7 @@ export function ReaderChapterView({
           onLocationChange={foliate.onLocationChange}
           onTocLoaded={foliate.onTocLoaded}
           onActivate={foliate.onActivate}
+          onPointerInBook={foliate.onPointerInBook}
         />
       </Suspense>
     );

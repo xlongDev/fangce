@@ -228,6 +228,110 @@ test("hiding the indicator takes it off the page", async ({ page }) => {
 });
 
 /**
+ * 页码停在哪一角：左下 / 居中 / 右下。
+ *
+ * 三处都在页面下方同一条檐里 —— 换的只是横向的落点。量的是**盒子相对阅读视口**
+ * 的位置，不是绝对像素：两个引擎的行高与字宽不同，绝对坐标只会钉住引擎。判据
+ * 取得松（20px 内算贴边、居中差 4px 内算居中），因为它要挡的是「点了没反应」和
+ * 「跑到对面去了」，不是亚像素。
+ */
+test("the indicator can sit in either bottom corner, or stay centred", async ({ page }) => {
+  await openReader(page);
+  await choose(page, "排版模式", "单页");
+  await choose(page, "页码", "当前章");
+
+  const pane = (await page.locator("[data-reading-viewport]").boundingBox())!;
+  const box = async () => (await page.locator("[data-page-indicator]").boundingBox())!;
+
+  const centred = await box();
+  expect(
+    Math.abs(centred.x + centred.width / 2 - (pane.x + pane.width / 2)),
+    "默认没有居中",
+  ).toBeLessThan(4);
+
+  await choose(page, "页码", "左下");
+  const left = await box();
+  expect(left.x - pane.x, "左下没有贴到左边").toBeLessThan(20);
+
+  await choose(page, "页码", "右下");
+  const right = await box();
+  expect(pane.x + pane.width - (right.x + right.width), "右下没有贴到右边").toBeLessThan(20);
+});
+
+/**
+ * 自动隐藏：无操作 3 秒后页码自己收起，动一下鼠标就回来。
+ *
+ * 量的是 `opacity` —— 隐藏是**淡出**而不是 `display:none`（那样会把这条檐重新排一遍，
+ * 也让「藏起来」变成「没有」）。因此 `toBeVisible()` 在这里没有意义：opacity 0 的元素
+ * 仍然有盒子。
+ *
+ * 收起是计时器而不是「指针离开」：读者的指针停在页面上读一段字，页码也该让开。
+ */
+test("自动隐藏：静置 3 秒页码自己收起，指针一动就回来", async ({ page }) => {
+  await openReader(page);
+  await choose(page, "排版模式", "单页");
+  await choose(page, "页码", "当前章");
+
+  const indicatorEl = page.locator("[data-page-indicator]");
+  const pane = page.locator("[data-reading-viewport]");
+
+  // 刚动过（点完芯片），所以先看得见。
+  await expect(indicatorEl).toHaveCSS("opacity", "0.7");
+  // 静置 3 秒 → 页码与指针一起让开。
+  await expect(indicatorEl, "静置之后页码没有收起").toHaveCSS("opacity", "0", { timeout: 6000 });
+  await expect(pane, "静置之后指针没有让开").toHaveCSS("cursor", "none");
+
+  // 动一下 → 都回来。
+  await pane.hover();
+  await expect(indicatorEl, "指针动过之后页码没回来").toHaveCSS("opacity", "0.7");
+  await expect(pane, "指针动过之后鼠标箭头没回来").not.toHaveCSS("cursor", "none");
+
+  // 关掉开关：它就该一直在了，静置也不动。
+  await page.getByRole("button", { name: "阅读设置" }).first().click();
+  await page.waitForTimeout(700);
+  await page.getByRole("switch", { name: "页码自动隐藏" }).click();
+  await page.waitForTimeout(300);
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(700);
+  await expect(indicatorEl, "关掉自动隐藏之后页码不该再藏").toHaveCSS("opacity", "0.7", {
+    timeout: 6000,
+  });
+});
+
+/**
+ * 静置之后，指针在**书页上**动一下页码也该回来 —— EPUB 那一侧。
+ *
+ * 这是静置版上线后漏掉的一条：上面那条走 prose，而 foliate 的正文是 iframe，
+ * 一份文档自己的事件留在自己里面，窗格上的 `pointermove` 在指针压在书上时
+ * **一次都不会响**。所以「移出再移入」能唤醒（iframe 元素的 pointerenter 照旧
+ * 冒到窗格），「在书上挪一下」不能 —— 读者报的就是后者。
+ *
+ * 判据故意把两步分开：先移出再移入（旧代码也能过），再原地挪一小步（只有把
+ * pointermove 从 section 文档里转出来才过得去）。
+ */
+test("静置之后，指针在 EPUB 书页上动一下页码也回来", async ({ page }) => {
+  await openReader(page, { query: "/?demo=1&epub=1", title: /页码样书/ });
+  await choose(page, "排版模式", "单页");
+  await choose(page, "页码", "当前章");
+
+  const indicatorEl = page.locator("[data-page-indicator]");
+  const pane = page.locator("[data-reading-viewport]");
+  const box = (await pane.boundingBox())!;
+  // 书页正中 —— 指针在这里是压在 foliate 的 section iframe 上的。
+  const onBook = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
+
+  // 先进到书上（这一下唤醒的是 pointerenter，新旧代码都算）。
+  await page.mouse.move(onBook.x, onBook.y);
+  await expect(indicatorEl).toHaveCSS("opacity", "0.7");
+  // 静置到收起。
+  await expect(indicatorEl, "静置之后页码没有收起").toHaveCSS("opacity", "0", { timeout: 6000 });
+
+  // 原地挪一小步：全程没有离开书，窗格什么都不会听到。
+  await page.mouse.move(onBook.x + 24, onBook.y + 12);
+  await expect(indicatorEl, "指针在书页上动过，页码没回来").toHaveCSS("opacity", "0.7");
+});
+
+/**
  * A spread turns two pages, so the counter has to move two.
  *
  * The number is what a reader checks a turn against: if the page visibly moves
