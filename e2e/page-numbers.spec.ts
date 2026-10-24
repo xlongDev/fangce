@@ -332,6 +332,36 @@ test("静置之后，指针在 EPUB 书页上动一下页码也回来", async ({
 });
 
 /**
+ * 没有屏幕的环境，指针动了也要唤醒。
+ *
+ * CI 的 WebKit 跑红过两条唤醒用例（这条文件里上面那两条），本地全绿 —— 区别只在
+ * 环境：无屏的 runner 上，合成鼠标事件的 `screenX/Y` 恒为 0,0，而「是不是一次真的
+ * 移动」原本读的是 screen 坐标，于是每一次移动都被判成「没动」，页码再也不回来。
+ * 坐标去重现在读 client 坐标（视口相对，永远有值）。
+ *
+ * 这条用例把 screen 坐标钉成 0 来复现那个环境：换回 screen 坐标，它红。
+ */
+test("没有屏幕的环境（screen 坐标恒 0），指针动了页码也回来", async ({ page }) => {
+  await page.addInitScript(() => {
+    for (const proto of [window.MouseEvent.prototype, window.PointerEvent?.prototype]) {
+      if (!proto) continue;
+      Object.defineProperty(proto, "screenX", { get: () => 0, configurable: true });
+      Object.defineProperty(proto, "screenY", { get: () => 0, configurable: true });
+    }
+  });
+  await openReader(page);
+  await choose(page, "排版模式", "单页");
+  await choose(page, "页码", "当前章");
+
+  const indicatorEl = page.locator("[data-page-indicator]");
+  await expect(indicatorEl).toHaveCSS("opacity", "0.7");
+  await expect(indicatorEl, "静置之后页码没有收起").toHaveCSS("opacity", "0", { timeout: 6000 });
+
+  await page.locator("[data-reading-viewport]").hover();
+  await expect(indicatorEl, "screen 坐标恒 0 时页码没回来").toHaveCSS("opacity", "0.7");
+});
+
+/**
  * A spread turns two pages, so the counter has to move two.
  *
  * The number is what a reader checks a turn against: if the page visibly moves

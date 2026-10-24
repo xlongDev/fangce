@@ -685,13 +685,18 @@ export function ReaderView({
    * A move the browser invents does not count: WebKit synthesizes mousemoves
    * when content scrolls under a resting pointer (a keyboard or wheel page
    * turn), and those would keep the number on the page for as long as the
-   * reader flipped through chapters without touching the mouse. foliate's own
-   * cursor hider applies the same screen-coordinate guard.
+   * reader flipped through chapters without touching the mouse.
+   *
+   * **Client coordinates, never screen ones.** A headless Linux runner has no
+   * screen, so WebKit reports `screenX/Y` as 0,0 for every synthetic move —
+   * with those, this guard reads "the pointer never moved" and the number
+   * never comes back. That is not hypothetical: it is exactly what CI's WebKit
+   * run said. `clientX/Y` are viewport-relative and always real.
    */
-  const wake = useCallback((event?: { screenX: number; screenY: number }) => {
+  const wake = useCallback((event?: { clientX: number; clientY: number }) => {
     if (event) {
-      if (event.screenX === lastMove.current.x && event.screenY === lastMove.current.y) return;
-      lastMove.current = { x: event.screenX, y: event.screenY };
+      if (event.clientX === lastMove.current.x && event.clientY === lastMove.current.y) return;
+      lastMove.current = { x: event.clientX, y: event.clientY };
     }
     setIdle(false);
     if (idleTimer.current !== null) window.clearTimeout(idleTimer.current);

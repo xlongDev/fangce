@@ -196,6 +196,10 @@ class CursorAutohider {
     // reader's own chrome (the page number) waits the same three seconds, so
     // one stillness clears both at once.
     static HIDE_MS = 3000
+    // Client coordinates, not screen ones: a headless Linux runner has no
+    // screen, so `screenX/Y` read 0,0 for every synthetic move and this guard
+    // would conclude the pointer never moved — the cursor would never hide
+    // there. (Upstream used screen coordinates.)
     #timeout
     #el
     #check
@@ -205,10 +209,10 @@ class CursorAutohider {
         this.#check = check
         this.#state = state
         if (this.#state.hidden) this.hide()
-        this.#el.addEventListener('mousemove', ({ screenX, screenY }) => {
+        this.#el.addEventListener('mousemove', ({ clientX, clientY }) => {
             // check if it actually moved
-            if (screenX === this.#state.x && screenY === this.#state.y) return
-            this.#state.x = screenX, this.#state.y = screenY
+            if (clientX === this.#state.x && clientY === this.#state.y) return
+            this.#state.x = clientX, this.#state.y = clientY
             this.show()
             if (this.#timeout) clearTimeout(this.#timeout)
             if (check()) this.#timeout = setTimeout(this.hide.bind(this), CursorAutohider.HIDE_MS)
