@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { CaretDown, ImageSquare, Plus, X } from "@phosphor-icons/react";
 import { motion, useReducedMotion } from "motion/react";
 
@@ -1139,8 +1139,19 @@ function nearestMargin(value: number): number {
   );
 }
 
+/** How often a drag may write to the store while the thumb is still moving.
+ *
+ * A margin write is not a number in a store: it re-columnises the whole
+ * section (about a second on a book whose text is a single section), and
+ * 左右 writes three attributes. One write per input event therefore freezes
+ * the drag outright — the thumb moves a pixel, the page stops for a second,
+ * three times over. The thumb follows the pointer through local state, the
+ * value lands at most once per window, and the last one always lands on
+ * release. */
+const SLIDER_COMMIT_MS = 120;
+
 /** A slider row: label on the left, live value on the right, accent fill. */
-function SliderRow({
+export function SliderRow({
   label,
   readout,
   min,
@@ -1155,6 +1166,49 @@ function SliderRow({
   value: number;
   onChange: (value: number) => void;
 }) {
+  /** Where the thumb is right now, while it is down. */
+  const [draft, setDraft] = useState<number | null>(null);
+  /** The value the drag last asked for, and the window it is waiting out. */
+  const pending = useRef<number | null>(null);
+  const timer = useRef<number | null>(null);
+  const shown = draft ?? Math.round(value);
+
+  /** Hands the store whatever the drag last asked for, right now. */
+  const commit = () => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+    if (pending.current === null) return;
+    const next = pending.current;
+    pending.current = null;
+    onChange(next);
+  };
+
+  // A panel that closes mid-drag still owes the store the value it was
+  // showing: `pointerup` never arrives for a thumb that was taken away.
+  const latest = useRef({ commit });
+  useEffect(() => {
+    latest.current.commit = commit;
+  });
+  useEffect(() => () => latest.current.commit(), []);
+
+  const move = (next: number) => {
+    setDraft(next);
+    pending.current = next;
+    if (timer.current !== null) return;
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      commit();
+    }, SLIDER_COMMIT_MS);
+  };
+
+  /** Release hands the input back to the store. */
+  const release = () => {
+    commit();
+    setDraft(null);
+  };
+
   return (
     <div className="mt-2 flex items-center gap-2.5">
       <span className="text-text-3 shrink-0 text-[12px]">{label}</span>
@@ -1165,11 +1219,15 @@ function SliderRow({
         min={min}
         max={max}
         step={1}
-        value={Math.round(value)}
+        value={shown}
         style={{
-          ["--range-fill" as string]: `${((value - min) / (max - min)) * 100}%`,
+          ["--range-fill" as string]: `${((shown - min) / (max - min)) * 100}%`,
         }}
-        onChange={(event) => onChange(Number(event.currentTarget.value))}
+        onChange={(event) => move(Number(event.currentTarget.value))}
+        onPointerUp={release}
+        onPointerCancel={release}
+        onKeyUp={release}
+        onBlur={release}
       />
       <span className="text-accent w-[72px] shrink-0 text-right text-[12px] font-semibold tabular-nums">
         {readout}
