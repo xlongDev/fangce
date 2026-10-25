@@ -91,9 +91,12 @@
   --shadow-glass: 0 1px 0 rgba(255, 255, 255, 0.08) inset, 0 18px 50px rgba(0, 0, 0, 0.45);
   --shadow-panel: 0 30px 80px rgba(0, 0, 0, 0.55);
   --glass-sheen: rgba(255, 255, 255, 0.07);
+  --glass-sheen-soft: rgba(255, 255, 255, 0.08);
+  --glass-edge: rgba(0, 0, 0, 0.25);
+  --glass-side: rgba(255, 255, 255, 0.07);
+  --glass-rim: rgba(255, 255, 255, 0.14);
   --app-glow-1: rgba(233, 161, 59, 0.17);
   --app-glow-2: rgba(64, 106, 176, 0.22);
-  --app-glow-3: rgba(120, 82, 190, 0.12);
   --grain-opacity: 0.035;
   --shadow-lift: 0 20px 40px -16px rgba(0, 0, 0, 0.6);
 }
@@ -105,8 +108,22 @@
    #a9671b it replaced only reached 3.9:1 and failed AA for button text. ---- */
 [data-theme="light"] {
   --app-bg: #e2e5ec;
-  --surface-1: rgba(255, 255, 255, 0.48);
-  --surface-2: rgba(255, 255, 255, 0.62);
+  /* 🔴 Elevation 1 has to be *brighter* than elevation 2 on light, not dimmer.
+     `glass` (elevation 1) is the material of the cards that sit inside a
+     `glass-2` panel or sidebar, and it carries the raised language — an inset
+     top highlight plus a drop shadow. At 0.48 against the panel's 0.62 the
+     fill said the opposite: a nested card came out 14 points darker than its
+     own container, so on white paper it read as a hole punched in the panel,
+     not as a card resting on it — the rim and the shadow were arguing with
+     the fill. Both numbers came down again once the backdrop grew discs for
+     the blur to act on (see `.app-backdrop`): 0.56 / 0.30 keeps the card
+     above its panel while leaving 70% of the backdrop visible through the
+     pane, which is what makes it read as glass instead of as white paper.
+     Dark keeps its 0.05 / 0.075 pair on purpose: a 2.5-point gap reads as
+     "inset", which is the correct reading on a dark surface, and inverting it
+     there would double every hover fill instead. */
+  --surface-1: rgba(255, 255, 255, 0.56);
+  --surface-2: rgba(255, 255, 255, 0.3);
   --surface-3: rgba(255, 255, 255, 0.9);
   --hairline: rgba(16, 20, 28, 0.1);
   --hairline-strong: rgba(16, 20, 28, 0.2);
@@ -122,10 +139,26 @@
   --shadow-glass: 0 1px 0 rgba(255, 255, 255, 0.95) inset, 0 14px 34px rgba(16, 20, 28, 0.12);
   --shadow-panel: 0 30px 70px rgba(16, 20, 28, 0.16);
   --glass-sheen: rgba(255, 255, 255, 0.38);
-  --app-glow-1: rgba(233, 161, 59, 0.34);
-  --app-glow-2: rgba(112, 142, 205, 0.38);
-  --app-glow-3: rgba(158, 120, 220, 0.16);
-  --grain-opacity: 0.02;
+  /* The card's own specular. Weaker than the panel's on purpose: it sits on a
+     lighter fill, so the same alpha would blow the corner to flat white. */
+  --glass-sheen-soft: rgba(255, 255, 255, 0.46);
+  /* A hair of shade along the bottom rim. Glass has thickness, and a fill with
+     a top highlight but no underside reads as a sticker, not a pane. */
+  --glass-edge: rgba(16, 20, 28, 0.05);
+  /* A lit rim, not a drawn one. A hairline reads as an outline somebody put
+     there; a bright edge reads as the pane catching light, which is the one
+     glass cue that works without a displacement filter. */
+  --glass-rim: rgba(255, 255, 255, 0.78);
+  /* The pane's side rims: half the top highlight, so the glass has a lit
+     perimeter rather than only a lit lid. */
+  --glass-side: rgba(255, 255, 255, 0.5);
+  --app-glow-1: rgba(233, 161, 59, 0.36);
+  --app-glow-2: rgba(112, 142, 205, 0.4);
+  /* Grain is a dark-surface material. On light it multiplies into a stack
+     that is already three gradients deep, and 0.02 of it reads as dirt on the
+     paper rather than as texture — the one place it earned its keep was the
+     night page, which keeps its 0.035. */
+  --grain-opacity: 0;
   /* A lifted tile on light paper needs a wider, fainter drop than on dark:
      the same alpha that reads as depth on black reads as a smudge on white. */
   --shadow-lift: 0 18px 36px -14px rgba(16, 20, 28, 0.3);
@@ -139,6 +172,11 @@
     --surface-1: rgba(20, 22, 28, 0.94);
     --surface-2: rgba(24, 27, 33, 0.96);
     --surface-3: rgba(28, 31, 38, 0.98);
+    /* "Reduce transparency" means the pane stops pretending to be glass:
+       an opaque fill with a specular sweep on it is the one combination that
+       looks worse than either extreme. */
+    --glass-sheen: transparent;
+    --glass-sheen-soft: transparent;
   }
   [data-theme="light"] {
     --surface-1: rgba(255, 255, 255, 0.94);
@@ -151,6 +189,8 @@
   --surface-1: rgba(20, 22, 28, 0.94);
   --surface-2: rgba(24, 27, 33, 0.96);
   --surface-3: rgba(28, 31, 38, 0.98);
+  --glass-sheen: transparent;
+  --glass-sheen-soft: transparent;
 }
 [data-transparency="reduced"][data-theme="light"] {
   --surface-1: rgba(255, 255, 255, 0.94);
@@ -310,16 +350,31 @@ button {
       0  content
      50  modal / palette overlay
      60  grain (fixed, pointer-events-none, never on a scrolling box)
-   Anything else should reuse these; do not invent one-off z values. */
+   Anything else should reuse these; do not invent one-off z values.
+
+   Two glows, not three. The third sat at 85% 8% in violet and was the only
+   hue on the page belonging to neither side of the warm/cool pair — it made
+   the backdrop a third subject instead of a background, and on light paper
+   the violet-plus-blue corner is what a card had to float on top of. With the
+   nested material now brighter than its panel, the backdrop has to recede
+   further, not compete. */
 .app-backdrop {
   position: fixed;
   inset: 0;
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(60% 50% at 12% 0%, var(--app-glow-1), transparent 70%),
-    radial-gradient(55% 55% at 100% 100%, var(--app-glow-2), transparent 75%),
-    radial-gradient(40% 40% at 85% 8%, var(--app-glow-3), transparent 70%), var(--app-bg);
+    /* Discs, not fogs. A radial gradient that fades over its whole radius has
+       no edge anywhere, and an edge is the only thing a blur can be seen to
+       act on — that is the whole mechanism of "liquid glass". Each disc below
+       holds full strength out to its `0 42%` stop and then gives up over the
+       next 24%, so the backdrop has two readable boundaries at the scale a
+       card is actually viewed at. Sizes are absolute px on purpose: a disc
+       that scales with the window changes shape under the reader every time
+       the pane is dragged, which reads as the wallpaper sliding. */
+    radial-gradient(circle 430px at 0% -10%, var(--app-glow-1) 0 42%, transparent 66%),
+    radial-gradient(circle 400px at 104% 108%, var(--app-glow-2) 0 42%, transparent 66%),
+    var(--app-bg);
 }
 
 .app-grain {
@@ -337,9 +392,17 @@ button {
    already-blurred parent compounds both cost and muddiness. */
 @utility glass {
   background-color: var(--surface-1);
-  border: 1px solid var(--hairline);
+  /* The card's own specular pass. `glass-2` has always had one and the card
+     never did, so a nested card was a flat fill — its bright rim read as a
+     drawn border rather than as a lit edge, because nothing on the surface
+     was actually catching light. */
+  background-image: linear-gradient(142deg, var(--glass-sheen-soft), transparent 48%);
+  border: 1px solid var(--glass-rim);
   box-shadow:
     inset 0 1px 0 var(--highlight),
+    inset 0 -1px 0 var(--glass-edge),
+    inset 1px 0 0 var(--glass-side),
+    inset -1px 0 0 var(--glass-side),
     var(--shadow-glass);
 }
 
@@ -352,12 +415,12 @@ button {
     transparent 42%,
     color-mix(in srgb, var(--glass-sheen) 55%, transparent)
   );
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--glass-rim);
   box-shadow:
     inset 0 1px 0 var(--highlight),
     var(--shadow-glass);
-  backdrop-filter: blur(var(--blur-lg)) saturate(180%);
-  -webkit-backdrop-filter: blur(var(--blur-lg)) saturate(180%);
+  backdrop-filter: blur(var(--blur-md)) saturate(190%);
+  -webkit-backdrop-filter: blur(var(--blur-md)) saturate(190%);
 }
 
 @utility glass-solid {
