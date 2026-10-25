@@ -31,6 +31,7 @@ import {
   type SUMMARY_KEYS,
   type StoredBook,
   type StoredImage,
+  authorNames,
   bookRow,
   coverUrls,
   newId,
@@ -213,6 +214,11 @@ async function describePdf(id: string): Promise<void> {
 /** The shelf, filtered and sorted the way the Rust query does it. */
 export async function bookList(query: BookQuery): Promise<BookSummary[]> {
   const rows = await db.all<StoredBook>("books");
+  // The filter and the sort below read `authors` off the raw row, before
+  // `summaryOf` settles the shape — and a row written before `authorNames`
+  // existed can still hold foliate's contributor objects. The rows are fresh
+  // out of the store, so they are settled in place.
+  for (const row of rows) row.authors = authorNames(row.authors);
   const needle = query.search?.trim().toLowerCase() ?? "";
   const tag = query.tag?.trim().toLowerCase() ?? "";
   const kept = rows.filter((book) => {

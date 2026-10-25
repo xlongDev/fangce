@@ -105,3 +105,99 @@ test("an import that lost a file keeps its summary until it is read", async ({ p
   await page.getByRole("button", { name: "关闭" }).click();
   await expect(failure).toBeHidden();
 });
+
+/** A creator carrying a role is a contributor object, not a string.
+ *
+ * The same disagreement as the Kindle lists above, one field over: foliate's
+ * EPUB reader keeps a contributor an **object** whenever it carries a role or a
+ * file-as (EPUB 2's `opf:role="aut"`), and only collapses a contributor with
+ * nothing but a name down to that name. A book with two such creators hands
+ * over a list of objects; stored as it arrived, `authorLine`'s `name.trim()`
+ * took the whole shelf down with `TypeError: e.trim is not a function` — the
+ * blank 「这个界面出错了」 a reader saw on the deployed web build after
+ * importing, while the desktop (Rust importer, plain strings) was fine.
+ *
+ * The fixture carries two creators with different attributes (`opf:role` on
+ * one, `opf:role` + `opf:file-as` on the other), so a fix that only handles one
+ * shape cannot pass. The assertion is the author line itself: both names, read
+ * out of the objects.
+ */
+test("a creator carrying a role lands as its name, not the contributor object", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "导入书籍" }).first()).toBeVisible();
+
+  const [chooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    page.getByRole("button", { name: "导入书籍" }).first().click(),
+  ]);
+  await chooser.setFiles("public/demo/author-roles.epub");
+
+  const card = page.getByRole("button", { name: /双作者样书/ }).first();
+  await expect(card, "导入的书要出现在书架上").toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("张三 / 李四").first()).toBeVisible();
+  await expect(page.getByText("这个界面出错了")).toHaveCount(0);
+});
+
+/** A row stored before the shape was settled still renders the shelf.
+ *
+ * The import fix only cleans what is imported from now on. A reader who hit the
+ * defect on the deployed build already has the poisoned row — the objects are
+ * in their IndexedDB — so without the read side settling the shape too, the fix
+ * would ship and their shelf would stay blank. This writes that row by hand,
+ * the way the old importer stored it, and reads it back through the shelf.
+ */
+test("a shelf row holding contributor objects still renders", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "导入书籍" }).first()).toBeVisible();
+
+  await page.evaluate(() => {
+    return new Promise<void>((resolve, reject) => {
+      const open = indexedDB.open("fangce", 3);
+      open.addEventListener("error", () => reject(open.error));
+      open.addEventListener("success", () => {
+        const transaction = open.result.transaction("books", "readwrite");
+        transaction.objectStore("books").put(
+          {
+            id: "legacy-roles",
+            title: "旧行样书",
+            subtitle: null,
+            description: null,
+            language: null,
+            publisher: null,
+            format: "epub",
+            fileSize: 2048,
+            addedAt: 1,
+            updatedAt: 1,
+            lastReadAt: null,
+            progress: null,
+            location: null,
+            favorite: false,
+            // What the pre-fix importer stored for a book whose creators carry
+            // `opf:role="aut"`: foliate's contributor objects, verbatim.
+            authors: [
+              { name: "张三", role: ["aut"] },
+              { name: "李四", role: ["aut"], sortAs: "Li, Si" },
+            ],
+            tags: [],
+            toc: [],
+            images: [],
+          },
+          "legacy-roles",
+        );
+        transaction.addEventListener("complete", () => resolve());
+        transaction.addEventListener("error", () => reject(transaction.error));
+      });
+    });
+  });
+  await page.reload();
+
+  await expect(page.getByRole("button", { name: /旧行样书/ }).first()).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page.getByText("张三 / 李四").first()).toBeVisible();
+  await expect(page.getByText("这个界面出错了")).toHaveCount(0);
+});

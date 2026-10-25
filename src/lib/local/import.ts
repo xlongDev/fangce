@@ -15,6 +15,7 @@
 import { makeBook } from "foliate-js/view.js";
 
 import { chapterFromBlocks, countChars, textBlocks } from "@/lib/local/blocks";
+import { authorNames } from "@/lib/local/rows";
 import type { BookFormat, ChapterContent, ChapterMeta } from "@/lib/bindings";
 import type { BookImage } from "@/types/ipc";
 
@@ -354,13 +355,11 @@ export async function readBook(file: File): Promise<ParsedBook> {
     description?: string | null;
     language?: string | null;
     publisher?: string | null;
-    author?: string | string[] | null;
+    // Wider than it looks: an EPUB creator carrying a role or a file-as stays
+    // a contributor object, so the list is settled by `authorNames` below.
+    author?: unknown;
   };
-  const authors = Array.isArray(meta.author)
-    ? meta.author
-    : typeof meta.author === "string" && meta.author.length > 0
-      ? [meta.author]
-      : [];
+  const authors = authorNames(meta.author);
   const labels = flattenToc(book.toc ?? []);
   let cover: Blob | null = null;
   try {

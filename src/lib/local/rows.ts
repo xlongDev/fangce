@@ -63,10 +63,46 @@ export async function coverUrlOf(id: string, cover: Blob | null): Promise<string
   return url;
 }
 
+/**
+ * An author list as plain strings, whatever shape a row holds.
+ *
+ * The one metadata field the importer cannot settle on its own: foliate's EPUB
+ * reader keeps a contributor an **object** whenever it carries a role or a
+ * file-as — EPUB 2's `opf:role="aut"`, a MARC `role` refinement — and only
+ * collapses a contributor with nothing but a name down to that name. A book
+ * with two such creators hands over a list of objects, and stored as it
+ * arrived it takes the shelf down on `authorLine`'s `name.trim()`
+ * (`TypeError: e.trim is not a function`, measured on the deployed web build).
+ * The desktop never meets the shape: its Rust importer answers plain strings.
+ *
+ * It settles reads as well as writes because a row written before it existed —
+ * the web build imported through the same unnormalised path — still holds the
+ * objects, and every consumer above this layer assumes strings (`authorLine`,
+ * the author sort, edition matching). A contributor's `name` is taken when it
+ * is a string; a language-mapped name (`alternate-script`, or an `xml:lang`
+ * off the base) is itself an object with no single string in it, so that
+ * author is dropped rather than guessed at.
+ */
+export function authorNames(value: unknown): string[] {
+  const out: string[] = [];
+  for (const entry of Array.isArray(value) ? value : [value]) {
+    const inner =
+      entry !== null && typeof entry === "object" && !Array.isArray(entry)
+        ? (entry as { name?: unknown }).name
+        : entry;
+    if (typeof inner === "string" && inner.trim()) out.push(inner.trim());
+  }
+  return out;
+}
+
 export async function summaryOf(book: StoredBook): Promise<BookSummary> {
   const cover = await coverOf(book.id);
   const { toc: _toc, images: _images, ...rest } = book;
-  return { ...rest, coverUrl: await coverUrlOf(book.id, cover) };
+  return {
+    ...rest,
+    authors: authorNames(book.authors),
+    coverUrl: await coverUrlOf(book.id, cover),
+  };
 }
 
 /** One book's row, or `null`. */
