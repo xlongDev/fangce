@@ -41,7 +41,11 @@ jobs:
       - name: Build with Pages base path
         run: pnpm exec vite build
         env:
-          PAGES_BASE: /ColorReader/
+          # Derived from the repo name, never hardcoded: the 2026-10-21 rename
+          # (ColorReader → fangce) missed this line, so the deployed HTML kept
+          # pointing at /ColorReader/assets/* (404) while the site lived at
+          # /fangce/ — a blank page that still returns 200.
+          PAGES_BASE: /${{ github.event.repository.name }}/
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
