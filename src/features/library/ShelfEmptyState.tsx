@@ -2,7 +2,6 @@ import { motion } from "motion/react";
 import { Sparkle } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
-import { BOOK_FORMAT_CHIPS } from "@/features/library/importFiles";
 import { cn } from "@/lib/cn";
 import { staggerDelay, useMotion } from "@/lib/motion";
 
@@ -14,9 +13,12 @@ import { staggerDelay, useMotion } from "@/lib/motion";
  * before there is a book to point at. The colours are semi-transparent so the
  * whole block stays quiet on either theme.
  *
- * The format chips below are the importer's own list (`BOOK_FORMAT_CHIPS`,
- * derived from `BOOK_EXTENSIONS`), so the shelf can never advertise a format
- * the importer would refuse (or, worse, forget one it takes).
+ * It used to list every format the importer accepts as a row of chips under
+ * the copy. That row answered a question nobody asks on an empty shelf — it is
+ * the importer's spec, not an action, and eleven chips outweighed the one
+ * button it was sitting above. The list still lives in `BOOK_FORMAT_CHIPS`,
+ * where it earns its keep: `DropImportOverlay` shows it while a file is
+ * actually being dragged over the window and the answer matters.
  */
 const SPINES = [
   { color: "#f0a93b", w: 16, h: 60 },
@@ -68,19 +70,8 @@ export function ShelfEmptyState({
 
       <h2 className="text-text-1 text-base font-semibold">书库还是空的</h2>
       <p className="text-text-2 mt-1.5 max-w-[42ch] text-[13.5px] leading-relaxed">
-        书架在等它的第一本书。把文件拖进窗口，或者点右上角的「导入书籍」。
+        书架在等它的第一本书。拖进窗口，或者从这里导入。
       </p>
-
-      <div className="mt-4 flex max-w-[34ch] flex-wrap justify-center gap-1.5">
-        {BOOK_FORMAT_CHIPS.map((label) => (
-          <span
-            key={label}
-            className="glass text-text-3 rounded-full px-2.5 py-1 text-[11px] font-medium tracking-wide"
-          >
-            {label}
-          </span>
-        ))}
-      </div>
 
       <div className="mt-6">
         <GlassButton variant="primary" size="md" onClick={onImport}>
