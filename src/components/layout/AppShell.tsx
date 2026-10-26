@@ -1,9 +1,8 @@
 import { Suspense, useEffect, useMemo, type CSSProperties } from "react";
 import { useLocation, useOutlet } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion, type Variants } from "motion/react";
-import { CaretRight } from "@phosphor-icons/react";
 
-import { TitleBar } from "@/components/layout/TitleBar";
+import { SidebarGlyph, TitleBar } from "@/components/layout/TitleBar";
 import { NavList } from "@/components/layout/NavList";
 import { UpdateBanner } from "@/components/layout/UpdateBanner";
 import { CommandPalette } from "@/components/command/CommandPalette";
@@ -229,27 +228,21 @@ export function AppShell() {
               </div>
             </div>
           )}
-          {sidebarHidden && !readerFullscreen && (
-            <GlassIconButton
-              label="显示侧边栏"
-              size="sm"
-              onClick={() => showSidebar(false)}
-              className="self-center"
-            >
-              <CaretRight size={16} />
-            </GlassIconButton>
-          )}
+          {/* 隐藏侧边栏 has no docked restore button any more: the toggle in
+              `TitleBar` is always there and always reachable, so a second one
+              at the window's left edge only read as the rail failing to leave
+              completely. Fullscreen still needs its own, because the title
+              bar is not rendered then. */}
           {sidebarHidden && readerFullscreen && (
-            // Fullscreen re-summon: the docked caret would sit mid-edge where
-            // the flip arrow lives, so it docks into the quiet bottom-left
-            // corner instead, clear of the footer hud and the flip arrows.
+            // Docked into the quiet bottom-left corner rather than mid-edge,
+            // where the flip arrow lives — clear of the footer hud too.
             <GlassIconButton
               label="显示侧边栏"
               size="sm"
               onClick={() => showSidebar(false)}
               className="glass-solid absolute bottom-10 left-3 z-30"
             >
-              <CaretRight size={16} />
+              <SidebarGlyph expanded={false} />
             </GlassIconButton>
           )}
           <GlassPanel

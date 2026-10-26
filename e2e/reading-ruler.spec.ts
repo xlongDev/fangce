@@ -1125,9 +1125,9 @@ test("the band still hugs the text when the sidebar leaves the pane", async ({ p
   // layout, that the band is already where this pane wants it — and the words
   // then re-wrap under a band that kept the measure of the page it was drawn on.
   // Measured here: 117px out on a 1208px pane, on the one state whose width is
-  // set in two steps (hiding the sidebar swaps the rail for a caret that mounts
-  // afterwards). The key carries the measure the words were set in, so the
-  // re-wrap is a different page as far as the band is concerned.
+  // set in two steps (hiding the sidebar collapses the rail to zero, and the
+  // pane re-wraps a frame later). The key carries the measure the words were
+  // set in, so the re-wrap is a different page as far as the band is concerned.
   await openBook(page, "/?demo=1&epub=1", /页码样书/);
   // 滚动: the band follows the words through the pane's second layout, which is
   // a scroll position — chosen, not the store's default (单页 since 2026-10-21).
@@ -1273,9 +1273,10 @@ test("the page next door does not widen the band, in either page layout", async 
       Math.abs(after.band.right - before.band.right),
       `${mode}：带子没有回到原位`,
     ).toBeLessThan(1.5);
-    // Back to a showing sidebar for the next layout. Both toggles live in
-    // different places — the collapsed rail's own chevron and the docked caret
-    // the hidden state leaves behind — so whichever is on screen answers.
+    // Back to a showing sidebar for the next layout. Two different controls
+    // answer — the rail's own chevron for a collapsed rail, the title bar's
+    // toggle for a hidden one — and both are on screen, so the regex matches
+    // whichever applies.
     const restore = page.getByRole("button", { name: /展开侧边栏|显示侧边栏/ }).first();
     await restore.click();
     await page.waitForTimeout(1800);

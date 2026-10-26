@@ -4,7 +4,7 @@ import { motion, type HTMLMotionProps } from "motion/react";
 import { cn } from "@/lib/cn";
 import { useMotion } from "@/lib/motion";
 
-type Variant = "primary" | "ghost" | "subtle";
+type Variant = "primary" | "ghost" | "glass" | "subtle";
 type Size = "sm" | "md" | "lg";
 
 // `motion` overrides a few DOM events (`onAnimationStart`, `onDrag*`), so the
@@ -20,6 +20,12 @@ interface GlassButtonProps extends Omit<HTMLMotionProps<"button">, "ref" | "chil
 const VARIANT: Record<Variant, string> = {
   primary: "bg-accent text-on-accent border-transparent shadow-glass",
   ghost: "bg-surface-1 text-text-1 border-hairline hover:bg-surface-2",
+  // The `glass` utility, not a fill: specular sweep, lit rim, inset top/bottom
+  // edges and the panel shadow. `ghost` is a flat tint with a hairline, which
+  // reads as a chip when it sits next to a real pane — the sidebar footer had
+  // a `glass` pill above a row of `ghost` buttons and the row looked cut out
+  // of the paper rather than resting on it.
+  glass: "glass text-text-1 hover:bg-surface-2",
   subtle: "bg-transparent text-text-2 border-transparent hover:bg-surface-1 hover:text-text-1",
 };
 
@@ -78,6 +84,9 @@ interface GlassIconButtonProps extends Omit<HTMLMotionProps<"button">, "ref" | "
   /** Required for a11y; the visible content is decorative. */
   label: string;
   size?: Size;
+  /** Defaults to `ghost`. Pass `glass` where the button sits beside a real
+   *  pane and a flat tint would read as a hole in it. */
+  variant?: Variant;
   children?: ReactNode;
 }
 
@@ -90,14 +99,14 @@ const ICON_SIZE: Record<Size, string> = {
 /** Square glass button for icon glyphs. Always provides an `aria-label`. */
 export const GlassIconButton = forwardRef<HTMLButtonElement, GlassIconButtonProps>(
   function GlassIconButton(
-    { label, size = "md", className, children, type = "button", ...rest },
+    { label, size = "md", variant = "ghost", className, children, type = "button", ...rest },
     ref,
   ) {
     return (
       <GlassButton
         ref={ref}
         type={type}
-        variant="ghost"
+        variant={variant}
         aria-label={label}
         className={cn(ICON_SIZE[size], "px-0", className)}
         {...rest}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   Archive,
   ArrowsClockwise,
+  ArrowSquareOut,
   BookOpenText,
   CloudArrowUp,
   Monitor,
@@ -15,6 +16,7 @@ import {
 } from "@phosphor-icons/react";
 import { motion, useReducedMotion } from "motion/react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
 
 import { GlassButton } from "@/components/glass/button";
@@ -82,8 +84,10 @@ function reachableTop(root: HTMLElement, top: number): number {
 
 const THEMES: readonly { value: ThemeMode; label: string; icon: typeof Sun }[] = [
   { value: "light", label: "浅色", icon: Sun },
-  { value: "dark", label: "深色", icon: Moon },
+  // Light → system → dark, the same scale as the sidebar's own switcher: three
+  // points from explicit to explicit, with the automatic choice in the middle.
   { value: "system", label: "跟随系统", icon: Monitor },
+  { value: "dark", label: "深色", icon: Moon },
 ];
 
 export function SettingsPage() {
@@ -624,6 +628,11 @@ function ResetSection() {
   );
 }
 
+/** Where the repository link points; the opener capability whitelists this URL.
+ *  It used to live in the sidebar footer — a link is not a chrome action, and
+ *  it was the one item down there nobody would ever press twice. */
+const REPO_URL = "https://github.com/xlongDev/fangce";
+
 function AboutSection() {
   const { data, isLoading } = useSystemInfo();
   const { state, checkForUpdate, installAndRestart } = useUpdater();
@@ -649,6 +658,16 @@ function AboutSection() {
           </span>
         </Row>
       ))}
+
+      <Row label="GitHub" hint="源码、更新日志与问题反馈">
+        <button
+          type="button"
+          onClick={() => void openUrl(REPO_URL).catch(() => {})}
+          className="text-accent focus-visible:focus-ring inline-flex items-center gap-1 text-[12.5px] transition-opacity hover:opacity-80"
+        >
+          xlongDev/fangce <ArrowSquareOut size={12} />
+        </button>
+      </Row>
 
       <Actions>
         {installing ? (

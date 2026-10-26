@@ -11,14 +11,11 @@ import {
   GearSix,
   CaretLeft,
   CaretRight,
-  ArrowLineLeft,
-  GithubLogo,
   Monitor,
   Moon,
   Notebook,
   Sun,
 } from "@phosphor-icons/react";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import type { ReactNode } from "react";
 
 import { cn } from "@/lib/cn";
@@ -166,39 +163,51 @@ export function NavList() {
 
 const THEME_OPTIONS: readonly { value: ThemeMode; label: string; icon: typeof Sun }[] = [
   { value: "light", label: "浅色", icon: Sun },
-  { value: "dark", label: "深色", icon: Moon },
+  // Ordered light → system → dark, so the row reads as a scale rather than as
+  // two opposite modes with a third wedged between them.
   { value: "system", label: "跟随系统", icon: Monitor },
+  { value: "dark", label: "深色", icon: Moon },
 ];
 
 /**
  * Stable ids that let motion FLIP the footer's icons between the collapsed
  * rail and the expanded two-row layout.
  *
- * The two states share only some icons — `hide` and `palette` only exist when
- * the rail is open — so the shared ones carry a stable `layoutId` and the
- * ones that come and go mount inside `AnimatePresence`. `LayoutGroup` in
- * `Footer` makes the id a global scope inside the footer, so a `layoutId`
- * can sit in the column in one render and the row in the next and still
+ * Every control in the footer now exists in both layouts, so each carries its
+ * own `layoutId` and there is nothing left to fade in and out. `LayoutGroup`
+ * in `Footer` makes the id a global scope inside the footer, so a `layoutId`
+ * can sit in the column in one render and in the row in the next and still
  * animate between them.
  */
 const ID = {
   settings: "footer-settings",
   themeIcon: "footer-theme-icon",
   toggle: "chrome-toggle",
-  github: "chrome-github",
+  palette: "chrome-palette",
 } as const;
+
+/** `layoutId` per chrome action, keyed by `key` rather than by position — the
+ *  row's order is a design decision, and indexing it meant a reorder would
+ *  hand two buttons each other's identity mid-FLIP. */
+const CHROME_ID: Record<string, string> = {
+  toggle: ID.toggle,
+  palette: ID.palette,
+  settings: ID.settings,
+};
 
 /** Quick appearance switcher for the sidebar footer.
  *
- * Expanded: a pill that leads with the settings glyph behind a hairline,
- * then three theme segments whose circular highlight springs between them
- * (shared layoutId). Collapsed: the rail is too narrow for the pill, so a
- * single button cycles the modes with an icon crossfade instead. */
+ * Expanded: three theme segments whose circular highlight springs between
+ * them (shared layoutId). Collapsed: the rail is too narrow for the pill, so
+ * a single button cycles the modes with an icon crossfade instead.
+ *
+ * 设置 used to lead this pill behind a hairline. It moved down into the
+ * chrome row: three appearance segments over three tool buttons is a column
+ * that lines up, where four-over-two never did. */
 function ThemeSwitch({ collapsed }: { collapsed: boolean }) {
   const theme = useSettings((s) => s.theme);
   const setTheme = useSettings((s) => s.setTheme);
   const reduce = useReducedMotion();
-  const navigate = useNavigate();
 
   if (collapsed) {
     const current = THEME_OPTIONS.find((option) => option.value === theme) ?? THEME_OPTIONS[0]!;
@@ -210,7 +219,10 @@ function ThemeSwitch({ collapsed }: { collapsed: boolean }) {
           title={`主题：${current.label}（点击切换为${next.label}）`}
           aria-label={`主题：${current.label}，点击切换为${next.label}`}
           onClick={() => setTheme(next.value)}
-          className="text-text-3 hover:text-text-1 hover:bg-surface-1 flex h-8 w-8 items-center justify-center rounded-full transition-colors"
+          // Same material as the chrome buttons below it — `glass`, not a flat
+          // tint. The column holds four buttons and they have to look like one
+          // family; a hairline fill beside three lit panes reads as disabled.
+          className="glass text-text-1 hover:bg-surface-2 flex h-8 w-8 items-center justify-center rounded-md transition-colors"
         >
           {/* The active theme icon also carries the shared theme-icon
               layoutId, so when the rail expands it glides from the centre
@@ -235,86 +247,72 @@ function ThemeSwitch({ collapsed }: { collapsed: boolean }) {
 
   return (
     <div className="flex justify-center">
-      {/* Full-width pill, p-0.5 + h-7 segments = h-8 total, matching the
-          chrome row beneath; four flex-1 cells line up with its four buttons. */}
-      <div className="glass flex w-full items-center rounded-full p-0.5">
-        {/* Settings gear carries the shared settings layoutId, so when the
-            rail collapses it glides from this pill cell down to the column
-            slot it occupies below. The cell is a button (not a link) on
-            purpose: clicking it never moves focus away from where the
-            reader is. */}
-        <motion.div
-          layoutId={ID.settings}
-          transition={reduce ? { duration: 0 } : SPRING.layout}
-          className="flex h-7 flex-1 items-center justify-center"
-        >
-          <button
-            type="button"
-            title="设置"
-            aria-label="设置"
-            onClick={() => navigate("/settings")}
-            className="text-text-3 hover:text-text-1 flex h-7 items-center justify-center rounded-full px-2.5 transition-colors duration-200"
-          >
-            <GearSix size={15} />
-          </button>
-        </motion.div>
-        {/* Hairline separates the settings glyph from the theme segments. */}
-        <div className="bg-hairline h-4 w-px shrink-0" aria-hidden="true" />
-        {THEME_OPTIONS.map(({ value, label, icon: Icon }) => {
-          const active = theme === value;
-          return (
-            <label
-              key={value}
-              title={label}
-              className={cn(
-                "relative flex h-7 flex-1 cursor-pointer items-center justify-center rounded-full transition-colors duration-200",
-                "focus-within:focus-ring",
-                active ? "text-text-1" : "text-text-3 hover:text-text-2",
-              )}
-            >
-              <input
-                type="radio"
-                name="sidebar-theme"
-                value={value}
-                checked={active}
-                onChange={() => setTheme(value)}
-                className="sr-only"
-              />
-              {/* Shared-layout highlight: one stadium springs between the
-                  three theme cells instead of each rendering its own. */}
-              {active && (
-                <motion.span
-                  layoutId="sidebar-theme-pill"
-                  className="bg-surface-3 shadow-glass absolute inset-0 rounded-full"
-                  transition={reduce ? { duration: 0 } : SPRING.layout}
+      {/* The pill carries no padding: its 1px border sits inside its own box,
+          so the glass outline and the row of buttons below start and end on
+          the same two pixels. Padding would have inset the segments by 2px
+          and made the pill read 4px wider than the row it sits above — which
+          is exactly what it did before. The selected stadium is drawn with
+          `inset-[2px]` instead, so it still floats clear of the rim.
+          Both rows use `grid-cols-3 gap-1.5`; the row below carries a
+          transparent 1px border to match this one's real border. */}
+      <div className="glass w-full rounded-full">
+        <div className="grid grid-cols-3 gap-1.5">
+          {THEME_OPTIONS.map(({ value, label, icon: Icon }) => {
+            const active = theme === value;
+            return (
+              <label
+                key={value}
+                title={label}
+                className={cn(
+                  "relative flex h-8 cursor-pointer items-center justify-center rounded-full transition-colors duration-200",
+                  // `has-[:focus-visible]`, not `focus-within`: the radio is
+                  // sr-only, so clicking the label focuses it too and left a
+                  // 2px accent ring around the segment after every mouse press.
+                  "has-[:focus-visible]:focus-ring",
+                  active ? "text-text-1" : "text-text-3 hover:text-text-2",
+                )}
+              >
+                <input
+                  type="radio"
+                  name="sidebar-theme"
+                  value={value}
+                  checked={active}
+                  onChange={() => setTheme(value)}
+                  className="sr-only"
                 />
-              )}
-              {/* Only the *active* theme icon carries the theme-icon
-                  layoutId — the other two are decorative and stay put.
-                  Collapsed, the single button renders the same icon under
-                  this id, so a rail ⇄ pill toggle glides it between the
-                  centre of the button and the centre of its radio cell. */}
-              {active ? (
-                <motion.span
-                  layoutId={ID.themeIcon}
-                  transition={reduce ? { duration: 0 } : SPRING.layout}
-                  className="relative flex"
-                >
-                  <Icon size={15} weight="fill" />
-                </motion.span>
-              ) : (
-                <Icon size={15} weight="regular" className="relative" />
-              )}
-            </label>
-          );
-        })}
+                {/* Shared-layout highlight: one stadium springs between the
+                    three theme cells instead of each rendering its own. */}
+                {active && (
+                  <motion.span
+                    layoutId="sidebar-theme-pill"
+                    className="bg-surface-3 shadow-glass absolute inset-[2px] rounded-full"
+                    transition={reduce ? { duration: 0 } : SPRING.layout}
+                  />
+                )}
+                {/* Only the *active* theme icon carries the theme-icon
+                    layoutId — the other two are decorative and stay put.
+                    Collapsed, the single button renders the same icon under
+                    this id, so a rail ⇄ pill toggle glides it between the
+                    centre of the button and the centre of its radio cell. */}
+                {active ? (
+                  <motion.span
+                    layoutId={ID.themeIcon}
+                    transition={reduce ? { duration: 0 } : SPRING.layout}
+                    className="relative flex"
+                  >
+                    <Icon size={15} weight="fill" />
+                  </motion.span>
+                ) : (
+                  <Icon size={15} weight="regular" className="relative" />
+                )}
+              </label>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
 }
-
-/** Where the GitHub action points; the opener capability whitelists this URL. */
-const REPO_URL = "https://github.com/xlongDev/fangce";
 
 interface FooterAction {
   key: string;
@@ -325,20 +323,25 @@ interface FooterAction {
 
 /** Sidebar footer, two rows with distinct jobs:
  *
- * 1. 设置 (navigation) + the theme pill (appearance).
- * 2. 折叠/隐藏/⌘K/GitHub (chrome actions), equal-width.
- * Collapsed rail: centered vertical stack of the actions that still make
- * sense at zero width.
+ * 1. The theme pill (appearance), three equal segments.
+ * 2. 设置 / 折叠 / ⌘K (chrome actions), three equal buttons lined up with
+ *    the segments above.
+ * Collapsed rail: centered vertical stack of the same controls.
  *
- * The shared `LayoutGroup` lets the icons that exist in both layouts —
- * settings gear, theme icon, toggle, GitHub — keep a stable `layoutId`
- * across the toggle and FLIP between their column and row positions,
- * while `hide` and `palette` (expanded-only) fade in and out. */
+ * 隐藏侧边栏 used to sit in row 2. It moved to the title bar, and the reason
+ * is structural rather than cosmetic: the state it produces is "this rail is
+ * gone", and this footer is *inside* the rail — closing it left the only way
+ * back floating at the window's edge. GitHub left too (it is a link, not a
+ * chrome action; it lives in 设置 › 关于 now), and ⌘K stayed because it is the
+ * one control here that also works when the rail is a 76px column.
+ *
+ * The shared `LayoutGroup` lets every one of these keep a stable `layoutId`
+ * across the toggle and FLIP between their column and row positions. Nothing
+ * comes and goes any more, so there is no `AnimatePresence` layer to fade. */
 function Footer({ compact }: { compact?: boolean } = {}) {
   const storeCollapsed = useSettings((s) => s.sidebarCollapsed);
   const collapsed = compact ?? storeCollapsed;
   const toggle = useSettings((s) => s.toggleSidebar);
-  const hide = useSettings((s) => s.setSidebarHidden);
   const openPalette = useCommandPalette((s) => s.setOpen);
   const navigate = useNavigate();
   const reduce = useReducedMotion();
@@ -374,6 +377,8 @@ function Footer({ compact }: { compact?: boolean } = {}) {
     </span>
   );
 
+  // Order is render order. 设置 goes last: it is the one control here that
+  // leaves the page, and it sits where macOS puts the equivalent.
   const chromeActions: FooterAction[] = [
     {
       key: "toggle",
@@ -382,22 +387,16 @@ function Footer({ compact }: { compact?: boolean } = {}) {
       on: toggle,
     },
     {
-      key: "hide",
-      label: "隐藏侧边栏",
-      icon: <ArrowLineLeft size={16} />,
-      on: () => hide(true),
-    },
-    {
       key: "palette",
       label: "打开命令面板",
       icon: <span className="font-mono text-[11px]">⌘K</span>,
       on: () => openPalette(true),
     },
     {
-      key: "github",
-      label: "GitHub 仓库",
-      icon: <GithubLogo size={16} />,
-      on: () => void openUrl(REPO_URL).catch(() => {}),
+      key: "settings",
+      label: "设置",
+      icon: <GearSix size={16} />,
+      on: () => navigate("/settings"),
     },
   ];
 
@@ -407,58 +406,24 @@ function Footer({ compact }: { compact?: boolean } = {}) {
   // defined at module scope so React keeps the same component identity
   // across renders — defining them inside `Footer` would re-create them
   // every render and make oxlint flag the file.
-  const chrome = (
-    <>
-      <ChromeButton
-        id={ID.toggle}
-        button={chromeActions[0]!}
-        collapsed={collapsed}
-        reduce={reduce}
-      />
-      {/* 隐藏侧边栏 and ⌘K used to be expanded-only, which meant collapsing
-          the rail took them away with it: ⌘K still worked from the keyboard,
-          but hiding had no route left at all once the button was gone. They
-          stay in both layouts now. */}
-      <AnimatePresence initial={false}>
-        <ChromeEphemeral
-          key="hide"
-          button={chromeActions[1]!}
-          reduce={reduce}
-          collapsed={collapsed}
-        />
-        <ChromeEphemeral
-          key="palette"
-          button={chromeActions[2]!}
-          reduce={reduce}
-          collapsed={collapsed}
-        />
-      </AnimatePresence>
-      {/* Settings lives in the rail when collapsed and inside the pill when
-          expanded — the ThemeSwitch owns the latter. */}
-      {collapsed && (
-        <motion.div
-          layoutId={ID.settings}
-          transition={reduce ? { duration: 0 } : SPRING.layout}
-          className="flex"
-        >
-          <GlassIconButton
-            label="设置"
-            size="sm"
-            onClick={() => navigate("/settings")}
-            title="设置"
-          >
-            <GearSix size={16} />
-          </GlassIconButton>
-        </motion.div>
-      )}
-      <ChromeButton
-        id={ID.github}
-        button={chromeActions[3]!}
-        collapsed={collapsed}
-        reduce={reduce}
-      />
-    </>
-  );
+  //
+  // All three exist in both layouts, so all three are `ChromeButton`s: there
+  // is nothing to mount or unmount, and giving each a `layoutId` means the
+  // gear glides down from the pill into this row on collapse instead of
+  // being swapped for a second, separate gear that happens to sit lower.
+  //
+  // Keyed by `action.key`, not by index: the row's order is a design decision
+  // and the `layoutId`s have to survive it — indexing was how a reorder used
+  // to silently swap two buttons' identities.
+  const chrome = chromeActions.map((action) => (
+    <ChromeButton
+      key={action.key}
+      id={CHROME_ID[action.key]!}
+      button={action}
+      collapsed={collapsed}
+      reduce={reduce}
+    />
+  ));
 
   return (
     // `LayoutGroup` is what makes the layoutIds above a shared scope:
@@ -474,7 +439,11 @@ function Footer({ compact }: { compact?: boolean } = {}) {
         {collapsed ? (
           <div className="flex flex-col items-center gap-1">{chrome}</div>
         ) : (
-          <div className="flex items-center gap-1.5">{chrome}</div>
+          // Same three-column grid as the pill above, with a transparent 1px
+          // border standing in for the pill's real one — without it this row's
+          // content box would be 2px wider and the two grids would drift apart
+          // by a pixel at each end.
+          <div className="grid grid-cols-3 gap-1.5 border border-transparent">{chrome}</div>
         )}
       </motion.div>
     </LayoutGroup>
@@ -484,13 +453,12 @@ function Footer({ compact }: { compact?: boolean } = {}) {
 /** Wraps a chrome button so it FLIPs between its collapsed column slot and
  *  its expanded row slot. Stable identity at module scope — see `Footer`.
  *
- *  `flex-1` on the wrapper is what makes the row's four buttons equal width.
+ *  `flex-1` on the wrapper is what makes the row's three buttons equal width.
  *  It used to sit on the button itself, which did nothing once the wrapper
- *  became the flex item: the two wrapped buttons then measured 32px while the
- *  two `ChromeEphemeral`s grew, and the row read as unevenly spaced
- *  (measured: gaps of 6 / 41 / 41px against the theme pill's four even
- *  cells above it). Column layout gets no `flex-1` — there it would stretch
- *  the button vertically instead. */
+ *  became the flex item: the wrapped buttons then measured 32px while their
+ *  neighbours grew, and the row read as unevenly spaced (measured: gaps of
+ *  6 / 41 / 41px against the theme pill's even cells above it). Column layout
+ *  gets no `flex-1` — there it would stretch the button vertically instead. */
 function ChromeButton({
   id,
   button,
@@ -511,46 +479,7 @@ function ChromeButton({
       <GlassIconButton
         label={button.label}
         size="sm"
-        onClick={button.on}
-        title={button.label}
-        className={collapsed ? undefined : "flex-1"}
-      >
-        {button.icon}
-      </GlassIconButton>
-    </motion.div>
-  );
-}
-
-/** Wraps an expanded-only chrome button so it fades in/out instead of
- *  snapping on the layout flip. Lives inside AnimatePresence so motion can
- *  play the exit before tearing it out.
- *
- *  The button fills its wrapper for the same reason `ChromeButton`'s does:
- *  the row's four buttons share the width evenly, and a `flex-1` wrapper
- *  around a fixed 32px button only moves the unevenness inside it. */
-function ChromeEphemeral({
-  button,
-  reduce,
-  collapsed,
-}: {
-  button: FooterAction;
-  reduce: boolean | null;
-  collapsed: boolean;
-}) {
-  return (
-    <motion.div
-      layout
-      initial={reduce ? false : { opacity: 0, scale: 0.85 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={reduce ? undefined : { opacity: 0, scale: 0.85 }}
-      transition={reduce ? { duration: 0 } : SPRING.layout}
-      // `flex-1` only in the row — see `ChromeButton`: in the column it would
-      // stretch the button vertically instead of sharing the width.
-      className={cn("flex", !collapsed && "flex-1")}
-    >
-      <GlassIconButton
-        label={button.label}
-        size="sm"
+        variant="glass"
         onClick={button.on}
         title={button.label}
         className={collapsed ? undefined : "flex-1"}
