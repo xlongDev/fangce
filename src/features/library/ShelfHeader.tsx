@@ -73,10 +73,10 @@ export function ShelfHeader({
           </motion.div>
         </AnimatePresence>
         <div className="flex items-center gap-2">
-          <GlassButton size="md" onClick={onClippings}>
+          <GlassButton variant="glass" size="md" onClick={onClippings}>
             <Highlighter size={15} /> 导入摘录
           </GlassButton>
-          <GlassButton size="md" onClick={onSource}>
+          <GlassButton variant="glass" size="md" onClick={onSource}>
             <Globe size={15} /> 在线找书
           </GlassButton>
           <GlassButton variant="primary" size="md" disabled={importing} onClick={onImport}>

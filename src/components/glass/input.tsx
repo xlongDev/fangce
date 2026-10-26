@@ -14,7 +14,10 @@ export const GlassInput = forwardRef<HTMLInputElement, GlassInputProps>(function
     <input
       ref={ref}
       className={cn(
-        "border-hairline bg-surface-1 h-9 w-full rounded-md border px-3 text-sm",
+        // The `glass` utility rather than a flat tint: on a page whose panels
+        // and buttons are lit panes, a hairline-filled field reads as a hole
+        // cut in them. `glass` brings its own 1px rim, so no `border` here.
+        "glass h-9 w-full rounded-md px-3 text-sm",
         "text-text-1 placeholder:text-text-3 transition-colors",
         "focus-visible:border-accent focus-visible:bg-surface-2 focus-visible:outline-none",
         className,

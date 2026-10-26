@@ -571,7 +571,7 @@ function Toolbar({
         disabled={!managing && visible.highlights === 0}
         onClick={onToggleManaging}
       >
-        <CheckSquare size={14} /> {managing ? "退出管理" : "批量管理"}
+        <CheckSquare size={14} /> {managing ? "完成" : "选择"}
       </GlassButton>
 
       {/* A resident live region carrying one sentence, rather than a region

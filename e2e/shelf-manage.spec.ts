@@ -36,7 +36,7 @@ test("batch-manage bar is centred on the shelf", async ({ page }) => {
   await page.goto("/?demo=1");
   await expect(page.locator("[data-shelf-scroller]")).toBeVisible();
 
-  await page.getByRole("button", { name: "批量管理" }).click();
+  await page.getByRole("button", { name: "选择", exact: true }).click();
 
   // The bar, not the scrim — see the note above.
   const bar = page.locator("[data-batch-bar]");
@@ -63,7 +63,7 @@ test("cards select instead of opening, and Escape leaves the mode", async ({ pag
   await page.goto("/?demo=1");
   await expect(page.locator("[data-shelf-scroller]")).toBeVisible();
 
-  await page.getByRole("button", { name: "批量管理" }).click();
+  await page.getByRole("button", { name: "选择", exact: true }).click();
   const bar = page.locator("[data-batch-bar]");
   await expect(bar).toContainText("已选 0 本");
 
@@ -92,7 +92,7 @@ test("cards select instead of opening, and Escape leaves the mode", async ({ pag
   await expect(bar).toBeHidden();
 
   // Re-entering starts from nothing rather than from the last selection.
-  await page.getByRole("button", { name: "批量管理" }).click();
+  await page.getByRole("button", { name: "选择", exact: true }).click();
   await expect(page.locator("[data-batch-bar]")).toContainText("已选 0 本");
 });
 

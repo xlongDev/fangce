@@ -199,7 +199,7 @@ test("a batch delete takes every book's rows with it", async ({ page }) => {
   expect(seeded.annotations - before.annotations, "播种的高亮行").toBe(2);
   expect(seeded.bookmarks - before.bookmarks, "播种的书签行").toBe(2);
 
-  await page.getByRole("button", { name: "批量管理" }).click();
+  await page.getByRole("button", { name: "选择", exact: true }).click();
   const bar = page.locator("[data-batch-bar]");
   await expect(bar).toContainText("已选 0 本");
 

@@ -50,9 +50,9 @@ const P5 = /理解这一点并不会立刻治好什么病/;
  *
  * Everything afterwards is scoped to the returned locator rather than to the
  * page, because the route cross-fade keeps the *shelf* mounted while the notes
- * page arrives — and the shelf has a 批量管理 button of its own. Measured: an
- * unscoped `getByRole("button", { name: "批量管理" })` resolves to two elements
- * during the transition and Playwright refuses to guess.
+ * page arrives — and the shelf has a 选择 button of its own. Measured: an
+ * unscoped `getByRole("button", { name: "选择", exact: true })` resolves to two
+ * elements during the transition and Playwright refuses to guess.
  */
 async function openNotes(page: Page): Promise<Locator> {
   await page.goto("/?demo=1");
@@ -70,7 +70,7 @@ test("manage mode selects rows instead of opening them, and its bar is centred o
   const notes = await openNotes(page);
   await expect(notes.getByText(P1)).toBeVisible();
 
-  await notes.getByRole("button", { name: "批量管理" }).click();
+  await notes.getByRole("button", { name: "选择", exact: true }).click();
   const bar = page.locator(BAR);
   await expect(bar).toBeVisible();
   await expect(bar).toContainText("已选 0 条");
@@ -110,7 +110,7 @@ test("manage mode selects rows instead of opening them, and its bar is centred o
   await expect(bar).toBeHidden();
 
   // Re-entering starts from nothing rather than from the last selection.
-  await notes.getByRole("button", { name: "批量管理" }).click();
+  await notes.getByRole("button", { name: "选择", exact: true }).click();
   await expect(page.locator(BAR)).toContainText("已选 0 条");
 });
 
@@ -124,7 +124,7 @@ test("a batch delete removes exactly the rows that were picked, across books", a
   const tally = notes.locator("p").filter({ hasText: /条标注/ });
   await expect(tally).toContainText("5 条标注");
 
-  await notes.getByRole("button", { name: "批量管理" }).click();
+  await notes.getByRole("button", { name: "选择", exact: true }).click();
   const bar = page.locator(BAR);
   // One from each book, so the delete spans books rather than one list.
   await notes.getByRole("button", { name: P1 }).click();

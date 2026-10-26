@@ -72,8 +72,8 @@ export function ShelfToolbar({
   const flip = reduce ? { duration: DURATION.fast } : SPRING.tap;
 
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-2">
-      <div className="relative w-full max-w-64">
+    <div className="mb-4 flex items-center gap-2">
+      <div className="relative w-full max-w-64 min-w-40 flex-1">
         <MagnifyingGlass
           size={14}
           className="text-text-3 pointer-events-none absolute top-1/2 left-3 -translate-y-1/2"
@@ -100,7 +100,7 @@ export function ShelfToolbar({
       {/* The two dropdowns read identically otherwise, so each leads with its
           own glyph — the same trick the grouping select already used, now on
           both sides of the direction button between them. */}
-      <div className="border-hairline bg-surface-1 focus-within:focus-ring relative inline-flex h-9 items-center rounded-md border">
+      <div className="glass focus-within:focus-ring relative inline-flex h-9 items-center rounded-md">
         <SortAscending
           size={13}
           className="text-text-3 pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2"
@@ -138,7 +138,7 @@ export function ShelfToolbar({
         aria-pressed={descending}
         onClick={() => onDescending(!descending)}
         className={cn(
-          "border-hairline bg-surface-1 text-text-2 hover:text-text-1 focus-visible:focus-ring inline-flex h-9 items-center gap-1 rounded-md border px-2.5 text-sm transition-colors",
+          "glass text-text-2 hover:text-text-1 focus-visible:focus-ring inline-flex h-9 items-center gap-1 rounded-md px-2.5 text-sm transition-colors",
           descending && "text-text-1",
         )}
       >
@@ -180,7 +180,7 @@ export function ShelfToolbar({
           control — four options, each two to four characters, which is more
           than a stadium holds. The icon is what tells the two dropdowns apart
           at a glance, since they read the same otherwise. */}
-      <div className="border-hairline bg-surface-1 focus-within:focus-ring relative inline-flex h-9 items-center rounded-md border">
+      <div className="glass focus-within:focus-ring relative inline-flex h-9 items-center rounded-md">
         <StackSimple
           size={13}
           className="text-text-3 pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2"
@@ -223,7 +223,7 @@ export function ShelfToolbar({
           track it sits in, which reads as *bigger*, not smaller. 26×36 is
           a stadium that is wider than it is tall, which is what a
           segmented thumb is supposed to look like. */}
-      <div className="border-hairline bg-surface-1 relative inline-flex h-9 items-stretch rounded-md border p-1">
+      <div className="glass relative inline-flex h-9 items-stretch rounded-md p-1">
         {(
           [
             { value: "grid", icon: SquaresFour, label: "网格视图" },
@@ -258,12 +258,26 @@ export function ShelfToolbar({
         })}
       </div>
 
-      <GlassButton size="md" variant={managing ? "primary" : "subtle"} onClick={onToggleManaging}>
-        <CheckSquare size={15} /> {managing ? "退出管理" : "批量管理"}
+      {/* 选择 / 完成, the words Finder, Photos and Files all use. It used to
+          say 批量管理 → 退出管理: a backend term for one half and a sentence
+          about "management" for the other, and the entry wore `primary` (the
+          action colour) for what is really the way back out.
+
+          The glyph stayed `CheckSquare` on purpose. `Selection` — a dashed
+          marquee plus a pointer — says "go pick some" more precisely, but at
+          15px the dashed frame and the arrow collapse into two brackets.
+          Measured on screen, not guessed: it read as `[ ]`. A ticked box is
+          the more common multi-select symbol anyway (Gmail, Notion), and the
+          word beside it now carries the meaning. */}
+      <GlassButton size="md" variant="glass" onClick={onToggleManaging}>
+        <CheckSquare size={15} /> {managing ? "完成" : "选择"}
       </GlassButton>
 
-      {stats && stats.total > 0 && !managing && (
-        <p className="text-text-3 ml-auto text-xs">
+      {/* Kept mounted and made invisible while selecting, rather than dropped:
+          it is `ml-auto`, so removing it slid the button above 100px to the
+          right at the exact moment the reader pressed it. */}
+      {stats && stats.total > 0 && (
+        <p className={cn("text-text-3 ml-auto text-xs", managing && "invisible")}>
           共 {stats.total} 本{stats.reading > 0 && ` · 在读 ${stats.reading}`}
           {stats.favorites > 0 && ` · 收藏 ${stats.favorites}`}
         </p>
