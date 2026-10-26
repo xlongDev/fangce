@@ -45,9 +45,12 @@ if (mini) {
  * under WKWebView, with macOS's "keyboard navigation: all controls" setting on,
  * a mouse click also matches `:focus-visible`. Every button therefore kept a
  * 2px accent ring after every press — the sidebar footer, the reader's top
- * bar, the whole settings page. The rule is the same one browsers use, just
- * stated from the event that actually caused it: a pointer press means the
- * reader knows where the focus went, a key press means they may not.
+ * bar, the whole settings page.
+ *
+ * Only `Tab` counts as keyboard navigation. Listening for every `keydown`
+ * meant that pressing → to turn a page rang up the ring around whatever button
+ * was clicked last, which is the opposite of what the ring is for: it marks
+ * where Tab has taken you, not what your hand happened to touch a minute ago.
  *
  * Capture phase so a handler that stops propagation cannot hide the modality.
  */
@@ -55,7 +58,13 @@ const markInput = (kind: "pointer" | "key") => {
   document.documentElement.dataset.input = kind;
 };
 window.addEventListener("pointerdown", () => markInput("pointer"), true);
-window.addEventListener("keydown", () => markInput("key"), true);
+window.addEventListener(
+  "keydown",
+  (event) => {
+    if (event.key === "Tab") markInput("key");
+  },
+  true,
+);
 
 createRoot(container).render(
   <StrictMode>

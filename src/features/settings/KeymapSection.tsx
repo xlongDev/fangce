@@ -181,7 +181,7 @@ function KeyRow({
             type="button"
             onClick={onRecord}
             aria-label={`修改 ${entry.title} 的按键`}
-            className="text-text-3 hover:text-text-1 focus-ring rounded-md px-1.5 py-0.5 text-[11.5px] transition-colors"
+            className="text-text-3 hover:text-text-1 focus-visible:focus-ring rounded-md px-1.5 py-0.5 text-[11.5px] transition-colors"
           >
             改键
           </button>
@@ -191,7 +191,7 @@ function KeyRow({
               onClick={onReset}
               aria-label={`恢复 ${entry.title} 的默认按键`}
               title="恢复默认"
-              className="text-text-3 hover:text-text-1 focus-ring rounded-md p-1 transition-colors"
+              className="text-text-3 hover:text-text-1 focus-visible:focus-ring rounded-md p-1 transition-colors"
             >
               <ArrowCounterClockwise size={13} />
             </button>
