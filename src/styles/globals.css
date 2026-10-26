@@ -448,7 +448,24 @@ button {
   -webkit-backdrop-filter: none;
 }
 
-/* -- focus ring shared by all interactive primitives ---------------- */
+/* -- focus ring shared by all interactive primitives ----------------
+   `:focus-visible` is not a reliable enough judge in this renderer. Under
+   WKWebView, with macOS's "keyboard navigation: all controls" preference on,
+   a mouse click also matches it — so every button kept a 2px accent ring after
+   every press, from the sidebar footer to the reader's top bar. `main.tsx`
+   marks the modality of the last input on <html>; a pointer press suppresses
+   the outline outright and the next key press brings it back. `!important`
+   because this has to beat the utility that drew the ring.
+
+   `:focus-within` is in the list for a different reason: several segmented
+   controls are a `<label>` wrapping a sr-only `<input>`, and the ring is drawn
+   on the *label* — so matching `:focus` alone would leave exactly those rings
+   behind, which is where the reader noticed them first. */
+html[data-input="pointer"] :focus,
+html[data-input="pointer"] :focus-within {
+  outline: none !important;
+}
+
 @utility focus-ring {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

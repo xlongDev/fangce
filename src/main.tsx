@@ -37,6 +37,26 @@ if (mini) {
   document.documentElement.classList.add("mini-bar");
 }
 
+/**
+ * Which input last moved the focus, marked on <html> for `globals.css` to read.
+ *
+ * The app draws its own focus ring (`focus-ring`) rather than trusting the
+ * UA's, and `:focus-visible` alone was not enough to decide when to draw it:
+ * under WKWebView, with macOS's "keyboard navigation: all controls" setting on,
+ * a mouse click also matches `:focus-visible`. Every button therefore kept a
+ * 2px accent ring after every press — the sidebar footer, the reader's top
+ * bar, the whole settings page. The rule is the same one browsers use, just
+ * stated from the event that actually caused it: a pointer press means the
+ * reader knows where the focus went, a key press means they may not.
+ *
+ * Capture phase so a handler that stops propagation cannot hide the modality.
+ */
+const markInput = (kind: "pointer" | "key") => {
+  document.documentElement.dataset.input = kind;
+};
+window.addEventListener("pointerdown", () => markInput("pointer"), true);
+window.addEventListener("keydown", () => markInput("key"), true);
+
 createRoot(container).render(
   <StrictMode>
     <ErrorBoundary scope={mini ? "朗读悬浮条" : "应用"}>
