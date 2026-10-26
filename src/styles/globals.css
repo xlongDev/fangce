@@ -25,8 +25,6 @@
 
   --blur-sm: 12px;
   --blur-md: 20px;
-  --blur-lg: 30px;
-  --blur-xl: 48px;
 
   /* The shelf's cover track. A token rather than a literal in the grid's
      class because the class is no longer the only thing that names it: the
@@ -247,6 +245,25 @@ html.mini-bar body {
   background: transparent;
 }
 
+/* `backdrop-filter` has nothing to sample in this window: the page behind it is
+   the desktop, which is outside the render tree.
+   The drop shadow has to go for the same reason, and this was the rectangle the
+   reader kept seeing: `--shadow-panel` blurs 50px, the window leaves the
+   capsule 4px of gutter, so the shadow is cut off by the window's own edge — a
+   hard boundary the size of the window, showing around the pill's rounded
+   corners. It was always there; `glass-solid`'s opaque fill hid it, and a
+   translucent fill does not. The four inset edges stay: they are inside the
+   element and cannot be clipped. */
+html.mini-bar .glass-liquid {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow:
+    inset 0 1px 0 var(--highlight),
+    inset 0 -1px 0 var(--glass-edge),
+    inset 1px 0 0 var(--glass-side),
+    inset -1px 0 0 var(--glass-side) !important;
+}
+
 ::selection {
   background: var(--accent-soft);
   color: var(--text-1);
@@ -427,6 +444,48 @@ button {
   background-color: var(--surface-3);
   border: 1px solid var(--hairline);
   box-shadow: var(--shadow-panel);
+}
+
+/* -- liquid glass, for the surfaces that float over something ------------
+   `glass-solid` is opaque on purpose: a lightbox or a drawer sitting on a
+   page does not need what is behind it. The TTS surfaces are the opposite
+   case. The floating bar is a `transparent(true)` window — what is behind it
+   is the reader's desktop, and the more opaque it gets the more it reads as a
+   piece of plastic stuck to the screen.
+
+   This is a web approximation of Apple's Liquid Glass, not the thing itself:
+   Apple ships that material for its own platforms and there is no
+   `liquid-glass.css`. What it does is stack the cues a real pane gives you —
+   a translucent fill, one radial highlight in the upper left where a light
+   would fall, a diagonal sweep across the face, four inset edges so the rim
+   catches, and a drop shadow so it leaves the surface. In the main window
+   `backdrop-filter` blurs the page underneath; inside the floating window it
+   has nothing to sample, so there the translucency itself is the effect. */
+@utility glass-liquid {
+  background-color: color-mix(in srgb, var(--surface-3) 84%, transparent);
+  background-image:
+    radial-gradient(120% 88% at 16% -6%, var(--glass-sheen) 0%, transparent 46%),
+    linear-gradient(148deg, var(--glass-sheen-soft) 0%, transparent 54%);
+  border: 1px solid var(--glass-rim);
+  box-shadow:
+    inset 0 1px 0 var(--highlight),
+    inset 0 -1px 0 var(--glass-edge),
+    inset 1px 0 0 var(--glass-side),
+    inset -1px 0 0 var(--glass-side),
+    var(--shadow-panel);
+  backdrop-filter: blur(var(--blur-md)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--blur-md)) saturate(180%);
+}
+
+/* `!important` because the utility layer outranks a plain rule, and "reduce
+   transparency" is not a preference to negotiate with. */
+@media (prefers-reduced-transparency: reduce) {
+  .glass-liquid {
+    background-color: var(--surface-3) !important;
+    background-image: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
 }
 
 /* Reduced transparency turns the top-level material opaque and drops the blur,

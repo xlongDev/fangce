@@ -404,7 +404,38 @@ fn build_bar(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         builder = builder
             .position((screen.width - BAR_SIZE.0) / 2.0, screen.height - BAR_SIZE.1 - BAR_LIFT);
     }
-    builder.build()
+    let window = builder.build()?;
+    // `transparent(true)` sets `isOpaque = false`, but the app-wide
+    // `backgroundColor` from tauri.conf is still painted underneath, and the
+    // capsule is translucent — whatever the window fills with shows through it.
+    // This is not what drew the rectangle the reader saw (that was the capsule's
+    // own drop shadow, clipped by the window edge; see `html.mini-bar` in
+    // globals.css), it is what makes the fill genuinely clear.
+    #[cfg(target_os = "macos")]
+    clear_background(&window)?;
+    Ok(window)
+}
+
+/// AppKit, directly.
+///
+/// `transparent(true)` makes the window non-opaque but it still paints its
+/// `backgroundColor`, and that fill is the rectangle the reader keeps seeing
+/// around the capsule's rounded corners — the window is a rectangle, the pill
+/// is not, and the four corners plus the 4px gutter show the fill.
+#[cfg(target_os = "macos")]
+fn clear_background(window: &WebviewWindow) -> tauri::Result<()> {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    let ns = window.ns_window()? as *mut AnyObject;
+    // SAFETY: `ns_window` hands back this window's own NSWindow, and both
+    // messages are ones NSWindow answers — and we are on the main thread, which
+    // is where the window was just built.
+    unsafe {
+        let clear: *mut AnyObject = msg_send![class!(NSColor), clearColor];
+        let _: () = msg_send![ns, setOpaque: false];
+        let _: () = msg_send![ns, setBackgroundColor: clear];
+    }
+    Ok(())
 }
 
 #[cfg(test)]

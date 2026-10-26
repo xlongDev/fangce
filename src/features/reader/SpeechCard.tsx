@@ -323,7 +323,7 @@ export function SpeechCard({
     <motion.div
       data-tts-card
       className={cn(
-        "glass-solid pointer-events-auto relative flex flex-col overflow-hidden rounded-lg p-4",
+        "glass-liquid pointer-events-auto relative flex flex-col overflow-hidden rounded-lg p-4",
         className,
       )}
     >

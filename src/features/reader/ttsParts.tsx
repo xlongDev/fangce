@@ -176,7 +176,7 @@ export function Pill({
       data-tts-pill
       onPointerDown={dragHandle ? dragWindow : undefined}
       className={cn(
-        "glass-solid pointer-events-auto relative flex w-[min(92vw,380px)] items-center gap-2.5 overflow-hidden rounded-full py-1.5 pr-2 pl-1.5",
+        "glass-liquid pointer-events-auto relative flex w-[min(92vw,380px)] items-center gap-2.5 overflow-hidden rounded-full py-1.5 pr-2 pl-1.5",
         dragHandle && "select-none",
         className,
       )}
