@@ -170,7 +170,7 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
             maxLength={LIMITS.description}
             rows={3}
             aria-label="简介"
-            className="border-hairline bg-surface-1 text-text-1 placeholder:text-text-3 focus-visible:border-accent focus-visible:bg-surface-2 min-h-[72px] w-full resize-y rounded-md border px-3 py-2 text-sm transition-colors focus-visible:outline-none"
+            className="glass text-text-1 placeholder:text-text-3 focus-visible:border-accent focus-visible:bg-surface-2 min-h-[72px] w-full resize-y rounded-md border px-3 py-2 text-sm transition-colors focus-visible:outline-none"
           />
         </Field>
 

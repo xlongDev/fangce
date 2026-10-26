@@ -109,7 +109,7 @@ export function SourcePicker({
     // is a statement of fact rather than a disabled control to poke at — and it
     // carries no label of its own: the words are the statement.
     return (
-      <div className="border-hairline bg-surface-1 text-text-3 flex h-9 min-w-0 flex-1 items-center rounded-xl border px-3 text-sm">
+      <div className="glass text-text-3 flex h-9 min-w-0 flex-1 items-center rounded-xl border px-3 text-sm">
         还没有书源
       </div>
     );
@@ -131,7 +131,7 @@ export function SourcePicker({
         aria-label="选择书源"
         onClick={() => setOpen((current) => !current)}
         className={cn(
-          "border-hairline bg-surface-1 hover:bg-surface-2 flex h-9 w-full items-center justify-between gap-2 rounded-xl border px-3 text-sm transition-colors",
+          "glass hover:bg-surface-2 flex h-9 w-full items-center justify-between gap-2 rounded-xl border px-3 text-sm transition-colors",
           "text-text-1 focus-visible:focus-ring",
         )}
       >

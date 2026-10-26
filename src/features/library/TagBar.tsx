@@ -17,8 +17,7 @@ import type { TagSummary } from "@/types/ipc";
 
 const CHIP =
   "press focus-visible:focus-ring flex h-8 items-center gap-1 rounded-full border px-3 text-xs";
-const IDLE =
-  "border-hairline bg-surface-1 text-text-2 hover:bg-surface-2 hover:text-text-1 cursor-pointer";
+const IDLE = "glass text-text-2 hover:bg-surface-2 hover:text-text-1 cursor-pointer";
 const ON = "border-accent bg-accent-soft text-text-1";
 
 interface TagBarProps {

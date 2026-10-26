@@ -479,7 +479,6 @@ function ChromeButton({
       <GlassIconButton
         label={button.label}
         size="sm"
-        variant="glass"
         onClick={button.on}
         title={button.label}
         className={collapsed ? undefined : "flex-1"}

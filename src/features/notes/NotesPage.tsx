@@ -500,7 +500,7 @@ function Toolbar({
           onChange={(event) => onQuery(event.target.value)}
           placeholder="搜索原文、笔记或书名"
           aria-label="搜索标注"
-          className="border-hairline bg-surface-1 text-text-1 placeholder:text-text-3 focus-visible:border-accent focus-visible:bg-surface-2 h-8 w-full rounded-md border pr-8 pl-8 text-[13px] transition-colors focus-visible:outline-none"
+          className="glass text-text-1 placeholder:text-text-3 focus-visible:border-accent focus-visible:bg-surface-2 h-8 w-full rounded-md border pr-8 pl-8 text-[13px] transition-colors focus-visible:outline-none"
         />
         {query !== "" && (
           <button

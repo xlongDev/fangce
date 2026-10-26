@@ -133,7 +133,7 @@ export function GraphPanel({
               <button
                 type="button"
                 onClick={() => setSelected(entity.name)}
-                className="focus-visible:focus-ring border-hairline bg-surface-1 text-text-1 hover:border-accent rounded-full border px-2.5 py-1 text-[12.5px] transition-colors"
+                className="focus-visible:focus-ring glass text-text-1 hover:border-accent rounded-full border px-2.5 py-1 text-[12.5px] transition-colors"
               >
                 {entity.name}
                 <span className="text-text-3 ml-1.5 text-[11px]">{entity.mentions}</span>

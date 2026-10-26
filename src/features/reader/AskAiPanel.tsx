@@ -55,7 +55,7 @@ export function AskAiPanel({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {selection && !ragMode && (
-          <div className="border-hairline bg-surface-1 mb-3 rounded-lg p-2.5">
+          <div className="glass mb-3 rounded-lg p-2.5">
             <div className="mb-1 flex items-center justify-between">
               <p className="text-text-3 text-[11px]">引用片段</p>
               <button
@@ -145,7 +145,7 @@ export function AskAiPanel({
           }
           aria-label="问题"
           disabled={ai.streaming}
-          className="border-hairline bg-surface-1 text-text-1 placeholder:text-text-3 focus-visible:border-accent h-8 min-w-0 flex-1 rounded-full border px-3 text-[13px] transition-colors focus-visible:outline-none disabled:opacity-60"
+          className="glass text-text-1 placeholder:text-text-3 focus-visible:border-accent h-8 min-w-0 flex-1 rounded-full border px-3 text-[13px] transition-colors focus-visible:outline-none disabled:opacity-60"
         />
         <button
           type="submit"

@@ -269,7 +269,7 @@ export function ShelfToolbar({
           Measured on screen, not guessed: it read as `[ ]`. A ticked box is
           the more common multi-select symbol anyway (Gmail, Notion), and the
           word beside it now carries the meaning. */}
-      <GlassButton size="md" variant="glass" onClick={onToggleManaging}>
+      <GlassButton size="md" onClick={onToggleManaging}>
         <CheckSquare size={15} /> {managing ? "完成" : "选择"}
       </GlassButton>
 

@@ -143,7 +143,7 @@ function TagDialogBody({ single, allTags, busy, onCancel, onSave }: TagDialogBod
                     "press focus-visible:focus-ring flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs",
                     on
                       ? "border-accent bg-accent-soft text-text-1"
-                      : "border-hairline bg-surface-1 text-text-2 hover:bg-surface-2 hover:text-text-1",
+                      : "glass text-text-2 hover:bg-surface-2 hover:text-text-1",
                     fresh && !on && "border-dashed",
                   )}
                 >

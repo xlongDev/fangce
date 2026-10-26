@@ -4,7 +4,7 @@ import { motion, type HTMLMotionProps } from "motion/react";
 import { cn } from "@/lib/cn";
 import { useMotion } from "@/lib/motion";
 
-type Variant = "primary" | "ghost" | "glass" | "subtle";
+type Variant = "primary" | "ghost" | "subtle";
 type Size = "sm" | "md" | "lg";
 
 // `motion` overrides a few DOM events (`onAnimationStart`, `onDrag*`), so the
@@ -19,14 +19,18 @@ interface GlassButtonProps extends Omit<HTMLMotionProps<"button">, "ref" | "chil
 
 const VARIANT: Record<Variant, string> = {
   primary: "bg-accent text-on-accent border-transparent shadow-glass",
-  ghost: "bg-surface-1 text-text-1 border-hairline hover:bg-surface-2",
-  // The `glass` utility, not a fill: specular sweep, lit rim, inset top/bottom
-  // edges and the panel shadow. `ghost` is a flat tint with a hairline, which
-  // reads as a chip when it sits next to a real pane — the sidebar footer had
-  // a `glass` pill above a row of `ghost` buttons and the row looked cut out
-  // of the paper rather than resting on it.
-  glass: "glass text-text-1 hover:bg-surface-2",
-  subtle: "bg-transparent text-text-2 border-transparent hover:bg-surface-1 hover:text-text-1",
+  // `glass` is the default now. Every surface in this app is a lit pane, so a
+  // flat `bg-surface-1 + border-hairline` fill reads as a hole cut in one —
+  // the sidebar footer, the shelf toolbar and the header buttons each had to
+  // be converted by hand before this was the default, and there were always
+  // more of them.
+  ghost: "glass text-text-1 hover:bg-surface-2",
+  // `subtle` was transparent on purpose: a button inside a row should not
+  // become a second object on it. The reader overruled that — the settings
+  // panel and both TTS surfaces are rows of controls that read as text
+  // without a material under them. It keeps the lighter ink so a row of them
+  // still has a hierarchy against the primary action beside it.
+  subtle: "glass text-text-2 hover:bg-surface-2 hover:text-text-1",
 };
 
 const SIZE: Record<Size, string> = {
@@ -84,8 +88,9 @@ interface GlassIconButtonProps extends Omit<HTMLMotionProps<"button">, "ref" | "
   /** Required for a11y; the visible content is decorative. */
   label: string;
   size?: Size;
-  /** Defaults to `ghost`. Pass `glass` where the button sits beside a real
-   *  pane and a flat tint would read as a hole in it. */
+  /** Defaults to `ghost`, which is now the glass material. Only worth passing
+   *  for `primary` (a solid accent action) or `subtle` (a button inside a row
+   *  that should stay flat). */
   variant?: Variant;
   children?: ReactNode;
 }

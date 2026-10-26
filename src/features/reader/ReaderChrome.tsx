@@ -437,7 +437,7 @@ function ZhConvertButton({
           role="menu"
           aria-label="简繁转换"
           className={cn(
-            "border-hairline bg-surface-1 shadow-glass absolute right-0 z-50 w-56 rounded-[14px] border p-1.5 backdrop-blur-xl",
+            "glass shadow-glass absolute right-0 z-50 w-56 rounded-[14px] border p-1.5 backdrop-blur-xl",
             placement === "up" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]",
           )}
         >

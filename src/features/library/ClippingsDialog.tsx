@@ -132,7 +132,7 @@ export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps)
         </div>
       ) : (
         <div className="flex flex-col gap-3">
-          <div className="border-hairline bg-surface-1 flex items-center justify-between gap-3 rounded-2xl border px-3 py-2">
+          <div className="glass flex items-center justify-between gap-3 rounded-2xl border px-3 py-2">
             <span
               className="text-text-2 min-w-0 truncate text-xs"
               title={typeof picked === "string" ? picked : picked.name}
@@ -241,7 +241,7 @@ export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps)
 /** One figure in the report grid. */
 function Number({ label, value }: { label: string; value: number }) {
   return (
-    <div className="border-hairline bg-surface-1 rounded-2xl border px-3 py-2">
+    <div className="glass rounded-2xl border px-3 py-2">
       <p className="text-text-1 text-lg leading-tight font-semibold tabular-nums">{value}</p>
       <p className="text-text-3 mt-0.5 text-[11px]">{label}</p>
     </div>

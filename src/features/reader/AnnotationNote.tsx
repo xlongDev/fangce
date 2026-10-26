@@ -140,7 +140,7 @@ export function NoteEditor({
             event.currentTarget.blur();
           }
         }}
-        className="border-hairline bg-surface-1 text-text-1 placeholder:text-text-3 focus-visible:border-accent focus-visible:bg-surface-2 w-full resize-none rounded-md border px-2.5 py-2 text-[12.5px] leading-relaxed transition-colors focus-visible:outline-none"
+        className="glass text-text-1 placeholder:text-text-3 focus-visible:border-accent focus-visible:bg-surface-2 w-full resize-none rounded-md border px-2.5 py-2 text-[12.5px] leading-relaxed transition-colors focus-visible:outline-none"
       />
       {/* The strip is what makes the field manageable without leaving it:
           blur commits, but a reader who came here to add one line should be

@@ -923,7 +923,7 @@ function SurfaceImageButton({
       className="flex min-w-0 flex-col items-center gap-1"
     >
       <span className="relative block w-full">
-        <span className="border-hairline bg-surface-1 text-text-3 flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-sm border">
+        <span className="glass text-text-3 flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-sm border">
           <ImageSquare size={14} />
         </span>
         {on && (
@@ -989,7 +989,10 @@ function Chips<K extends string | number | boolean>({
             whileTap={reduce ? undefined : { scale: 0.94 }}
             transition={SPRING.tap}
             className={cn(
-              "border-hairline text-text-2 hover:text-text-1 relative rounded-full border px-2.5 py-1 text-[12px] transition-colors",
+              // `glass`, like every other control: a chip with only a hairline
+              // outline on a lit panel read as a hole rather than a choice.
+              // The active chip still overrides the rim with the accent one.
+              "glass text-text-2 hover:text-text-1 relative rounded-full px-2.5 py-1 text-[12px] transition-colors",
               active && "border-accent text-accent",
             )}
           >
@@ -1103,7 +1106,7 @@ function Select<K extends string>({
   onChange: (value: K) => void;
 }) {
   return (
-    <div className="border-hairline bg-surface-1 focus-within:focus-ring relative inline-flex h-8 items-center rounded-md border">
+    <div className="glass focus-within:focus-ring relative inline-flex h-8 items-center rounded-md border">
       <select
         aria-label={label}
         value={value}
