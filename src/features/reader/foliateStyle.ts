@@ -154,7 +154,13 @@ export const buildStyleSheet = ({
    * to overrule. It lands in this same rule because the selector set below is
    * exactly "the elements body text lives in" — the one thing a book restates
    * its weight on, and the one `!important` has to reach. */
-  const textSelectors = "html, body, p, li, blockquote, dd, dt, td, th, div";
+  /* "the elements body text lives in". Calibre wraps the actual characters in
+   * <span class="calibreN"> and sets font-family on that span, so the list has
+   * to name span too — an ancestor's !important does not override a descendant's
+   * own declaration, only its inherited value. Without span a Calibre book keeps
+   * the face the converter baked in and the reader's choice does nothing; the
+   * same gap also let 正文加粗 slip past the body text on those books. */
+  const textSelectors = "html, body, p, li, blockquote, dd, dt, td, th, div, span";
   const forced = [
     fontFamily ? `font-family: ${fontFamily} !important;` : "",
     bodyBold ? "font-weight: bold !important;" : "",

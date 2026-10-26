@@ -130,6 +130,16 @@ describe("buildStyleSheet", () => {
     expect(book).toContain("font-size: 18px !important");
   });
 
+  it("reaches body text Calibre wraps in its own span, not just block elements", () => {
+    // A Calibre-converted book puts the actual characters inside
+    // <span class="calibre10"> and sets font-family on that span. A forced
+    // family on html/body/p/div only beats the inherited value — the span's own
+    // declaration still wins — so the selector list has to name span. Measured
+    // on 《好猫八不》: without span the computed family on the body span stayed
+    // "PingFang SC"; with it the reader's choice applies.
+    expect(buildStyleSheet(style({ dark: false }))).toContain("div, span {");
+  });
+
   it("carries the imported faces into the section, which is its own document", () => {
     // A book section is a document: the app's own @font-face never reaches it,
     // so the sheet has to bring the declaration along with the family name.
