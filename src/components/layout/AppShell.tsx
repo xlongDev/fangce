@@ -31,9 +31,12 @@ import { DURATION, EASE_OUT } from "@/lib/motion";
 function sidebarBody(collapsed: boolean) {
   return (
     <>
-      {/* px-3 lands the mark's centre on the nav icons' centre line
-          (12 pane + 12 row + 11 = 35), collapsed and expanded alike. */}
-      <div className="flex items-center px-3 pt-1" data-tauri-drag-region>
+      {/* `pl-[13px]` is 12 + 1: every nav row spends 1px on a transparent
+          border before its own padding, and the mark only sits on the same
+          centre line as the icons if this row spends the same one. Measured
+          before: mark cx 48, first nav icon cx 49 — one pixel, visible
+          because the spectrum is the highest-contrast thing up here. */}
+      <div className="flex items-center pt-1 pr-3 pl-[13px]" data-tauri-drag-region>
         <Wordmark compact={collapsed} />
       </div>
       <NavList />
