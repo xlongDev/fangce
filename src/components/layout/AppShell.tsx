@@ -253,6 +253,14 @@ export function AppShell() {
             // itself against. The sidebar pushes it ~130px right of the window's
             // centre, so a window-centred dialog reads as off-centre. See
             // `GlassDialog`.
+            //
+            // Elevation 1, not the default 2. The reader re-roots `--surface-2`
+            // to a wash of the page's ink (9%), so the default made this pane a
+            // grey rim around white paper while every other pane in the app is
+            // white glass — the same component reading as two different
+            // materials depending on the route. `--surface-1` is not re-rooted,
+            // so elevation 1 keeps the rim the same white as the shelf's.
+            elevation={1}
             data-content-pane
             className={
               readerFullscreen

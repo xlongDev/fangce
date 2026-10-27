@@ -93,7 +93,7 @@ export function ReaderHost({
     if (!bookId) {
       return (
         <EmptyState
-          className="h-full"
+          className="h-full p-2"
           icon={<BookOpen size={26} weight="duotone" />}
           title="从书库选一本书"
           description="在书库里点开一本书，正文会出现在这里。"
@@ -106,7 +106,7 @@ export function ReaderHost({
     if (book.isError || toc.isError) {
       return (
         <EmptyState
-          className="h-full"
+          className="h-full p-2"
           icon={<BookOpen size={26} weight="duotone" />}
           // Two ways a book can be unopenable and only one of them is the
           // app's fault: the index may have failed to build, or the file the
@@ -150,7 +150,7 @@ export function ReaderHost({
     return (
       <div className="flex h-full flex-col px-8 py-6">
         <EmptyState
-          className="h-full"
+          className="h-full p-2"
           icon={<BookOpen size={26} weight="duotone" />}
           title="这本书没有章节"
           description="这本书的格式暂时无法提取正文，重新导入可能可以解决。"

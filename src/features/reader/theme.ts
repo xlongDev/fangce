@@ -40,7 +40,12 @@ export const READING_SURFACES: ReadingSurface[] = [
   {
     key: "standard",
     label: "标准",
-    background: "#fbfbfd",
+    // Translucent, so the shell's ground and its two glows show through the
+    // paper the way they show through every pane in the rest of the app. An
+    // opaque sheet was the one surface in the window that ignored the
+    // backdrop — the shelf's panel and this page's panel are the same glass,
+    // but only the shelf's lets you see what is behind it.
+    background: "rgba(251, 251, 253, 0.72)",
     fg: "#23272e",
     tint: "#f4f5f8",
     mode: "light",
