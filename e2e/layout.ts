@@ -24,3 +24,18 @@ export async function useScrollLayout(page: Page): Promise<void> {
   await page.keyboard.press("Escape");
   await page.waitForTimeout(700);
 }
+
+/**
+ * Puts the rail back after a spec folded it.
+ *
+ * Two controls answer to 「展开侧边栏」 once the rail is collapsed: the mark in
+ * the rail's own header (it becomes an expand affordance — see `SidebarHeader`)
+ * and the footer's toggle. Both do the same thing, so either will do; naming
+ * one of them by position instead would break the moment either moves. Without
+ * this the two specs that fold the rail died on a strict-mode violation, which
+ * looked like a broken selector rather than a second control.
+ */
+export async function expandSidebar(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "展开侧边栏" }).first().click();
+  await page.waitForTimeout(600);
+}

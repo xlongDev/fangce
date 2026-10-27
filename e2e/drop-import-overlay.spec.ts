@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { expandSidebar } from "./layout";
+
 /**
  * The drop invitation covers the content pane, and centres on it.
  *
@@ -114,8 +116,7 @@ test("the drop overlay is the pane, centred on it", async ({ page }) => {
     await expect(overlay).toBeHidden();
 
     if (collapsed) {
-      await page.getByRole("button", { name: "展开侧边栏" }).click();
-      await page.waitForTimeout(600);
+      await expandSidebar(page);
     }
   }
 });

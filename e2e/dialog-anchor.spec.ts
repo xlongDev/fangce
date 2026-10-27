@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { expandSidebar } from "./layout";
+
 /**
  * A modal centres on the content pane, not on the window.
  *
@@ -63,8 +65,7 @@ test("a dialog centres on the content pane, not the window", async ({ page }) =>
     await expect(dialog).toBeHidden();
 
     if (collapsed) {
-      await page.getByRole("button", { name: "展开侧边栏" }).click();
-      await page.waitForTimeout(600);
+      await expandSidebar(page);
     }
   }
 });
