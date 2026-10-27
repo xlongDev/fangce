@@ -198,8 +198,10 @@ describe("QuoteCardDialog", () => {
     // the 300px the preview shows it at.
     expect(canvas.width).toBe(1080);
     expect(canvas.height).toBe(1440);
-    // And on the day surface the store names.
-    expect(paperFill()?.style).toBe("#fbfbfd");
+    // And on the day surface the store names. 标准's page colour is
+    // translucent (it lets the shell's ground through), which a PNG cannot
+    // wear — the card takes that colour's opaque tint instead.
+    expect(paperFill()?.style).toBe("#f4f5f8");
   });
 
   it("paints the night surface's paper on a night page", async () => {

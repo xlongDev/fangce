@@ -40,9 +40,25 @@ type Face = "loading" | "ready" | "too-long";
  *  Two surfaces (纸纹, 亚麻) paint a repeating line texture over their colour
  *  and one (自定义) paints a user image; `fillStyle` takes neither. The tint
  *  is the same colour underneath the texture, and the texture is a screen
- *  treatment that a still image does not need. */
+ *  treatment that a still image does not need.
+ *
+ *  **Translucent papers go the same way.** 标准 is deliberately
+ *  `rgba(…, 0.72)` so the shell's ground and its glows show through the page —
+ *  a property of a *live* page and not of a PNG, which has nothing behind it.
+ *  Filling with it left every shared card 72% opaque, and the reader's image
+ *  viewer showed the dark ground through their page. The tint is that colour
+ *  at full opacity, which is what the card needs to be. */
 function solidPaper(surface: ReadingSurface): string {
-  return /^(#|rgb)/.test(surface.background) ? surface.background : surface.tint;
+  return isOpaqueColour(surface.background) ? surface.background : surface.tint;
+}
+
+/** Whether a CSS colour can be painted as a page's paper: opaque, and a colour
+ *  rather than a gradient, a texture or an image. */
+function isOpaqueColour(value: string): boolean {
+  if (/^#[0-9a-f]{6}$/i.test(value)) return true;
+  if (/^rgb\(/i.test(value)) return true;
+  const alpha = /^rgba\([^)]*,\s*([\d.]+)\s*\)$/i.exec(value)?.[1];
+  return alpha !== undefined && Number(alpha) >= 1;
 }
 
 /** The PNG bytes, or the reason there are none. */

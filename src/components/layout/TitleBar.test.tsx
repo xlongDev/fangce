@@ -1,10 +1,19 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { useSettings } from "@/stores/settings";
 
 import { TitleBar } from "./TitleBar";
+
+// The strip only exists in the desktop shell: on the web `TitleBar` renders a
+// bare spacer, because a browser has no window chrome for a drag band to
+// belong to (and the toggle moves into the rail's own header there — see
+// `NavList`). What this file is about is the desktop toggle, so the runtime is
+// desktop. It is also read once at module load to decide whether the button
+// has to dodge the traffic lights, which is why it is mocked rather than
+// stubbed per test.
+vi.mock("@/lib/ipc", () => ({ isDesktopRuntime: true }));
 
 /**
  * The sidebar toggle, which lives in the drag band rather than the footer.
