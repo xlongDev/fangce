@@ -165,7 +165,7 @@ export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: Search
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="px-4 pb-3">{field}</div>
+      <div className="px-4 py-3">{field}</div>
 
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
         {trimmed.length === 0 ? (

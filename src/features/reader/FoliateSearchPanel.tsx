@@ -80,7 +80,10 @@ export function FoliateSearchPanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="px-4 pb-3">
+      {/* `py-3`, not `pb-3`: the field sits directly under the drawer's hairline,
+          and with no top inset its rim ran into the rule. Same on the shelf's
+          search page, where the gap only reads as more air under the header. */}
+      <div className="px-4 py-3">
         <div className="relative">
           <MagnifyingGlass
             size={14}
