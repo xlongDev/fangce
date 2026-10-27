@@ -324,16 +324,27 @@ export function SpeechCard({
       data-tts-card
       className={cn(
         "glass-liquid pointer-events-auto relative flex flex-col overflow-hidden rounded-lg p-4",
+        // In the floating window this card sits on the desktop, and 84% lets a
+        // browser window behind it show straight through the sentence list.
+        // 100% is the fill `surface-3` already has — the same density
+        // `glass-solid` gave this card before the window became transparent —
+        // and it keeps the highlight, rim and inset edges that make it glass
+        // rather than a flat panel. The in-app card keeps the lighter fill;
+        // there it floats over the page it is reading, which is the point.
+        dragHandle && "[--liquid-density:100%]",
         className,
       )}
+      // The whole card is the handle where the window has no frame. It used to
+      // be the header alone, which left the sentence list — most of the
+      // surface — impossible to drag the window by. `dragWindow` already skips
+      // anything interactive under the pointer, and waits for 4px of travel
+      // before taking the window, so clicks still land.
+      onPointerDown={dragHandle ? dragWindow : undefined}
     >
       {/* The header doubles as the window's handle where there is one: nothing
           in it is a control but the two buttons at its ends, and the title that
           fills the middle is exactly what a reader would reach for. */}
-      <header
-        className="flex items-start gap-3"
-        onPointerDown={dragHandle ? dragWindow : undefined}
-      >
+      <header className="flex items-start gap-3">
         {/* The leading slot changes identity with the view — a book's cover, or
             the way back — and it changes it *outright*. A cross-fade was the
             wrong tool here and `IconSwap` made it worse than a cross-fade: its
