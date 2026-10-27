@@ -8,14 +8,25 @@ import { useCommandStore } from "@/stores/commands";
 import { useCommandPalette } from "@/stores/command-palette";
 import { useSettings } from "@/stores/settings";
 import { GlassDialog } from "@/components/glass/overlay";
-import { GlassInput } from "@/components/glass/input";
 import { cn } from "@/lib/cn";
-import { useMotion } from "@/lib/motion";
+import { EASE_OUT, useMotion } from "@/lib/motion";
 
 interface Scored {
   command: Command;
   score: number;
 }
+
+/**
+ * How the highlight follows the pointer.
+ *
+ * Not the spring: it trails the hand by ~250 ms, which reads as lag. Not a hard
+ * cut either — a row-to-row jump with no transition at all reads as a flicker,
+ * because the old row's tint vanishes in the same frame the new one appears.
+ * A 120 ms ease-out is the middle: 80% of the travel is done in the first 40 ms
+ * (below the threshold where a pointer feels disconnected), and the landing is
+ * soft instead of a snap.
+ */
+const POINTER_CURSOR = { duration: 0.12, ease: EASE_OUT } as const;
 
 export function CommandPalette() {
   const open = useCommandPalette((s) => s.open);
@@ -41,6 +52,16 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   const overrides = useSettings((s) => s.keyOverrides);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  /**
+   * Whether the last move of the cursor came from the pointer.
+   *
+   * The row highlight is one element gliding between rows, which is right for
+   * ↑↓ — a thing that moves is easier to follow than a class blinking on. Under
+   * a mouse it is wrong: the spring takes ~250ms to arrive, so the highlight
+   * trails the pointer down the list and reads as lag. Pointer-driven state has
+   * to be where the pointer is, on the same frame.
+   */
+  const [pointerMoved, setPointerMoved] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const m = useMotion();
@@ -93,14 +114,17 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   function updateQuery(next: string) {
     setQuery(next);
     setActive(0);
+    setPointerMoved(false);
   }
 
   function handleKey(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
+      setPointerMoved(false);
       setActive((i) => Math.min(results.length - 1, i + 1));
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
+      setPointerMoved(false);
       setActive((i) => Math.max(0, i - 1));
     } else if (event.key === "Enter") {
       event.preventDefault();
@@ -113,15 +137,20 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
 
   return (
     <div>
+      {/* One surface, not two: the wrapper is the pane the reader types into,
+          so the field itself carries no material. `GlassInput` paints its own
+          sheen gradient and `bg-transparent` does not remove a background
+          *image* — nesting the two drew a second, lighter rounded rect inside
+          this one. A bare input keeps the icon inline with the text. */}
       <div className="glass mb-3 flex h-9 items-center gap-2 rounded-md px-2.5">
-        <MagnifyingGlass size={16} className="text-text-2" />
-        <GlassInput
+        <MagnifyingGlass size={16} className="text-text-2 shrink-0" />
+        <input
           ref={inputRef}
           value={query}
           onChange={(event) => updateQuery(event.target.value)}
           onKeyDown={handleKey}
           placeholder="输入命令或书名..."
-          className="border-0 bg-transparent shadow-none focus-visible:border-0 focus-visible:bg-transparent"
+          className="text-text-1 placeholder:text-text-3 h-full w-full min-w-0 bg-transparent text-sm outline-none"
         />
       </div>
       <div ref={listRef} className="-mx-1 max-h-[60vh] overflow-y-auto px-1">
@@ -145,18 +174,25 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
                   <li key={entry.command.id} data-row={index} className="relative">
                     {/* One element gliding between rows, rather than a class
                         toggling on and off: ↑↓ is the primary way to move
-                        here, and the eye can follow a thing that moves. */}
+                        here, and the eye can follow a thing that moves.
+                        Pointer moves get a short tween instead — see
+                        `POINTER_CURSOR`. */}
                     {on && (
                       <motion.span
                         layoutId="palette-cursor"
                         className="bg-accent-soft absolute inset-0 rounded-md"
-                        transition={m.layout}
+                        transition={
+                          pointerMoved ? (m.reduce ? { duration: 0 } : POINTER_CURSOR) : m.layout
+                        }
                       />
                     )}
                     <button
                       type="button"
                       data-active={on || undefined}
-                      onMouseEnter={() => setActive(index)}
+                      onMouseEnter={() => {
+                        setPointerMoved(true);
+                        setActive(index);
+                      }}
                       onClick={() => {
                         onClose();
                         void entry.command.run();
