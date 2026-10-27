@@ -17,6 +17,9 @@ import { loadZhConverter } from "./zhConvert";
 import type { ZhConverter } from "./zhConvert";
 import { lineRects, relayRulerLayout, relaySectionKeys } from "./rulerPointer";
 import type { RulerRect } from "./rulerPointer";
+import { effectiveKeys, shortcutMatches } from "@/lib/commands";
+import { useCommandStore } from "@/stores/commands";
+import { useSettings } from "@/stores/settings";
 import { CapturedPageTurn } from "./capturedTurn";
 import { markLoneFigures } from "./loneFigure";
 import type { FoliateStyle } from "./foliateStyle";
@@ -212,10 +215,37 @@ export type FoliateHandle = {
  * Escape. Forward the keys we actually handle from the section document up to
  * the parent window, where the existing handler runs. Editable targets (rare
  * in books, but possible) keep their native behaviour.
+ *
+ * **Global hotkeys are part of "the keys we handle".** ⌘K, ⌘, and ⌘B live on
+ * the parent window's command registry (`useHotkeys`), so a press carrying a
+ * modifier was dead the moment the reader clicked into the text — ⌘K opened
+ * the palette everywhere except inside a book, which is where one reads. The
+ * registry decides, rather than a list of keys kept here: a rebound key works
+ * in the book on the same day it starts working outside it.
+ *
+ * It has to be the registry and not "every modified press": ⌘C/⌘V/⌘A belong to
+ * the book's own selection. `preventDefault` below kills the native action in
+ * the iframe, and the synthetic event dispatched on the parent window carries
+ * no default action of its own — forwarding those would have quietly broken
+ * copy from the page.
  */
 const FORWARDED_KEYS = new Set(["ArrowLeft", "ArrowRight", "Escape"]);
+
+/** Whether any command is bound to this press — the same question `useHotkeys`
+ *  asks, so the two cannot disagree about what a shortcut is. */
+function commandBoundTo(event: KeyboardEvent): boolean {
+  const { commands } = useCommandStore.getState();
+  const { keyOverrides } = useSettings.getState();
+  for (const command of commands) {
+    if (command.isEnabled && !command.isEnabled()) continue;
+    const keys = effectiveKeys(command.id, command.shortcut, keyOverrides);
+    if (keys?.some((shortcut) => shortcutMatches(event, shortcut))) return true;
+  }
+  return false;
+}
+
 const forwardKeyFromSection = (event: KeyboardEvent) => {
-  if (!FORWARDED_KEYS.has(event.key)) return;
+  if (!FORWARDED_KEYS.has(event.key) && !commandBoundTo(event)) return;
   const target = event.target;
   if (
     target instanceof HTMLElement &&
