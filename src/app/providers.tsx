@@ -3,7 +3,6 @@ import { MutationCache, QueryClient, QueryClientProvider } from "@tanstack/react
 import { MotionConfig } from "motion/react";
 import { useState } from "react";
 
-import { Toaster } from "@/components/common/Toaster";
 import { useTheme } from "@/hooks/useTheme";
 import { createLogger, describeError } from "@/lib/log";
 import { showToast } from "@/stores/toasts";
@@ -38,7 +37,6 @@ export function AppProviders({ children }: { children: ReactNode }) {
       <MotionConfig reducedMotion="user">
         <ThemeSync />
         {children}
-        <Toaster />
       </MotionConfig>
     </QueryClientProvider>
   );

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ArrowUUpLeft } from "@phosphor-icons/react";
 
+import { AiErrorCard } from "@/components/common/AiErrorCard";
 import { useGraphBuild, useGraphQuery, useGraphStatus } from "@/hooks/useGraph";
 
 /** The knowledge-graph drawer: build it, browse entities, follow relations. */
@@ -25,31 +26,39 @@ export function GraphPanel({
 
   if (empty && selected === null) {
     const model = status.data?.model ?? "";
+    // No model, no graph — and that is a failure the reader has to be told
+    // about, not a grey line they have to read. The same card the guide shows
+    // for the same reason, with the backend's own sentence for it
+    // (`commands::ai::NOT_CONFIGURED`) so the toast and the panel agree.
+    if (!model) {
+      return (
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+          <AiErrorCard message="还没有配置 AI 模型，先到设置里填写接口地址与模型名称" />
+          <p className="text-text-3 mt-3 text-[12.5px] leading-relaxed">
+            AI 逐章读正文，抽出人物、地点与它们之间的关系。
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="flex min-h-0 flex-1 flex-col justify-center px-5 py-6 text-center">
         <p className="text-text-1 text-[13px] leading-relaxed">这本书还没有知识图谱。</p>
         <p className="text-text-3 mt-1.5 text-[12.5px] leading-relaxed">
-          {model
-            ? "点下面开始抽取：AI 会逐章读取正文，整理人物、地点与它们之间的关系。"
-            : "先到设置里配置 AI 模型，才能抽取实体与关系。"}
+          点下面开始抽取：AI 会逐章读取正文，整理人物、地点与它们之间的关系。
         </p>
-        {model && (
-          <div className="mt-4 flex flex-col items-center gap-2">
-            <button
-              type="button"
-              disabled={building}
-              onClick={() => build.build.mutate()}
-              className="focus-visible:focus-ring bg-accent text-on-accent rounded-full px-4 py-1.5 text-xs font-medium transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              {building && build.progress
-                ? `抽取中 ${build.progress.done}/${build.progress.total} 章`
-                : "抽取全书"}
-            </button>
-            {building && !build.progress && (
-              <p className="text-text-3 text-[12px]">正在读取章节…</p>
-            )}
-          </div>
-        )}
+        <div className="mt-4 flex flex-col items-center gap-2">
+          <button
+            type="button"
+            disabled={building}
+            onClick={() => build.build.mutate()}
+            className="glass-liquid text-accent focus-visible:focus-ring rounded-full px-4 py-1.5 text-xs font-medium transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            {building && build.progress
+              ? `抽取中 ${build.progress.done}/${build.progress.total} 章`
+              : "抽取全书"}
+          </button>
+          {building && !build.progress && <p className="text-text-3 text-[12px]">正在读取章节…</p>}
+        </div>
       </div>
     );
   }

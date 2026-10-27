@@ -143,3 +143,45 @@ test("the highlight follows a scroll the reader made", async ({ page }) => {
 
   await expect(rail.locator('[aria-current="true"]'), "the pane is over 字体").toHaveText("字体");
 });
+
+/**
+ * A link from somewhere else in the app lands on the group it names.
+ *
+ * `去设置` beside a failed AI guide is the case that exists today: the reader
+ * is four groups from the field the error is about, and arriving at the top of
+ * the page would leave them to find it. The guide fails in the browser build
+ * for its own reason (no backend), which is enough to get the button on screen
+ * — the test presses it rather than quoting the message, since that reason is
+ * engine-specific and this is not a test of it.
+ */
+test("去设置 lands on the AI group, not the top of the page", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/?demo=1");
+  await page
+    .getByRole("button", { name: /我们为什么会生病/ })
+    .first()
+    .click();
+  await expect(page.getByRole("button", { name: "阅读设置" }).first()).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.waitForTimeout(800);
+
+  await page.getByRole("button", { name: "AI 导读" }).first().click();
+  await page.waitForTimeout(1200);
+  const drawer = page.locator("[data-reading-viewport] aside");
+  await drawer.getByRole("button", { name: /去设置/ }).click();
+
+  await expect(page.getByRole("heading", { name: "设置", level: 1 })).toBeVisible();
+  await page.waitForTimeout(900);
+
+  const pane = (await page.locator(SCROLLER).boundingBox())!;
+  const group = (await page.locator('[data-section="ai"]').boundingBox())!;
+  const off = Math.round(group.y - pane.y);
+  // The jump aims at `offsetTop - 16`, so the group sits just under the pane's
+  // top edge — not "somewhere in view", which is what arriving at 0 would be.
+  expect(off, `AI 助手 landed at ${off}px`).toBeGreaterThanOrEqual(-8);
+  expect(off, `AI 助手 landed at ${off}px`).toBeLessThan(60);
+  await expect(page.locator('nav[aria-label="设置分类"] [aria-current="true"]')).toHaveText(
+    "AI 助手",
+  );
+});

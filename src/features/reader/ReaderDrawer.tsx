@@ -86,7 +86,19 @@ export function ReaderDrawer({
         exit={sheetMotion.exit}
         transition={SPRING.panel}
       >
-        <div className="glass-solid shadow-panel flex h-full flex-col rounded-2xl">
+        {/* `glass-liquid`, not `glass-solid`: this panel floats over the page the
+            reader is looking at, and an opaque sheet was the one thing in the
+            reader that ignored it. `shadow-panel` used to be listed here too —
+            it was never a real utility (`--shadow-panel` lives on `:root`, not
+            in `@theme`), and `glass-liquid` carries it.
+
+            `--liquid-density` is raised because this is the one glass surface in
+            the app that carries paragraphs: at the material's default 84% the
+            book's own lines read *through* the panel and compete with its text
+            (clearest on an error card, where the advice under the verdict is
+            12px). Denser fill, same rim, sheen and blur — still a pane, no
+            longer a transparency test. */}
+        <div className="glass-liquid flex h-full flex-col rounded-2xl [--liquid-density:96%]">
           <div className="border-hairline flex items-center justify-between border-b px-4 py-3">
             <p className="text-text-1 text-sm font-medium">{title}</p>
             <button

@@ -15,6 +15,7 @@ import {
   TextAa,
 } from "@phosphor-icons/react";
 import { motion, useReducedMotion } from "motion/react";
+import { useLocation } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -246,27 +247,61 @@ export function SettingsPage() {
     };
   }, [measure]);
 
-  const jumpTo = (id: SectionId) => {
-    const root = scrollRef.current;
-    const target = root?.querySelector<HTMLElement>(`[data-section="${id}"]`);
-    if (!root || !target) return;
-    const top = Math.max(target.offsetTop - 16, 0);
-    // Set it now rather than waiting for the scroll: the smooth scroll would
-    // otherwise leave the rail ticking through the groups it passes.
-    jumping.current = { id, top };
-    setActive(id);
-    root.scrollTo({ top, behavior: reduce ? "auto" : "smooth" });
-    // A jump to where the pane can already reach fires no scroll event at all,
-    // and a claim nobody releases would then swallow the reader's next scroll.
-    // Compared against where the pane *can* go rather than where it was asked to
-    // go: a pane parked at its bottom, asked for a group further up, is not there
-    // yet — and releasing it here is what let the rule below light 关于 for a
-    // click on 同步.
-    if (Math.abs(root.scrollTop - reachableTop(root, top)) < 2) {
-      jumping.current = null;
-      settled.current = root.scrollTop;
-    }
-  };
+  const jumpTo = useCallback(
+    (id: SectionId) => {
+      const root = scrollRef.current;
+      const target = root?.querySelector<HTMLElement>(`[data-section="${id}"]`);
+      if (!root || !target) return;
+      const top = Math.max(target.offsetTop - 16, 0);
+      // Set it now rather than waiting for the scroll: the smooth scroll would
+      // otherwise leave the rail ticking through the groups it passes.
+      jumping.current = { id, top };
+      setActive(id);
+      root.scrollTo({ top, behavior: reduce ? "auto" : "smooth" });
+      // A jump to where the pane can already reach fires no scroll event at all,
+      // and a claim nobody releases would then swallow the reader's next scroll.
+      // Compared against where the pane *can* go rather than where it was asked to
+      // go: a pane parked at its bottom, asked for a group further up, is not there
+      // yet — and releasing it here is what let the rule below light 关于 for a
+      // click on 同步.
+      if (Math.abs(root.scrollTop - reachableTop(root, top)) < 2) {
+        jumping.current = null;
+        settled.current = root.scrollTop;
+      }
+    },
+    [reduce],
+  );
+
+  /**
+   * `/settings#ai` — a link from elsewhere in the app, e.g. 去设置 beside an
+   * API-key error in the reader's guide panel.
+   *
+   * The same jump the rail uses, for the same reason: a group's position is
+   * only known to this pane. The retry is not defensive — `AI 助手` and `同步`
+   * return `null` until their configs resolve, so the group a link is aimed at
+   * is very often not in the DOM on the frame the route arrives. A hash naming
+   * nothing (or a group that never mounts) leaves the pane where it is.
+   */
+  const { hash } = useLocation();
+  useEffect(() => {
+    const id = hash.slice(1) as SectionId;
+    if (!SECTIONS.some((section) => section.id === id)) return;
+    let frames = 0;
+    let frame = 0;
+    const look = () => {
+      const root = scrollRef.current;
+      if (!root) return;
+      if (root.querySelector(`[data-section="${id}"]`)) {
+        jumpTo(id);
+        return;
+      }
+      // ~2s at 60fps: long enough for a local config query, short enough that a
+      // group which is never going to mount does not keep a frame loop alive.
+      if (frames++ < 120) frame = requestAnimationFrame(look);
+    };
+    look();
+    return () => cancelAnimationFrame(frame);
+  }, [hash, jumpTo]);
 
   return (
     <div ref={scrollRef} data-settings-scroll className="relative h-full overflow-y-auto">

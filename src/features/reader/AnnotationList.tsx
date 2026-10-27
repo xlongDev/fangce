@@ -37,13 +37,16 @@ export function AnnotationList({
           drawer's title bar is shared with every other panel. */}
       <div className="border-hairline flex items-center justify-between gap-2 border-b px-4 py-2">
         <p className="text-text-3 text-xs">{annotations.length} 条标注</p>
+        {/* The same pill as 重新生成 in the guide's footer: this header is a
+            band of the drawer, and the one control on it was the only piece of
+            chrome in the reader that sat flat on the glass instead of on it. */}
         <button
           type="button"
           disabled={annotations.length === 0}
           onClick={onExport}
-          className="focus-visible:focus-ring text-text-3 hover:text-text-1 disabled:hover:text-text-3 inline-flex items-center gap-1 text-xs transition-colors disabled:opacity-40"
+          className="glass-liquid text-text-2 hover:text-text-1 focus-visible:focus-ring inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[12px] transition-colors disabled:opacity-40"
         >
-          <DownloadSimple size={13} />
+          <DownloadSimple size={12} />
           导出
         </button>
       </div>

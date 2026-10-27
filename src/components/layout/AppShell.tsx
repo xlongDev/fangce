@@ -7,6 +7,7 @@ import { isDesktopRuntime } from "@/lib/ipc";
 import { cn } from "@/lib/cn";
 import { NavList } from "@/components/layout/NavList";
 import { UpdateBanner } from "@/components/layout/UpdateBanner";
+import { Toaster } from "@/components/common/Toaster";
 import { CommandPalette } from "@/components/command/CommandPalette";
 import { GlassSidebar } from "@/components/glass/sidebar";
 import { GlassPanel } from "@/components/glass/panel";
@@ -260,6 +261,10 @@ export function AppShell() {
             always (the check runs while the reader is fullscreen too); it
             renders nothing in the immersive reader — see `UpdateBanner`. */}
         <UpdateBanner />
+        {/* Inside the router, unlike `AppProviders`: the 去设置 action needs a
+            navigation context, and the shell's root is not a `backdrop-filter`
+            element, so `fixed` is not clipped the way a pane would clip it. */}
+        <Toaster />
         <div
           className={
             readerFullscreen ? "flex min-h-0 flex-1" : "flex min-h-0 flex-1 gap-3 px-3 pb-3"

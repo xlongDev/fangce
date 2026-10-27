@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { ArrowClockwise } from "@phosphor-icons/react";
 
+import { AiErrorCard } from "@/components/common/AiErrorCard";
 import { Markdown } from "@/components/common/Markdown";
 import { useAiChat } from "@/hooks/useAi";
 
@@ -24,7 +25,7 @@ export function GuidePanel({ bookId }: { bookId: string }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {error ? (
-          <p className="text-danger text-[12.5px] leading-relaxed">{error}</p>
+          <AiErrorCard message={error} />
         ) : text ? (
           <Markdown text={text} />
         ) : (
@@ -40,7 +41,7 @@ export function GuidePanel({ bookId }: { bookId: string }) {
           type="button"
           disabled={streaming}
           onClick={() => sendDigest(bookId, true)}
-          className="border-hairline text-text-2 hover:text-text-1 focus-visible:focus-ring flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[12px] transition-colors disabled:opacity-60"
+          className="glass-liquid text-text-2 hover:text-text-1 focus-visible:focus-ring flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[12px] transition-colors disabled:opacity-60"
         >
           <ArrowClockwise size={12} />
           {streaming ? "生成中" : "重新生成"}
