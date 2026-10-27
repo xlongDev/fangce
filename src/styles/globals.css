@@ -105,7 +105,7 @@
    accent #96591a keeps white-on-accent label copy at ~5.4:1; the lighter
    #a9671b it replaced only reached 3.9:1 and failed AA for button text. ---- */
 [data-theme="light"] {
-  --app-bg: #e2e5ec;
+  --app-bg: #d9dde7;
   /* 🔴 Elevation 1 has to be *brighter* than elevation 2 on light, not dimmer.
      `glass` (elevation 1) is the material of the cards that sit inside a
      `glass-2` panel or sidebar, and it carries the raised language — an inset
@@ -120,7 +120,7 @@
      Dark keeps its 0.05 / 0.075 pair on purpose: a 2.5-point gap reads as
      "inset", which is the correct reading on a dark surface, and inverting it
      there would double every hover fill instead. */
-  --surface-1: rgba(255, 255, 255, 0.56);
+  --surface-1: rgba(252, 253, 255, 0.58);
   --surface-2: rgba(255, 255, 255, 0.3);
   --surface-3: rgba(255, 255, 255, 0.9);
   --hairline: rgba(16, 20, 28, 0.1);
@@ -134,7 +134,12 @@
   --on-accent: #fff8ec;
   --danger: #b53a3a;
   --success: #2f7d4f;
-  --shadow-glass: 0 1px 0 rgba(255, 255, 255, 0.95) inset, 0 14px 34px rgba(16, 20, 28, 0.12);
+  /* Two drops instead of one: a tight one that says the pane is resting on the
+     surface, and a wide one that says it is above it. A single wide shadow on
+     white reads as a smudge — the edge never quite detaches from the paper. */
+  --shadow-glass:
+    0 1px 0 rgba(255, 255, 255, 0.95) inset, 0 2px 6px rgba(16, 20, 28, 0.05),
+    0 12px 30px rgba(16, 20, 28, 0.14);
   --shadow-panel: 0 30px 70px rgba(16, 20, 28, 0.16);
   --glass-sheen: rgba(255, 255, 255, 0.38);
   /* The card's own specular. Weaker than the panel's on purpose: it sits on a
@@ -142,11 +147,11 @@
   --glass-sheen-soft: rgba(255, 255, 255, 0.46);
   /* A hair of shade along the bottom rim. Glass has thickness, and a fill with
      a top highlight but no underside reads as a sticker, not a pane. */
-  --glass-edge: rgba(16, 20, 28, 0.05);
+  --glass-edge: rgba(16, 20, 28, 0.08);
   /* A lit rim, not a drawn one. A hairline reads as an outline somebody put
      there; a bright edge reads as the pane catching light, which is the one
      glass cue that works without a displacement filter. */
-  --glass-rim: rgba(255, 255, 255, 0.78);
+  --glass-rim: rgba(255, 255, 255, 0.92);
   /* The pane's side rims: half the top highlight, so the glass has a lit
      perimeter rather than only a lit lid. */
   --glass-side: rgba(255, 255, 255, 0.5);
@@ -462,7 +467,10 @@ button {
    `backdrop-filter` blurs the page underneath; inside the floating window it
    has nothing to sample, so there the translucency itself is the effect. */
 @utility glass-liquid {
-  background-color: color-mix(in srgb, var(--surface-3) 84%, transparent);
+  /* `--liquid-density` is how much of the surface is fill: 84% reads as glass
+     over a desktop, but a card with a list of sentences in it needs the page
+     behind it to stop showing through, and that is a per-surface decision. */
+  background-color: color-mix(in srgb, var(--surface-3) var(--liquid-density, 84%), transparent);
   background-image:
     radial-gradient(120% 88% at 16% -6%, var(--glass-sheen) 0%, transparent 46%),
     linear-gradient(148deg, var(--glass-sheen-soft) 0%, transparent 54%);
