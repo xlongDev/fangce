@@ -1,4 +1,5 @@
 import { cn } from "@/lib/cn";
+import { isDesktopRuntime } from "@/lib/ipc";
 import { useSettings } from "@/stores/settings";
 
 /**
@@ -24,7 +25,8 @@ import { useSettings } from "@/stores/settings";
  * and therefore the only one where the toggle has to dodge them. Read once at
  * module load: a renderer never migrates between platforms at runtime.
  */
-const HAS_TRAFFIC_LIGHTS = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+const HAS_TRAFFIC_LIGHTS =
+  isDesktopRuntime && typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
 
 export function TitleBar() {
   const hidden = useSettings((s) => s.sidebarHidden);
@@ -32,6 +34,19 @@ export function TitleBar() {
   // The label names the action, not the state, so the button says what will
   // happen when it is pressed — a rail that is already hidden offers "显示".
   const label = hidden ? "显示侧边栏" : "隐藏侧边栏";
+
+  // Web has no window chrome for this strip to belong to. Without this it drew
+  // a 36px empty band across the top of the page with a lone button in it —
+  // and on a Mac browser `HAS_TRAFFIC_LIGHTS` was true, so the button also sat
+  // 90px in, dodging lights that are not there. The toggle moves into the
+  // rail's own header instead (see `NavList`), and the way back out is the
+  // restore button `AppShell` already draws for fullscreen.
+  // Web has no window chrome for this strip to belong to — but it still owes
+  // the shell its height. The band is what keeps the panes off the window's
+  // top edge; returning `null` here pulled the whole interface flush against
+  // the browser, which is what it did before this line existed. 12px matches
+  // the `px-3 pb-3` the panes already sit on.
+  if (!isDesktopRuntime) return <div className="h-3 shrink-0" />;
 
   return (
     <div data-tauri-drag-region className="relative h-9 shrink-0">

@@ -15,9 +15,12 @@ describe("AppRouter", () => {
     expect(screen.getByRole("navigation", { name: "主导航" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("书库");
     expect(screen.getByRole("button", { name: "设置" })).toBeInTheDocument();
+    // Two separate actions, two separate controls: 折叠 shrinks the rail to a
+    // strip (footer), 隐藏 takes it off the screen entirely (rail header, or
+    // the title bar on macOS, where this document is not the one that draws
+    // it — hence the assertion below only holds off macOS, which is what the
+    // jsdom runtime is).
     expect(screen.getByRole("button", { name: "折叠侧边栏" })).toBeInTheDocument();
-    // The hide toggle sits in the title bar rather than the footer: it has to
-    // outlive the rail it hides, so it must render with the rail hidden too.
     expect(screen.getByRole("button", { name: "隐藏侧边栏" })).toBeInTheDocument();
   });
 });

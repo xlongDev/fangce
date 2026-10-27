@@ -380,6 +380,9 @@ function Footer({ compact }: { compact?: boolean } = {}) {
   // Order is render order. 设置 goes last: it is the one control here that
   // leaves the page, and it sits where macOS puts the equivalent.
   const chromeActions: FooterAction[] = [
+    // Both states. Collapsed, the mark in the header also expands the rail on
+    // hover, but that is a hover affordance on something that looks like a
+    // logo — the rail still needs a control that says what it does.
     {
       key: "toggle",
       label: collapsed ? "展开侧边栏" : "折叠侧边栏",

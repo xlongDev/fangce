@@ -3,12 +3,13 @@ import { useLocation, useOutlet } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion, type Variants } from "motion/react";
 
 import { SidebarGlyph, TitleBar } from "@/components/layout/TitleBar";
+import { isDesktopRuntime } from "@/lib/ipc";
+import { cn } from "@/lib/cn";
 import { NavList } from "@/components/layout/NavList";
 import { UpdateBanner } from "@/components/layout/UpdateBanner";
 import { CommandPalette } from "@/components/command/CommandPalette";
 import { GlassSidebar } from "@/components/glass/sidebar";
 import { GlassPanel } from "@/components/glass/panel";
-import { GlassIconButton } from "@/components/glass/button";
 import { Wordmark } from "@/components/brand/Wordmark";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { BookCoverFlight } from "@/components/motion/BookCoverFlight";
@@ -25,6 +26,69 @@ import { useHotkeys } from "@/hooks/useHotkeys";
 import { registerCoreCommands, useNavigationBridge } from "@/features/command/registerCoreCommands";
 import { DURATION, EASE_OUT } from "@/lib/motion";
 
+/**
+ * The rail's own header: the mark, and — off macOS — the toggle.
+ *
+ * macOS keeps its toggle in the title bar, next to the traffic lights, because
+ * it has to outlive the rail. Nothing changes there: the collapsed rail shows
+ * the mark alone, and the footer's toggle opens it again.
+ *
+ * Web has no title bar, so the toggle moves in here — and these are two
+ * different actions, deliberately. The header's button **hides** the rail (it
+ * leaves, and `AppShell` draws the restore button); the mark itself, when the
+ * rail is collapsed, **expands** it back, which is what the mark being the
+ * only thing left implies.
+ */
+function SidebarHeader({ collapsed }: { collapsed: boolean }) {
+  const hidden = useSettings((s) => s.sidebarHidden);
+  const setHidden = useSettings((s) => s.setSidebarHidden);
+  const toggle = useSettings((s) => s.toggleSidebar);
+  const glyph =
+    "text-text-3 hover:text-text-1 hover:bg-surface-1 focus-visible:focus-ring grid place-items-center rounded-xs transition-colors";
+
+  if (collapsed && !isDesktopRuntime) {
+    // `overflow-hidden` clips the wordmark's label, which `Wordmark` keeps in
+    // layout on purpose (it fades rather than unmounts) and which would
+    // otherwise push this 28px target out of the 76px rail.
+    return (
+      <div className="flex items-center pt-1 pr-3 pl-[13px]" data-tauri-drag-region>
+        <button
+          type="button"
+          aria-label="展开侧边栏"
+          title="展开侧边栏"
+          onClick={toggle}
+          className={cn("group/logo relative size-7 shrink-0 overflow-hidden", glyph)}
+        >
+          <span className="block transition-opacity duration-150 group-hover/logo:opacity-0">
+            <Wordmark compact />
+          </span>
+          <span className="absolute inset-0 grid place-items-center opacity-0 transition-opacity duration-150 group-hover/logo:opacity-100">
+            <SidebarGlyph expanded={false} />
+          </span>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center pt-1 pr-3 pl-[13px]" data-tauri-drag-region>
+      <Wordmark compact={collapsed} />
+      {!isDesktopRuntime && !collapsed && (
+        <button
+          type="button"
+          aria-label="隐藏侧边栏"
+          aria-expanded={!hidden}
+          title="隐藏侧边栏"
+          onClick={() => setHidden(!hidden)}
+          className={cn("ml-auto h-7 w-[30px] shrink-0", glyph)}
+        >
+          <SidebarGlyph expanded />
+        </button>
+      )}
+    </div>
+  );
+}
+
 // Sidebar content, shared verbatim by the docked pane and the fullscreen edge
 // overlay — the overlay is the same sidebar the user already has, just
 // summoned over the reading area.
@@ -36,9 +100,7 @@ function sidebarBody(collapsed: boolean) {
           centre line as the icons if this row spends the same one. Measured
           before: mark cx 48, first nav icon cx 49 — one pixel, visible
           because the spectrum is the highest-contrast thing up here. */}
-      <div className="flex items-center pt-1 pr-3 pl-[13px]" data-tauri-drag-region>
-        <Wordmark compact={collapsed} />
-      </div>
+      <SidebarHeader collapsed={collapsed} />
       <NavList />
       <div className="mt-auto px-1">
         <NavList.Footer />
@@ -236,17 +298,27 @@ export function AppShell() {
               at the window's left edge only read as the rail failing to leave
               completely. Fullscreen still needs its own, because the title
               bar is not rendered then. */}
-          {sidebarHidden && readerFullscreen && (
-            // Docked into the quiet bottom-left corner rather than mid-edge,
-            // where the flip arrow lives — clear of the footer hud too.
-            <GlassIconButton
-              label="显示侧边栏"
-              size="sm"
-              onClick={() => showSidebar(false)}
-              className="glass-solid absolute bottom-10 left-3 z-30"
-            >
-              <SidebarGlyph expanded={false} />
-            </GlassIconButton>
+          {sidebarHidden && (readerFullscreen || !isDesktopRuntime) && (
+            // Only while the pointer is near. A button parked in the corner of
+            // the page is the one thing on screen that is not part of the page
+            // — the reader who hid the rail did so to get rid of exactly that.
+            // It comes back where the rail used to be, in the same glass the
+            // rail is made of, and the hot zone is a good deal larger than the
+            // 24px target so it is reachable without aiming.
+            <div className="group/reveal absolute top-2 left-9 z-30 flex h-16 w-24 items-start p-2">
+              {/* `glass-2`, not `glass`: at 58% white the pane read as a
+                  white disc pasted onto the page — the one thing in the corner
+                  that was not made of the page. Elevation 2 is 30% white with
+                  a blur behind it, so it takes the colour it sits on. */}
+              <button
+                type="button"
+                aria-label="显示侧边栏"
+                onClick={() => showSidebar(false)}
+                className="glass-2 text-text-2 hover:text-text-1 focus-visible:focus-ring grid size-6 place-items-center rounded-xs opacity-0 transition-opacity duration-200 group-hover/reveal:opacity-100"
+              >
+                <SidebarGlyph expanded={false} />
+              </button>
+            </div>
           )}
           <GlassPanel
             // The pane everything is read in, and the reference a modal centres
