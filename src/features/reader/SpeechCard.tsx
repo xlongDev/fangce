@@ -6,6 +6,8 @@ import {
   CaretLeft,
   Check,
   Gauge,
+  GenderFemale,
+  GenderMale,
   Pause,
   Play,
   SkipBack,
@@ -29,7 +31,9 @@ import {
   defaultVoiceMissing,
   languageName,
   voiceGroups,
+  voiceZhName,
   type Voice,
+  type VoiceGender,
 } from "./voice";
 
 /**
@@ -161,6 +165,25 @@ const sleepLabel = (sleep: SleepTimer): ReactNode => {
   if (sleep.kind === "chapter") return "本章结束";
   return <Countdown endsAt={sleep.endsAt} />;
 };
+
+/**
+ * The little ♀ / ♂ beside a voice.
+ *
+ * A reader picking a voice for a novel is asking for a voice, and "Yunxi" says
+ * nothing about which one it is. The mark is a hint and not a fact, so a voice
+ * the service did not tag gets the empty slot — the names stay in one column,
+ * and nothing is guessed.
+ */
+function GenderMark({ gender }: { gender: VoiceGender | null }) {
+  if (gender === null) return <span aria-hidden className="size-3 shrink-0" />;
+  const Icon = gender === "female" ? GenderFemale : GenderMale;
+  return (
+    <span className={cn("shrink-0", gender === "female" ? "text-voice-female" : "text-voice-male")}>
+      <Icon size={13} weight="bold" aria-hidden />
+      <span className="sr-only">{gender === "female" ? "女声" : "男声"}</span>
+    </span>
+  );
+}
 
 export interface SpeechCardProps {
   title: string;
@@ -399,18 +422,18 @@ export function SpeechCard({
 
           No height animation on any of this — see the note on `VIEW_FADE`.
 
-          And it only *grows* while it has something to grow for. In the
-          floating bar the card is a fixed height, so a `flex-1` pane with
-          nothing in it is not air at the top of the panel, it is half the
-          panel: the voice picker brings a scroller of its own, and the two
-          would split what the card has left between them — which is the blank
-          above the transport that the picker used to open with. The other
-          drill-downs are rows that hug the transport, and what is left over
-          there is the 2px the measured heights were rounded with. */}
+          And it only *grows* while it has something to grow for — the sentence
+          stack and the voice picker, which are both scrolls. 语速 and 定时关闭
+          are rows that hug the transport, and a `flex-1` pane holding nothing
+          but them would be half the panel in the floating bar, where the card
+          is a fixed height. The picker used to live *below* the transport for
+          that reason, which cost more than it saved: the transport is the one
+          control that must not move, and opening the list sent it a panel's
+          height up the card. It belongs in the pane with the sentences. */}
       <div
         className={cn(
           "relative flex min-h-0 flex-col overflow-hidden",
-          shown === "main" && "flex-1",
+          (shown === "main" || shown === "voice") && "flex-1",
         )}
       >
         <AnimatePresence mode="popLayout" initial={false}>
@@ -487,6 +510,141 @@ export function SpeechCard({
                   style={{ "--range-fill": `${percent}%` } as CSSProperties}
                 />
                 <span>-{remaining}</span>
+              </div>
+            </motion.div>
+          )}
+
+          {shown === "voice" && (
+            // The picker is the one view that replaces a scroll of prose with a
+            // scroll of choices, so it arrives as one block: the language switch
+            // and the list are inside it, not after it. It lives in the pane the
+            // sentence stack lives in, so the transport below never moves when
+            // the list opens — and the list takes the pane's height, not its own
+            // content's, which is what makes it scroll instead of overflow.
+            <motion.div
+              key="voice"
+              className="mt-3 flex min-h-0 flex-1 flex-col"
+              initial={reduce ? { opacity: 0 } : { opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.26, ease: EASE_OUT }}
+            >
+              {edgeError !== null ? (
+                <p className="text-text-3 mb-2 text-[12px] leading-relaxed">
+                  {edgeError}
+                  {onReloadVoices !== undefined && (
+                    <button
+                      type="button"
+                      onClick={onReloadVoices}
+                      className="focus-visible:focus-ring text-accent ml-1 underline"
+                    >
+                      重试
+                    </button>
+                  )}
+                </p>
+              ) : (
+                missingDefault && (
+                  <p className="text-text-3 mb-2 text-[12px] leading-relaxed">
+                    没有找到 {DEFAULT_VOICE_NAME}，朗读会用下面选中的语音；连上网络即可使用 Edge
+                    在线语音里的 {DEFAULT_VOICE_NAME}。
+                  </p>
+                )
+              )}
+              {/* The book's language against the whole catalogue. Only
+                rendered when the book carries a language the catalogue
+                can speak — otherwise there is nothing to switch. */}
+              {bookVoices !== null && (
+                <div className="mb-2 flex gap-1.5">
+                  <Chip active={!allLangs} onClick={() => setAllLangs(false)}>
+                    {languageName(bookLanguage ?? "")}
+                  </Chip>
+                  <Chip active={allLangs} onClick={() => setAllLangs(true)}>
+                    全部语言
+                  </Chip>
+                </div>
+              )}
+              {/* One scroll, two headings deep — the engine, then the language —
+                and neither of them is a bar. The engine used to be a full-width
+                strip with a second strip pinned under it, which put two grey
+                bands on top of each other: the picker opened looking like a
+                table with a header row, and on the dark card the lower band was
+                almost the card's own colour, so it read as a stray stripe.
+
+                What is left is the app's own group label (see the search
+                results' book headings): the engine brighter and medium, the
+                language a step quieter under it, rows a step brighter again.
+                The language heading no longer sticks — a sticky row needs a
+                background to hide what scrolls under it, and that background
+                was the band. The tabs above say which catalogue is on screen,
+                and the sections here are short. */}
+              <div className="border-hairline min-h-0 flex-1 overflow-y-auto border-t py-1">
+                {groups.map((group, groupAt) => (
+                  <section
+                    key={group.engine}
+                    className={cn(groupAt > 0 && "border-hairline mt-2 border-t")}
+                  >
+                    <p className="text-text-3 px-2 pt-2 pb-1 text-[11px] font-medium">
+                      {group.label}
+                    </p>
+                    {group.sections.map((section) => (
+                      <div key={section.lang}>
+                        <p className="text-text-2 px-2 pt-2 pb-0.5 text-[11.5px] font-medium">
+                          {section.label}
+                        </p>
+                        {section.voices.map((row) => {
+                          const picked = row.uri === active?.uri;
+                          const zh = voiceZhName(row.name);
+                          return (
+                            <button
+                              key={row.uri}
+                              type="button"
+                              onClick={() => onVoice(row.uri)}
+                              aria-current={picked || undefined}
+                              className="press focus-visible:focus-ring hover:bg-surface-2 flex w-full items-center gap-2 rounded-xs px-2 py-2 text-left"
+                            >
+                              <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                                <GenderMark gender={row.gender} />
+                                {/* The Chinese name leads and the Latin one
+                                    follows it: the service only ever ships
+                                    "Xiaoxiao", which tells a reader nothing
+                                    about who is speaking. */}
+                                <span
+                                  className={cn(
+                                    "truncate text-[12px]",
+                                    picked ? "text-accent font-medium" : "text-text-1",
+                                  )}
+                                >
+                                  {zh ?? row.name}
+                                </span>
+                                {zh !== null && (
+                                  <span className="text-text-3 shrink-0 truncate text-[11px]">
+                                    {row.name}
+                                  </span>
+                                )}
+                              </span>
+                              {/* The service tags nearly every voice "General";
+                                the label only earns its row when it actually
+                                tells voices apart. */}
+                              {row.categories !== "" && row.categories !== "General" && (
+                                <span className="text-text-3 shrink-0 text-[11px]">
+                                  {row.categories}
+                                </span>
+                              )}
+                              {/* The check keeps its slot on every row. Drawing
+                                it only on the picked one pushed that row's
+                                category 21px out of the column the rest were
+                                on, which read as a broken list rather than as a
+                                selection. */}
+                              <span className="text-accent grid size-3.5 shrink-0 place-items-center">
+                                {picked && <Check size={12} weight="bold" />}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </section>
+                ))}
               </div>
             </motion.div>
           )}
@@ -573,103 +731,6 @@ export function SpeechCard({
                 {value}×
               </Chip>
             ))}
-          </motion.div>
-        )}
-        {shown === "voice" && (
-          // The picker is the one view that replaces a scroll of prose with a
-          // scroll of choices, so it arrives as one block: the language switch
-          // and the list are inside it, not after it. Height is the host's —
-          // see the pane above, which stands down so the list can have it.
-          <motion.div
-            key="voice"
-            className="mt-3 flex min-h-0 flex-1 flex-col"
-            initial={reduce ? { opacity: 0 } : { opacity: 0, y: 14 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.26, ease: EASE_OUT }}
-          >
-            {edgeError !== null ? (
-              <p className="text-text-3 mb-2 text-[12px] leading-relaxed">
-                {edgeError}
-                {onReloadVoices !== undefined && (
-                  <button
-                    type="button"
-                    onClick={onReloadVoices}
-                    className="focus-visible:focus-ring text-accent ml-1 underline"
-                  >
-                    重试
-                  </button>
-                )}
-              </p>
-            ) : (
-              missingDefault && (
-                <p className="text-text-3 mb-2 text-[12px] leading-relaxed">
-                  没有找到 {DEFAULT_VOICE_NAME}，朗读会用下面选中的语音；连上网络即可使用 Edge
-                  在线语音里的 {DEFAULT_VOICE_NAME}。
-                </p>
-              )
-            )}
-            {/* The book's language against the whole catalogue. Only
-                rendered when the book carries a language the catalogue
-                can speak — otherwise there is nothing to switch. */}
-            {bookVoices !== null && (
-              <div className="mb-2 flex gap-1.5">
-                <Chip active={!allLangs} onClick={() => setAllLangs(false)}>
-                  {languageName(bookLanguage ?? "")}
-                </Chip>
-                <Chip active={allLangs} onClick={() => setAllLangs(true)}>
-                  全部语言
-                </Chip>
-              </div>
-            )}
-            {/* One scroll, two headings deep: the engine, then the language.
-                The engine is the one thing the two sources cannot be merged
-                on — only the service needs a connection — and the language
-                has to stay visible while its own voices scroll, which a
-                horizontal strip of chips cannot do (it scrolls the language
-                you are on out of sight while its voices stay put). Both
-                headings are one fixed row tall, so the second can stick
-                directly beneath the first. */}
-            <div className="border-hairline min-h-0 flex-1 overflow-y-auto border-t">
-              {groups.map((group) => (
-                <div key={group.engine}>
-                  <p className="bg-surface-2 text-text-2 sticky top-0 flex h-6 items-center px-2 text-[11px] font-medium">
-                    {group.label}
-                  </p>
-                  {group.sections.map((section) => (
-                    <div key={section.lang}>
-                      <p className="bg-surface-3 text-text-3 sticky top-6 flex h-6 items-center px-2 text-[11px]">
-                        {section.label}
-                      </p>
-                      {section.voices.map((row) => (
-                        <button
-                          key={row.uri}
-                          type="button"
-                          onClick={() => onVoice(row.uri)}
-                          className={cn(
-                            "press focus-visible:focus-ring hover:bg-surface-2 flex w-full items-center gap-2 rounded-xs px-2 py-2 text-left",
-                            row.uri === active?.uri && "text-accent",
-                          )}
-                        >
-                          <span className="text-text-1 flex-1 truncate text-[12px]">
-                            {row.name}
-                          </span>
-                          {/* The service tags nearly every voice "General";
-                              the label only earns its row when it actually
-                              tells voices apart. */}
-                          {row.categories !== "" && row.categories !== "General" && (
-                            <span className="text-text-3 shrink-0 text-[11px]">
-                              {row.categories}
-                            </span>
-                          )}
-                          {row.uri === active?.uri && <Check size={13} weight="bold" />}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </div>
           </motion.div>
         )}
         {shown === "timer" && (

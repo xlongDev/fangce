@@ -201,6 +201,12 @@ pub struct EdgeVoice {
     /// Yunxi, Yunxia and Yunyang are all male Mandarin voices that differ only
     /// by this, so it is the one label worth showing.
     pub categories: String,
+    /// `"Female"` or `"Male"`, straight from the service. The picker draws a
+    /// gender mark beside every name: a reader choosing a voice for a novel is
+    /// asking for a voice, and the Latin name says nothing about which one.
+    /// Empty for a voice the service did not tag, which the picker draws as
+    /// nothing rather than guessing.
+    pub gender: String,
 }
 
 /// Why one attempt did not produce a clip.
@@ -262,6 +268,7 @@ pub async fn voices() -> AppResult<Vec<EdgeVoice>> {
             short_name: voice.short_name,
             locale: voice.locale,
             categories: voice.tag.categories.join(" / "),
+            gender: voice.gender,
         })
         .collect();
     voices.sort_by(|a, b| {
@@ -493,6 +500,10 @@ struct RawVoice {
     short_name: String,
     #[serde(rename = "Locale")]
     locale: String,
+    /// Absent on a voice the service has not tagged; `default` keeps one odd
+    /// entry from failing the whole list.
+    #[serde(rename = "Gender", default)]
+    gender: String,
     #[serde(rename = "VoiceTag", default)]
     tag: RawTag,
 }

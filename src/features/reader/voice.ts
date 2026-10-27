@@ -23,6 +23,11 @@ import type { EdgeVoice } from "@/types/ipc";
 /** Which engine speaks a voice. */
 export type SpeechEngine = "system" | "edge";
 
+/** What the picker marks beside a name. `null` for the platform's own voices,
+ *  which publish nothing of the sort — the mark is a hint, and a guess is not
+ *  a hint. */
+export type VoiceGender = "female" | "male";
+
 /** One selectable voice. */
 export interface Voice {
   /** `SpeechSynthesisVoice.voiceURI` for a system voice, `<prefix><shortName>`
@@ -37,6 +42,8 @@ export interface Voice {
    *  voices, which carry no such label — and it is the only thing telling
    *  Yunjian, Yunxi, Yunxia and Yunyang apart at a glance. */
   categories: string;
+  /** From the service's catalogue; see `VoiceGender`. */
+  gender: VoiceGender | null;
 }
 
 /**
@@ -210,10 +217,15 @@ export function systemVoices(system: readonly SpeechSynthesisVoice[]): Voice[] {
       lang: voice.lang,
       engine: "system",
       categories: "",
+      gender: null,
     });
   }
   return out.toSorted(byLangThenName);
 }
+
+/** The service's own spelling → the picker's two states. */
+const normalizeGender = (raw: string): VoiceGender | null =>
+  raw === "Female" ? "female" : raw === "Male" ? "male" : null;
 
 /** The service's voices, as the picker wants them.
  *
@@ -230,6 +242,9 @@ export function edgeVoices(system: readonly EdgeVoice[]): Voice[] {
       lang: voice.locale,
       engine: "edge" as const,
       categories: voice.categories,
+      // The service says "Female" / "Male"; anything else (a voice it did not
+      // tag) draws no mark rather than a wrong one.
+      gender: normalizeGender(voice.gender),
     }))
     .toSorted(bySectionOrder);
 }
@@ -329,9 +344,23 @@ export function defaultVoiceMissing(voices: readonly Voice[]): boolean {
   return !voices.some(isDefaultVoice);
 }
 
+/** The dialect locales the platform's name table cannot answer for.
+ *
+ *  `Intl.DisplayNames` knows languages and regions, not variants: asked for
+ *  `zh-CN-liaoning` it returns `null`, and the picker printed the raw tag as a
+ *  section heading — "zh-CN-liaoning" sitting over Xiaobei, which reads as a
+ *  bug rather than as a language. These are the two the service files under a
+ *  variant subtag, named the way a reader would say them. */
+const VARIANT_LANGUAGES: Record<string, string> = {
+  "zh-CN-liaoning": "东北话",
+  "zh-CN-shaanxi": "陕西话",
+};
+
 /** Human name for a tag (`zh-CN` → 中文（中国）); the raw tag when the browser
  *  has no display names, or the tag is malformed. */
 export function languageName(tag: string): string {
+  const variant = VARIANT_LANGUAGES[tag];
+  if (variant !== undefined) return variant;
   const Names = (Intl as unknown as { DisplayNames?: typeof Intl.DisplayNames }).DisplayNames;
   if (!Names) return tag;
   try {
@@ -339,6 +368,42 @@ export function languageName(tag: string): string {
   } catch {
     return tag;
   }
+}
+
+/**
+ * The Chinese name of a Chinese voice.
+ *
+ * The service names every voice in pinyin only — "Xiaoxiao" tells a reader
+ * nothing about who is speaking, 晓晓 does. Keyed by the display name the
+ * service itself uses (see `display_name` on the Rust side), which is stable
+ * per voice; a voice this table does not know keeps its Latin name, which is
+ * what the rest of the catalogue shows anyway. Adding one is a line here.
+ */
+const VOICE_ZH_NAMES: Record<string, string> = {
+  // 中文（中国大陆）
+  Xiaoxiao: "晓晓",
+  Xiaoyi: "晓伊",
+  Yunjian: "云健",
+  Yunxi: "云希",
+  Yunxia: "云夏",
+  Yunyang: "云扬",
+  // 方言
+  Xiaobei: "晓北",
+  Xiaoni: "晓妮",
+  // 中文（台湾）
+  HsiaoChen: "曉臻",
+  HsiaoYu: "曉雨",
+  YunJhe: "雲哲",
+  // 中文（香港）
+  HiuGaai: "曉佳",
+  HiuMaan: "曉曼",
+  WanLung: "雲龍",
+};
+
+/** `null` for a voice with no Chinese name — the picker then shows the name it
+ *  already has, rather than an empty cell. */
+export function voiceZhName(name: string): string | null {
+  return VOICE_ZH_NAMES[name] ?? null;
 }
 
 /**

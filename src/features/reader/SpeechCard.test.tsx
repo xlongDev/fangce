@@ -76,4 +76,33 @@ describe("SpeechCard", () => {
     expect(screen.getByRole("button", { name: "暂停" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "1.5×" })).toBeNull();
   });
+
+  it("keeps the voice list above the transport, where the sentences are", () => {
+    // The picker used to live below the transport, so opening it sent the play
+    // button a panel's height up the card — and the transport is the one
+    // control a reader is listening through while they pick a voice.
+    const voices = [
+      {
+        uri: "edge-yunjian",
+        name: "Yunjian",
+        lang: "zh-CN",
+        engine: "edge" as const,
+        categories: "News",
+        gender: "female" as const,
+      },
+      {
+        uri: "edge-xiaoxiao",
+        name: "Xiaoxiao",
+        lang: "zh-CN",
+        engine: "edge" as const,
+        categories: "News",
+        gender: "female" as const,
+      },
+    ];
+    render(<SpeechCard {...card({ voices })} initialView="voice" />);
+
+    const play = screen.getByRole("button", { name: "暂停" });
+    const row = screen.getByRole("button", { name: /Yunjian/ });
+    expect(row.compareDocumentPosition(play) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });

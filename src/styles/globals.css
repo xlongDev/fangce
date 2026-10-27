@@ -62,6 +62,10 @@
   --color-on-accent: var(--on-accent);
   --color-danger: var(--danger);
   --color-success: var(--success);
+  /* The voice picker's gender marks. Not semantic (nothing succeeds or fails),
+     so they are their own pair rather than borrowed from success/danger. */
+  --color-voice-female: var(--voice-female);
+  --color-voice-male: var(--voice-male);
 }
 
 /* -- dark (default) -------------------------------------------------
@@ -86,6 +90,10 @@
   --on-accent: #17120a;
   --danger: #f47174;
   --success: #5cc28a;
+  /* Read against surface-3 (#16191f): ♀ ≈ 6.4:1, ♂ ≈ 6.9:1 — a 12px glyph has
+     to clear 3:1 as a graphic, and these clear text contrast besides. */
+  --voice-female: #e08aa4;
+  --voice-male: #77abd6;
   --shadow-glass: 0 1px 0 rgba(255, 255, 255, 0.08) inset, 0 18px 50px rgba(0, 0, 0, 0.45);
   --shadow-panel: 0 30px 80px rgba(0, 0, 0, 0.55);
   --glass-sheen: rgba(255, 255, 255, 0.07);
@@ -134,6 +142,10 @@
   --on-accent: #fff8ec;
   --danger: #b53a3a;
   --success: #2f7d4f;
+  /* Darkened for white paper: the dark theme's pair would sit at ~2.4:1 here,
+     which is under the 3:1 a graphic needs. ♀ ≈ 4.9:1, ♂ ≈ 5.2:1. */
+  --voice-female: #a8455f;
+  --voice-male: #33638a;
   /* Two drops instead of one: a tight one that says the pane is resting on the
      surface, and a wide one that says it is above it. A single wide shadow on
      white reads as a smudge — the edge never quite detaches from the paper. */

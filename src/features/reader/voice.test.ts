@@ -15,6 +15,7 @@ import {
   systemVoices,
   voiceGroups,
   voiceLanguages,
+  voiceZhName,
   voicesInLang,
   type SpeechEngine,
   type Voice,
@@ -30,14 +31,16 @@ const voice = (name: string, lang: string, uri = name, engine: SpeechEngine = "s
   lang,
   engine,
   categories: "",
+  gender: null,
 });
 
 /** A voice as the Edge service reports it. */
-const listed = (shortName: string, locale: string, name: string) => ({
+const listed = (shortName: string, locale: string, name: string, gender = "Female") => ({
   shortName,
   name,
   locale,
   categories: "",
+  gender,
 });
 
 /** Both engines at once, in the order `useSpeechVoices` hands them over: the
@@ -111,6 +114,34 @@ describe("edgeVoices", () => {
       listed("ar-SA-ZariyahNeural", "ar-SA", "Zariyah"),
     ]);
     expect(voices.map((entry) => entry.name)).toEqual(["Yunjian", "Xiaobei", "Emma", "Zariyah"]);
+  });
+
+  it("normalises the gender the service reports", () => {
+    // The picker draws a mark from this and nothing else — an untagged voice
+    // has to come out as `null` rather than as a third state it cannot draw.
+    const voices = edgeVoices([
+      listed("zh-CN-YunjianNeural", "zh-CN", "Yunjian", "Male"),
+      listed("zh-CN-XiaoxiaoNeural", "zh-CN", "Xiaoxiao", "Female"),
+      listed("zh-CN-MysteryNeural", "zh-CN", "Mystery", ""),
+    ]);
+    expect(Object.fromEntries(voices.map((entry) => [entry.name, entry.gender]))).toEqual({
+      Yunjian: "male",
+      Xiaoxiao: "female",
+      Mystery: null,
+    });
+  });
+});
+
+describe("voiceZhName", () => {
+  it("names the Chinese voices in Chinese", () => {
+    // "Xiaoxiao" tells a reader nothing about who is speaking; 晓晓 does.
+    expect(voiceZhName("Xiaoxiao")).toBe("晓晓");
+    expect(voiceZhName("Yunjian")).toBe("云健");
+    expect(voiceZhName("HiuGaai")).toBe("曉佳");
+  });
+
+  it("leaves a voice it does not know to its own name", () => {
+    expect(voiceZhName("Libby")).toBeNull();
   });
 });
 
@@ -202,6 +233,13 @@ describe("language grouping", () => {
   it("falls back to the raw tag for a tag the browser cannot name", () => {
     expect(languageName("zh-CN")).not.toBe("");
     expect(languageName("")).toBe("");
+  });
+
+  it("names the dialect variants the browser has no entry for", () => {
+    // `Intl.DisplayNames` answers null for a variant subtag, so these headings
+    // used to read "zh-CN-liaoning" over Xiaobei's row.
+    expect(languageName("zh-CN-liaoning")).toBe("东北话");
+    expect(languageName("zh-CN-shaanxi")).toBe("陕西话");
   });
 });
 

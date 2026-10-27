@@ -919,6 +919,14 @@ export type EdgeVoice = {
    *  by this, so it is the one label worth showing.
    */
   categories: string;
+  /**
+   *  `"Female"` or `"Male"`, straight from the service. The picker draws a
+   *  gender mark beside every name: a reader choosing a voice for a novel is
+   *  asking for a voice, and the Latin name says nothing about which one.
+   *  Empty for a voice the service did not tag, which the picker draws as
+   *  nothing rather than guessing.
+   */
+  gender: string;
 };
 
 /**  One word the service reports, `at` seconds from the start of the clip. */

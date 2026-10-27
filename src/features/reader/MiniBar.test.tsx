@@ -110,6 +110,7 @@ const CATALOGUE: MiniBarVoices = {
       lang: "zh-CN",
       engine: "edge",
       categories: "Novel",
+      gender: "male",
     },
     {
       uri: "com.apple.voice.compact.zh-CN.Tingting",
@@ -117,6 +118,7 @@ const CATALOGUE: MiniBarVoices = {
       lang: "zh-CN",
       engine: "system",
       categories: "",
+      gender: null,
     },
   ],
   edgeError: null,
@@ -233,25 +235,25 @@ describe("MiniBar", () => {
     expect(sent()).toEqual([]);
   });
 
-  it("stops growing the sentence pane for the view that brings a scroller of its own", async () => {
+  it("keeps the pane growing for the voice picker, which scrolls inside it", async () => {
     const user = userEvent.setup();
     show();
     await user.click(opens()[0]!);
 
     // The pane is the sentence list's room, and it takes it while that list is
-    // the thing on screen. The card here is a fixed height — it is a window —
-    // so a pane that grows for a view with nothing in it does not take air
-    // from the margins, it takes half the panel.
+    // the thing on screen.
     expect(pane()?.classList.contains("flex-1")).toBe(true);
 
     await user.click(screen.getByRole("button", { name: /语音$/ }));
 
-    // …and stands down for the picker, which scrolls in its own right. Both
-    // growing at once is the bug this guards: measured in the bar, 186px of
-    // empty pane above the transport and 186px of list under it, where the
-    // list could have had 372. jsdom has no layout, so the class is the
-    // assertion — it is the whole of the mechanism.
-    expect(pane()?.classList.contains("flex-1")).toBe(false);
+    // …and it keeps taking it for the picker, which now lives *in* the pane
+    // rather than below the transport. The picker used to stand the pane down
+    // and sit under the transport instead, which cost the transport its place:
+    // opening the list sent the play button a panel's height up the card, in a
+    // window whose height is the card's. The pane's own height is what the list
+    // scrolls in, so both grow — the list is the thing that gives.
+    expect(pane()?.classList.contains("flex-1")).toBe(true);
+    expect(pane()?.querySelector(".overflow-y-auto")).not.toBeNull();
   });
 
   it("has the way back on screen in the same frame a drill-down opens", async () => {
