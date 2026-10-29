@@ -478,24 +478,38 @@ async function enableRuler(page: Page) {
  * ruler that never draws still fails, with the same message, after the same
  * bounded wait.
  */
+/** How long the settle helpers wait between two reads of the same thing.
+ *  100ms rather than 60: on the CI runner a re-measure can land a good deal
+ *  later than a frame, and a step shorter than that gap only produces more
+ *  reads of the value that is about to change. */
+const SETTLE_STEP = 100;
+
 async function rulerDrawn(page: Page): Promise<Drawn> {
   let last: Drawn | null = null;
+  let still = 0;
   for (let i = 0; i < 64; i += 1) {
     const drawn = (await page.evaluate(DRAWN)) as Drawn | null;
     if (!drawn) {
       last = null;
-      await page.waitForTimeout(60);
+      still = 0;
+      await page.waitForTimeout(SETTLE_STEP);
       continue;
     }
-    const still =
+    const same =
       last !== null &&
-      Math.abs(last.band.top - drawn!.band.top) < 0.5 &&
-      Math.abs(last.band.bottom - drawn!.band.bottom) < 0.5 &&
-      Math.abs(last.band.left - drawn!.band.left) < 0.5 &&
-      Math.abs(last.band.right - drawn!.band.right) < 0.5;
-    last = drawn!;
-    if (still) return drawn!;
-    await page.waitForTimeout(60);
+      Math.abs(last.band.top - drawn.band.top) < 0.5 &&
+      Math.abs(last.band.bottom - drawn.band.bottom) < 0.5 &&
+      Math.abs(last.band.left - drawn.band.left) < 0.5 &&
+      Math.abs(last.band.right - drawn.band.right) < 0.5;
+    last = drawn;
+    // **Three** agreeing reads, not two. The reader re-measures a frame or two
+    // after a pane change, and on a loaded runner that gap is wider than one
+    // step: with two reads, a band that had simply not been told to move yet
+    // read as settled, and the assertion that followed compared a stale band
+    // against a fresh page — 117px out in 双页, one line out after a page turn.
+    still = same ? still + 1 : 0;
+    if (still >= 2) return drawn;
+    await page.waitForTimeout(SETTLE_STEP);
   }
   expect(last, "阅读标尺没有画出来").not.toBeNull();
   return last!;
@@ -512,12 +526,16 @@ async function rulerDrawn(page: Page): Promise<Drawn> {
  */
 async function rulerLines(page: Page): Promise<Interval[]> {
   let last = "";
+  let still = 0;
   for (let i = 0; i < 16; i += 1) {
     const lines = (await page.evaluate(LINES)) as Interval[];
     const key = JSON.stringify(lines);
-    if (key === last) return lines;
+    // Two agreeing reads, like the band itself: a re-flow that lands between
+    // them would otherwise hand back a line list from a page that has moved.
+    still = key === last ? still + 1 : 0;
+    if (still >= 1) return lines;
     last = key;
-    await page.waitForTimeout(60);
+    await page.waitForTimeout(SETTLE_STEP);
   }
   return (await page.evaluate(LINES)) as Interval[];
 }
