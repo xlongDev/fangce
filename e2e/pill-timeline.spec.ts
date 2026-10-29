@@ -39,6 +39,18 @@ function installVoiceThatNeverFinishes(): void {
   proto.resume = () => {};
 }
 
+/** How far the pill sits above whatever anchors it — the footer's top edge in
+ *  the reader, the window's foot on the shelf.
+ *
+ *  Measured this way rather than as a raw `y` because the pill's *anchor* can
+ *  move: the reader's footer is shorter for the first paint or two and taller
+ *  once its contents are in, and the pill is lifted by exactly that height — so
+ *  the window coordinates change while the pill is doing precisely what it was
+ *  built to do. CI read that as the pill drifting (772 → 760 one second in).
+ *  What must not change is the clearance: a pill that slid down its own footer
+ *  would still be a defect, and still fails here. */
+const lift = (s: Sample) => (s.footer > 0 ? s.y - s.footerTop : s.y);
+
 interface Sample {
   ms: number;
   pill: number;
@@ -98,15 +110,20 @@ test("the pill is either there and still, or gone — and which", async ({ page 
   // to carry the session on its own. Both states, because CI failed in both.
   const inReader: Sample[] = [];
   // Wait for the pill to *arrive* before sampling instead of spending the first
-  // two samples on the arrival: it rises into place by 12px, and on a loaded
-  // runner that takes longer than those two samples covered — CI caught the
-  // third sample 12px higher and reported it as drift.
-  let settledY = -1;
-  for (let i = 0; i < 40; i += 1) {
+  // two samples on the arrival. Arriving is not a 12px hop at t=0: the pill's
+  // lift is a measured value, and on a starved renderer the measurement that
+  // settles it lands a second or more after the first paint (CI: steady at 772
+  // for 750ms, then 760 for the rest of the session). Three agreeing samples
+  // 250ms apart — three quarters of a second of stillness — is what "arrived"
+  // means here; a pill that never settles still fails, on the samples below.
+  let settled = Number.NaN;
+  let agreeing = 0;
+  for (let i = 0; i < 24; i += 1) {
     const s = await sample();
-    if (s.y > 0 && s.y === settledY) break;
-    settledY = s.y;
-    await page.waitForTimeout(120);
+    agreeing = s.y > 0 && lift(s) === settled ? agreeing + 1 : 0;
+    settled = lift(s);
+    if (agreeing >= 2) break;
+    await page.waitForTimeout(250);
   }
   for (let i = 0; i < 12; i += 1) {
     inReader.push(await sample());
@@ -124,17 +141,6 @@ test("the pill is either there and still, or gone — and which", async ({ page 
   }
 
   const timeline = { inReader, onShelf };
-  /** How far the pill sits above whatever anchors it — the footer's top edge in
-   *  the reader, the window's foot on the shelf.
-   *
-   *  Measured this way rather than as a raw `y` because the pill's *anchor*
-   *  moves: the reader's footer is 45px tall for the first paint or two and 57
-   *  once its contents are in, and the pill is lifted by exactly that height —
-   *  so the window coordinates change by 12px while the pill is doing precisely
-   *  what it was built to do. CI read that as the pill drifting (772 → 760 one
-   *  second in). What must not change is the clearance: a pill that slid down
-   *  its own footer would still be a defect, and still fails here. */
-  const lift = (s: Sample) => (s.footer > 0 ? s.y - s.footerTop : s.y);
   /** Anything that is not "identical to the sample before it" — ignoring the
    *  two samples each state spends arriving, since the pill rises into place by
    *  12px and that is the surface working rather than the pill drifting. */

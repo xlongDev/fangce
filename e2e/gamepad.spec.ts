@@ -368,10 +368,17 @@ test("手柄翻页：肩键、方向键、摇杆三者都驱动阅读，滚动�
 
   // One press is one transition. A hold that answered with a single press is the
   // bug; `REPEAT_DELAY` then `REPEAT_INTERVAL` put a 1.6s hold well past three.
-  const dpadSteps = await countSteps(() => holdButton(page, 13, 1600));
+  //
+  // 2.6s on CI, where this file's own note above measures WebKit's rAF at about
+  // a fifth of Chromium's: the repeat cadence is counted in frames, so the same
+  // hold buys a fifth of the ticks it does on a laptop. The assertion is
+  // unchanged — "held down walks, it does not step once" — the hold just has to
+  // be long enough for a slow frame clock to deliver more than one repeat.
+  const HOLD = process.env.CI ? 2600 : 1600;
+  const dpadSteps = await countSteps(() => holdButton(page, 13, HOLD));
   expect(dpadSteps, "长按方向键下，标尺没有连续往下走（只走了一步）").toBeGreaterThan(2);
 
-  const stickSteps = await countSteps(() => pushStick(page, 1, 1, 1600));
+  const stickSteps = await countSteps(() => pushStick(page, 1, 1, HOLD));
   expect(stickSteps, "长按摇杆下，标尺没有连续往下走（只走了一步）").toBeGreaterThan(2);
   expect(Math.min(stickSteps, dpadSteps), "摇杆与方向键有一个不连发").toBeGreaterThan(2);
   // The two are the same gesture asked two ways, so both walk: a pad whose stick
