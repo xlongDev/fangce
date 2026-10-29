@@ -75,7 +75,10 @@ test("the pill is either there and still, or gone — and which", async ({ page 
           ? "idle"
           : "none";
       return {
-        ms: Math.round(performance.now() - t0),
+        // `Date.now()` on both sides: the sample is taken in the page and the
+        // origin comes from the driver, so `performance.now()` here would
+        // subtract two unrelated clocks and print `-1793281358661ms`.
+        ms: Math.round(Date.now() - t0),
         pill: pill ? 1 : 0,
         y: box ? Math.round(box.top) : -1,
         h: box ? Math.round(box.height) : -1,
@@ -90,7 +93,17 @@ test("the pill is either there and still, or gone — and which", async ({ page 
   // of it — then on the shelf, where there is no footer at all and the pill has
   // to carry the session on its own. Both states, because CI failed in both.
   const inReader: Sample[] = [];
-  await page.waitForTimeout(900);
+  // Wait for the pill to *arrive* before sampling instead of spending the first
+  // two samples on the arrival: it rises into place by 12px, and on a loaded
+  // runner that takes longer than those two samples covered — CI caught the
+  // third sample 12px higher and reported it as drift.
+  let settledY = -1;
+  for (let i = 0; i < 40; i += 1) {
+    const s = await sample();
+    if (s.y > 0 && s.y === settledY) break;
+    settledY = s.y;
+    await page.waitForTimeout(120);
+  }
   for (let i = 0; i < 12; i += 1) {
     inReader.push(await sample());
     await page.waitForTimeout(250);
