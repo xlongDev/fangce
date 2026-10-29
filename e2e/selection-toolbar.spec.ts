@@ -37,7 +37,7 @@ const MARK = '[data-reading-content] a[href^="#note-"]';
  *  "is there room for it clear of the passage" arithmetic below is the
  *  placement's, so it has to spend the same two. */
 const EDGE = 12;
-const GAP = 2;
+const GAP = 5;
 
 /** Room for the retried navigation below. The first attempt spends its whole
  *  budget before the second one starts, and the body of each test still needs

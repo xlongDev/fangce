@@ -105,8 +105,16 @@ const ENTRANCE_HEIGHT = 96;
 /** Clearance between the panel's edge and the selection box (px). The box ends
  *  on the text's own content box, so the line's remaining leading sits below
  *  it — a hair of clearance drops the icons into the middle of the gap between
- *  the selected line and the next one rather than below the words. */
-const GAP = 2;
+ *  the selected line and the next one rather than below the words.
+ *
+ *  5 rather than 2, because "the gap between the lines" is not the same height
+ *  on every platform: the line *box* a selection reports reaches further below
+ *  the content box where the font's leading is larger, and on the CI runner's
+ *  Noto CJK that is 3px more than on a Mac — enough that a 2px clearance put
+ *  the panel's top edge 1px inside the line box, which is what
+ *  `e2e/selection-toolbar.spec.ts` reads as "covering the words". Nothing about
+ *  the ink changed; the panel now clears the line box on both. */
+const GAP = 5;
 
 /**
  * The reading content area's rect, in the window coordinates a `fixed` overlay
