@@ -1134,7 +1134,18 @@ test("the band still hugs the text when the sidebar leaves the pane", async ({ p
   await useScrollLayout(page);
   await enableRuler(page);
 
+  // 折叠 and 隐藏 are two different actions and only one of them is reachable
+  // from a folded rail: the collapsed rail's mark *expands* it (see
+  // `SidebarHeader`), so the fold has to be undone before the hide. The footer
+  // toggle is the same control in both states, which is why `.first()` is
+  // enough to reach it either way.
+  const unfold = async () => {
+    await page.getByRole("button", { name: "展开侧边栏", exact: true }).first().click();
+    await page.waitForTimeout(1600);
+  };
+
   for (const label of ["折叠侧边栏", "隐藏侧边栏", "全屏阅读"]) {
+    if (label === "隐藏侧边栏") await unfold();
     await page.getByRole("button", { name: label, exact: true }).first().click();
     // Wait for the band to come to rest, *then* read the page: the pane re-wraps
     // and the band re-derives a frame or two after the transition starts, and a
