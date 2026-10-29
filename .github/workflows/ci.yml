@@ -32,6 +32,49 @@ jobs:
       # No thresholds anywhere: the report only shows.
       - name: Report test coverage
         run: node scripts/coverage-report.mjs >> "$GITHUB_STEP_SUMMARY"
+      - name: Report bundle size
+        run: |
+          echo "## Bundle size" >> "$GITHUB_STEP_SUMMARY"
+          du -k dist/assets/*.js | sort -rn | head -5 >> "$GITHUB_STEP_SUMMARY"
+      # The reader's own growth report, next to the bundle's. No threshold: a
+      # hard limit would only reward splitting code for the sake of the number,
+      # and `scripts/measure-reader-clusters.py` already ranks the candidates by
+      # the rule the architecture states (outputs ≤ ~2 per consumer). What this
+      # buys is that the numbers are on every pull request instead of in
+      # someone's memory when a file is about to be touched.
+      - name: Report ReaderPage clusters
+        run: |
+          echo "## ReaderPage clusters" >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/measure-reader-clusters.py | head -10 >> "$GITHUB_STEP_SUMMARY"
+
+  # The e2e suite is 22 minutes of the 24 this workflow used to take, and it is
+  # one serial chain of files: a single `reading-ruler.spec.ts` alone runs 6
+  # minutes because every test in it opens the reader. Sharding splits *by file*
+  # across jobs, so nothing inside a spec changes — the same assertions run in
+  # the same order, just three of them at once.
+  #
+  # It is its own job rather than three matrix legs of `frontend` because the
+  # gates (typecheck, lint, unit tests) do not need repeating per shard: this way
+  # they run once, and only the e2e half is multiplied.
+  e2e:
+    name: e2e (${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    strategy:
+      # One red shard must not cancel the other two: the whole point of the
+      # matrix is to see every failure in one run.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       # A CJK font, because the runner has none: `playwright install --with-deps`
       # brings Latin faces and nothing else, so every Chinese string here is laid
       # out in whatever fallback the image happens to carry. That is not only a
@@ -44,13 +87,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends fonts-noto-cjk
-      # `verify` builds dist, which is what the preview server serves. Without
-      # this step nothing ever ran the e2e suite and it rotted unnoticed.
       # Both engines: `playwright.config.ts` runs every test twice on purpose,
       # and WebKit is the one the shipped Tauri binary actually renders with —
       # installing chromium alone left the webkit project failing to launch
       # (and the whole job red) since this step was added.
       - run: pnpm exec playwright install --with-deps chromium webkit
+      # The preview server serves `dist/`, and `vite build` is what writes it.
+      # `pnpm build` would also run tsc, which the gates job has already done.
+      - run: pnpm exec vite build
       # The job log and the `test-results` artifact both need admin rights to
       # download (403), so a red e2e used to say nothing but "exit code 1" —
       # seven runs in a row failed and nobody could tell which test. Keep the
@@ -61,7 +105,7 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          pnpm test:e2e 2>&1 | tee e2e.log
+          pnpm test:e2e --shard=${{ matrix.shard }}/3 2>&1 | tee e2e.log
       # GitHub keeps only 10 annotations per step and silently drops the rest,
       # so collapse each failure block into ONE line (`N) [project] › spec ›
       # test` + its message) before emitting — one annotation per failing test,
@@ -84,25 +128,11 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
-          name: playwright-trace
+          name: playwright-trace-${{ matrix.shard }}
           path: |
             test-results/
             e2e.log
           if-no-files-found: ignore
-      - name: Report bundle size
-        run: |
-          echo "## Bundle size" >> "$GITHUB_STEP_SUMMARY"
-          du -k dist/assets/*.js | sort -rn | head -5 >> "$GITHUB_STEP_SUMMARY"
-      # The reader's own growth report, next to the bundle's. No threshold: a
-      # hard limit would only reward splitting code for the sake of the number,
-      # and `scripts/measure-reader-clusters.py` already ranks the candidates by
-      # the rule the architecture states (outputs ≤ ~2 per consumer). What this
-      # buys is that the numbers are on every pull request instead of in
-      # someone's memory when a file is about to be touched.
-      - name: Report ReaderPage clusters
-        run: |
-          echo "## ReaderPage clusters" >> "$GITHUB_STEP_SUMMARY"
-          python3 scripts/measure-reader-clusters.py | head -10 >> "$GITHUB_STEP_SUMMARY"
 
   rust:
     name: Rust gates
