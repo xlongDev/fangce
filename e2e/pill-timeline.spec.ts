@@ -47,6 +47,9 @@ interface Sample {
   state: string;
   footer: number;
   footerY: number;
+  /** The footer's own top edge, so the pill can be measured against the thing
+   *  it is anchored to rather than against the window. */
+  footerTop: number;
   title: string;
 }
 
@@ -85,6 +88,7 @@ test("the pill is either there and still, or gone — and which", async ({ page 
         state,
         footer: footer ? 1 : 0,
         footerY: footer ? Math.round(footer.getBoundingClientRect().height) : -1,
+        footerTop: footer ? Math.round(footer.getBoundingClientRect().top) : -1,
         title: document.title.slice(0, 40),
       };
     }, started);
@@ -120,6 +124,17 @@ test("the pill is either there and still, or gone — and which", async ({ page 
   }
 
   const timeline = { inReader, onShelf };
+  /** How far the pill sits above whatever anchors it — the footer's top edge in
+   *  the reader, the window's foot on the shelf.
+   *
+   *  Measured this way rather than as a raw `y` because the pill's *anchor*
+   *  moves: the reader's footer is 45px tall for the first paint or two and 57
+   *  once its contents are in, and the pill is lifted by exactly that height —
+   *  so the window coordinates change by 12px while the pill is doing precisely
+   *  what it was built to do. CI read that as the pill drifting (772 → 760 one
+   *  second in). What must not change is the clearance: a pill that slid down
+   *  its own footer would still be a defect, and still fails here. */
+  const lift = (s: Sample) => (s.footer > 0 ? s.y - s.footerTop : s.y);
   /** Anything that is not "identical to the sample before it" — ignoring the
    *  two samples each state spends arriving, since the pill rises into place by
    *  12px and that is the surface working rather than the pill drifting. */
@@ -132,11 +147,11 @@ test("the pill is either there and still, or gone — and which", async ({ page 
           // place by 12px, and that is the surface working, not the pill drifting.
           i >= 2 &&
           prev !== undefined &&
-          (s.pill !== prev.pill || s.y !== prev.y || s.state !== prev.state),
+          (s.pill !== prev.pill || lift(s) !== lift(prev) || s.state !== prev.state),
       )
       .map(
         ({ s, prev }) =>
-          `${s.ms}ms pill ${prev?.pill ?? "-"}→${s.pill} y ${prev?.y ?? "-"}→${s.y} ${prev?.state ?? "-"}→${s.state}`,
+          `${s.ms}ms pill ${prev?.pill ?? "-"}→${s.pill} lift ${prev ? lift(prev) : "-"}→${lift(s)} (y ${prev?.y ?? "-"}→${s.y}) ${prev?.state ?? "-"}→${s.state}`,
       );
 
   const moved = [...churn(inReader), ...churn(onShelf)];
