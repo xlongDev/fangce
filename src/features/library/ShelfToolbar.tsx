@@ -72,7 +72,12 @@ export function ShelfToolbar({
   const flip = reduce ? { duration: DURATION.fast } : SPRING.tap;
 
   return (
-    <div className="mb-4 flex items-center gap-2">
+    // `flex-wrap` is load-bearing: the search keeps a 160px floor, and on a
+    // narrow pane (880px window) the five controls plus the count do not fit
+    // beside it — without wrapping they overflowed the shelf by 127px, which
+    // is what `e2e/shelf-reflow.spec.ts` measures. The search still takes the
+    // slack on a wide one, so nothing about the roomy case changed.
+    <div className="mb-4 flex flex-wrap items-center gap-2">
       <div className="relative w-full max-w-64 min-w-40 flex-1">
         <MagnifyingGlass
           size={14}
