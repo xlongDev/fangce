@@ -161,15 +161,86 @@ export function resolveSurface(key: string, customImage: string | null): Reading
   return READING_SURFACES.find((surface) => surface.key === key) ?? READING_SURFACES[0]!;
 }
 
+function channels(hex: string): number[] {
+  const bare = hex.slice(1);
+  const six = bare.length === 3 ? [...bare].map((c) => c + c).join("") : bare;
+  return [0, 2, 4].map((i) => parseInt(six.slice(i, i + 2), 16));
+}
+
+function channelLuminance(value: number): number {
+  const v = value / 255;
+  return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+}
+
+function luminance(rgb: number[]): number {
+  return (
+    0.2126 * channelLuminance(rgb[0]!) +
+    0.7152 * channelLuminance(rgb[1]!) +
+    0.0722 * channelLuminance(rgb[2]!)
+  );
+}
+
+/** `ink` laid over `paper` at `alpha`, i.e. what the eye actually sees. */
+function over(ink: number[], paper: number[], alpha: number): number[] {
+  return ink.map((value, i) => value * alpha + paper[i]! * (1 - alpha));
+}
+
+function contrast(a: number[], b: number[]): number {
+  const [high, low] = [luminance(a), luminance(b)].toSorted((x, y) => y - x) as [number, number];
+  return (high + 0.05) / (low + 0.05);
+}
+
+/**
+ * The muted ink for one **light** paper: the faintest tint of `fg` that still
+ * clears AA against that paper, as an opaque colour.
+ *
+ * A percentage cannot do this job, and that is what broke it. `60%` says how
+ * much ink to add, not how much contrast survives — the two only coincide on
+ * one paper. Measured across the seven light papers: the same 60% lands at
+ * **3.22 on 护眼 and 4.06 on 标准**, because the headroom comes from the paper,
+ * not the ink (护眼's `#443c2c` is only 9.2:1 to begin with, 标准's `#23272e` is
+ * 14.5:1). 12px meta copy — chapter counts, hints, empty states — needs 4.5 on
+ * every one of them, so the ratio is what gets fixed and the colour is solved.
+ *
+ * Light papers only, deliberately. In the dark palettes the chrome glass comes
+ * out **lighter** than the paper it floats on, and a translucent ink follows it
+ * up there for free — an opaque ink solved against the paper does not, and
+ * measured it read *worse* (the drawer's 书签 label: 3.70 translucent against
+ * 3.17 solved). So dark keeps the mix it had; see `readerGlassVars`.
+ */
+function mutedInk(fg: string, paper: string, target = 4.5): string {
+  const ink = channels(fg);
+  const ground = channels(paper);
+  // 1.01 because the result is rounded to 8 bits, which moves the ratio by up
+  // to ~0.01 — enough to land at 4.494 and fail the very line it was solved for.
+  const want = target * 1.01;
+  let low = 0;
+  let high = 1;
+  for (let i = 0; i < 20; i += 1) {
+    const mid = (low + high) / 2;
+    if (contrast(over(ink, ground, mid), ground) < want) low = mid;
+    else high = mid;
+  }
+  const hex = over(ink, ground, high)
+    .map((value) => Math.round(value).toString(16).padStart(2, "0"))
+    .join("");
+  return `#${hex}`;
+}
+
 /** Re-roots the glass token set on a reading surface: chrome styled from these
  *  derives its ink, hairlines and glass fills from the same paper colours as
  *  the reading viewport, so everything reads as one material. Ratios mirror
- *  the theme defaults in globals.css. */
+ *  the theme defaults in globals.css, except `--text-3`: on a light paper it is
+ *  solved to AA rather than fixed at a percentage (see `mutedInk`), and on a
+ *  dark one it keeps the mix, which is what tracks the lighter glass there. */
 export function readerGlassVars(surface: ReadingSurface): CSSProperties {
   return {
     "--text-1": surface.fg,
     "--text-2": `color-mix(in srgb, ${surface.fg} 72%, transparent)`,
-    "--text-3": `color-mix(in srgb, ${surface.fg} 60%, transparent)`,
+    "--text-3":
+      surface.mode === "light"
+        ? mutedInk(surface.fg, surface.tint)
+        : `color-mix(in srgb, ${surface.fg} 60%, transparent)`,
     "--hairline": `color-mix(in srgb, ${surface.fg} 12%, transparent)`,
     "--hairline-strong": `color-mix(in srgb, ${surface.fg} 24%, transparent)`,
     "--surface-1": `color-mix(in srgb, ${surface.fg} 5%, transparent)`,

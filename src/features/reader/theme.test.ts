@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   FONT_STACKS,
+  READING_SURFACES,
   adoptedFacesFor,
   adoptedFontFaces,
   catalogFontOptions,
   customFontFamily,
   customFontKey,
   fontFaceCss,
+  readerGlassVars,
   resolveFont,
 } from "./theme";
 import { catalogFontById } from "@/lib/fontCatalog";
@@ -223,5 +225,52 @@ describe("catalogFontOptions", () => {
     // The installed list is persisted settings; a retired font must not
     // leave a chip selecting a stack with no face behind it.
     expect(catalogFontOptions(["retired-font"])).toEqual([]);
+  });
+});
+
+/** Independent of the implementation's own maths on purpose: a test that reuses
+ *  it can only prove it agrees with itself. */
+function luminance(hex: string): number {
+  const [r, g, b] = [1, 3, 5].map((i) => {
+    const v = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+}
+
+function contrast(a: string, b: string): number {
+  const [high, low] = [luminance(a), luminance(b)].toSorted((x, y) => y - x) as [number, number];
+  return (high + 0.05) / (low + 0.05);
+}
+
+/**
+ * `--text-3` was a flat 60% of the paper's ink, which states how much ink to add
+ * rather than how much contrast survives — the two only coincide on one paper.
+ * Measured, that same 60% came out at 3.22 on 护眼 and 4.06 on 标准, so 12px meta
+ * copy in the reader chrome (chapter counts, hints, empty states) failed AA on
+ * every light paper, for no reason a reader could see.
+ */
+describe("readerGlassVars", () => {
+  it("gives every light paper a muted ink that clears AA on it", () => {
+    for (const surface of READING_SURFACES.filter((one) => one.mode === "light")) {
+      const ink = (readerGlassVars(surface) as Record<string, string>)["--text-3"]!;
+      expect(ink, `${surface.label} 的 --text-3 该是解出来的实色`).toMatch(/^#[0-9a-f]{6}$/);
+      expect(contrast(ink, surface.tint), `${surface.label} 的 --text-3`).toBeGreaterThanOrEqual(
+        4.5,
+      );
+    }
+  });
+
+  it("keeps the dark papers on the translucent mix", () => {
+    // Not an oversight. Dark chrome glass comes out *lighter* than the paper it
+    // floats on, and a translucent ink follows it up for free; a solid solved
+    // against the paper does not, and measured it read worse (the drawer's 书签
+    // label: 3.70 translucent, 3.17 solved). Dark needs its own ground, not this
+    // one — so it keeps what it had rather than trading a light-paper gain for
+    // a dark-paper loss.
+    for (const surface of READING_SURFACES.filter((one) => one.mode === "dark")) {
+      const ink = (readerGlassVars(surface) as Record<string, string>)["--text-3"]!;
+      expect(ink, surface.label).toBe(`color-mix(in srgb, ${surface.fg} 60%, transparent)`);
+    }
   });
 });
