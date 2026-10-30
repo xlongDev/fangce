@@ -113,16 +113,21 @@ test("the pill is either there and still, or gone — and which", async ({ page 
   // two samples on the arrival. Arriving is not a 12px hop at t=0: the pill's
   // lift is a measured value, and on a starved renderer the measurement that
   // settles it lands a second or more after the first paint (CI: steady at 772
-  // for 750ms, then 760 for the rest of the session). Three agreeing samples
-  // 250ms apart — three quarters of a second of stillness — is what "arrived"
-  // means here; a pill that never settles still fails, on the samples below.
+  // for 750ms, then 760 for the rest of the session). **Five** agreeing samples
+  // 250ms apart — a full second of stillness — is what "arrived" means here; a
+  // pill that never settles still fails, on the samples below.
+  //
+  // Three was not enough, and the log says why: the loop broke at 1099ms with
+  // 772 read three times, and the hop landed at 1370ms — 271ms after the loop
+  // had already called it arrived. The hop is a fixed distance but not a fixed
+  // time, and a second of stillness clears the slowest one measured (1.4s).
   let settled = Number.NaN;
   let agreeing = 0;
   for (let i = 0; i < 24; i += 1) {
     const s = await sample();
     agreeing = s.y > 0 && lift(s) === settled ? agreeing + 1 : 0;
     settled = lift(s);
-    if (agreeing >= 2) break;
+    if (agreeing >= 4) break;
     await page.waitForTimeout(250);
   }
   for (let i = 0; i < 12; i += 1) {

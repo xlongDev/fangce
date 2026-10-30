@@ -144,8 +144,11 @@ const LINES = `(() => {
       // ruler measures the page, and a probe element must not be measured as
       // part of it — otherwise the ghost below is read back as one of the
       // page's own lines and every assertion about the band's width ends up
-      // made against the probe instead of against the words.
-      if (node.parentElement?.closest("[data-ghost]")) continue;
+      // made against the probe instead of against the words. The ruler test
+      // injects its own probe under data-phantom as well as data-ghost, so both
+      // are skipped: a measurement that counted either would be made against
+      // the probe, not the words.
+      if (node.parentElement?.closest("[data-ghost],[data-phantom]")) continue;
       range.selectNodeContents(node);
       for (const rect of range.getClientRects()) {
         if (rect.width <= 0 || rect.height <= 0) continue;
@@ -220,6 +223,22 @@ const LINES = `(() => {
   }
   return merged;
 })()`;
+
+/**
+ * The band and the lines under it, read in one go.
+ *
+ * Two evaluates are two layouts: a re-measure that lands between them moves the
+ * words under a band that has not moved yet, and the assertion then compares a
+ * band drawn on one page with lines from the next. CI lost the chapter opener
+ * to exactly that — the band's left edge 71px off the title it was on, on the
+ * first attempt, green on the retry. Nothing in between is a defect: the band
+ * was where the *old* page put it.
+ *
+ * Composed from the two readers above rather than rewritten, so the pair can
+ * never drift apart: whatever `DRAWN` and `LINES` say, this says both, at the
+ * same instant, with no `await` between them.
+ */
+const PICTURE = `(() => ({ drawn: ${DRAWN}, lines: ${LINES} }))()`;
 
 /**
  * The lines of one column of a spread, in window coordinates.
@@ -540,6 +559,48 @@ async function rulerLines(page: Page): Promise<Interval[]> {
   return (await page.evaluate(LINES)) as Interval[];
 }
 
+/**
+ * The band and the lines it should be on, from one layout and at rest.
+ *
+ * {@link rulerDrawn} and {@link rulerLines} each wait for their own reading to
+ * stop moving, which is two independent notions of "still" — and on a loaded
+ * runner the page can re-wrap between them. This waits for *both* to stop
+ * changing together, three reads in a row, and hands back the pair that
+ * agreed. The two readers above stay for the tests that only want one of them.
+ */
+async function rulerPicture(page: Page): Promise<{ drawn: Drawn; lines: Interval[] }> {
+  let last: { drawn: Drawn; lines: Interval[] } | null = null;
+  let still = 0;
+  for (let i = 0; i < 64; i += 1) {
+    const read = (await page.evaluate(PICTURE)) as {
+      drawn: Drawn | null;
+      lines: Interval[];
+    };
+    if (!read.drawn) {
+      last = null;
+      still = 0;
+      await page.waitForTimeout(SETTLE_STEP);
+      continue;
+    }
+    const picture = { drawn: read.drawn, lines: read.lines };
+    const same =
+      last !== null &&
+      Math.abs(last.drawn.band.top - picture.drawn.band.top) < 0.5 &&
+      Math.abs(last.drawn.band.bottom - picture.drawn.band.bottom) < 0.5 &&
+      Math.abs(last.drawn.band.left - picture.drawn.band.left) < 0.5 &&
+      Math.abs(last.drawn.band.right - picture.drawn.band.right) < 0.5 &&
+      JSON.stringify(last.lines) === JSON.stringify(picture.lines);
+    last = picture;
+    still = same ? still + 1 : 0;
+    // Three agreeing reads, as in `rulerDrawn`: one agreement can be two reads
+    // of a page that is about to be re-measured.
+    if (still >= 2) return picture;
+    await page.waitForTimeout(SETTLE_STEP);
+  }
+  expect(last, "阅读标尺没有画出来").not.toBeNull();
+  return last!;
+}
+
 /** How much of the reading area the parts add up to, along the reading axis. */
 const spanAlong = (drawn: Drawn) =>
   along(drawn.before.box, drawn.vertical) +
@@ -717,8 +778,10 @@ test("the band lands on the words, not the gap above them, on a chapter opener",
 
   /** The lines the band is on, and the width it drew itself to match them. */
   const on = async (label = "") => {
-    const band = await rulerDrawn(page);
-    const lines = await rulerLines(page);
+    // One read for both, not two: a re-measure landing between them compares a
+    // band drawn on the old page with lines from the new one, which is a 71px
+    // miss on a title that never moved relative to its own page (CI, webkit).
+    const { drawn: band, lines } = await rulerPicture(page);
     expect(lines.length, `${label}标题页一个字的行盒都没量到`).toBeGreaterThan(0);
     let covered = lines.filter((line) => {
       const centre = (line.start + line.end) / 2;
@@ -1209,20 +1272,23 @@ test("the page next door does not widen the band, in either page layout", async 
   // pane, outside the page the paginator paints, at the height the band is on.
   // It is a real box with real text and every platform reports it visible —
   // nothing about the fragment can refuse it, only the page box can.
-  const phantom = (on: boolean) =>
-    page.evaluate((show: boolean) => {
+  //
+  // Placing it again *moves* the probe already in the section rather than
+  // leaving it where it was put. It has to: the probe is what widens the
+  // section's strip, and a strip laid out again re-anchors the page under it, so
+  // the band the probe was aimed at is not the band that ends up being drawn.
+  //
+  // Returns the probe's own left edge in window coordinates — the line a band
+  // that counted it would run out to — or null when the section cannot be read.
+  const placePhantom = () =>
+    page.evaluate(() => {
       const frame = document
         .querySelector("foliate-view")
         ?.shadowRoot?.querySelector("foliate-paginator")
         ?.shadowRoot?.querySelector("iframe");
       const doc = frame?.contentDocument;
-      if (!frame || !doc?.body) return false;
-      const existing = doc.querySelector("[data-phantom]");
-      if (!show) {
-        existing?.remove();
-        return true;
-      }
-      if (existing) return true;
+      if (!frame || !doc?.body) return null;
+      const existing = doc.querySelector("[data-phantom]") as HTMLElement | null;
       const frameBox = frame.getBoundingClientRect();
       // The page box: the first ancestor of the frame narrower than the strip.
       let painted = null;
@@ -1233,10 +1299,10 @@ test("the page next door does not widen the band, in either page layout", async 
           break;
         }
       }
-      if (!painted) return false;
+      if (!painted) return null;
       const band = document.querySelector("[data-ruler-band]")?.getBoundingClientRect();
-      if (!band) return false;
-      const line = doc.createElement("p");
+      if (!band) return null;
+      const line = existing ?? doc.createElement("p");
       line.setAttribute("data-phantom", "");
       line.textContent = "下一页的第一行，在页面之外，谁也看不见。".repeat(4);
       // Positioned in the *frame's* coordinates, past the page's right edge and
@@ -1248,9 +1314,21 @@ test("the page next door does not widen the band, in either page layout", async 
         `left:${painted.right - frameBox.left + 40}px`,
         `top:${band.top - frameBox.top + 4}px`,
       ].join(";");
-      doc.body.append(line);
+      if (!existing) doc.body.append(line);
+      return { left: line.getBoundingClientRect().left + frameBox.left };
+    });
+
+  const removePhantom = () =>
+    page.evaluate(() => {
+      const frame = document
+        .querySelector("foliate-view")
+        ?.shadowRoot?.querySelector("foliate-paginator")
+        ?.shadowRoot?.querySelector("iframe");
+      const doc = frame?.contentDocument;
+      if (!frame || !doc?.body) return false;
+      doc.querySelector("[data-phantom]")?.remove();
       return true;
-    }, on);
+    });
 
   // Both states are exercised from a fresh sidebar each time: collapsing it is
   // what puts the phantom inside the pane's margin in the first place, and the
@@ -1263,45 +1341,45 @@ test("the page next door does not widen the band, in either page layout", async 
     await page.getByRole("button", { name: collapse, exact: true }).first().click();
     await page.waitForTimeout(2000);
 
-    expect(await phantom(false), "没有找到 section 的文档，注入没做").toBe(true);
-    const before = await rulerDrawn(page);
-    expect(await phantom(true), "没有找到 section 的文档，注入没做").toBe(true);
+    expect(await removePhantom(), "没有找到 section 的文档，注入没做").toBe(true);
+    expect(await placePhantom(), "没有找到 section 的文档，注入没做").not.toBeNull();
     // The pane's own resize is the ruler's re-measure, and it is the one thing
-    // here that is not the subject under test: the same width, the same page,
-    // the same lines, measured again with and without the phantom in it.
+    // here that is not the subject under test: the same width out and back, so
+    // the band is read on the layout it was drawn on.
     await page.setViewportSize({ width: 1282, height: 820 });
     await page.waitForTimeout(300);
     await page.setViewportSize({ width: 1280, height: 820 });
     await page.waitForTimeout(1200);
-    const withPhantom = await rulerDrawn(page);
-    expect(await phantom(false), "没有找到 section 的文档，注入没做").toBe(true);
-    await page.waitForTimeout(1200);
-    const after = await rulerDrawn(page);
+    // …and the probe goes back onto the band that came out of that: a page
+    // re-anchored under a wider strip leaves the probe at the height of the
+    // band it was aimed at. This move is vertical only, and the strip's width
+    // is what re-anchors, so it settles rather than starting another round.
+    const probe = await placePhantom();
+    expect(probe, "没有找到 section 的文档，注入没做").not.toBeNull();
+    await page.waitForTimeout(600);
+    const { drawn, lines } = await rulerPicture(page);
+    expect(lines.length, `${mode}：一个字的行盒都没量到`).toBeGreaterThan(3);
 
-    const area = before.host.right - before.host.left;
-    // Same width, same page, same lines: the only difference is a fragment on a
-    // page the reader cannot see, so neither edge of the band may have moved.
-    expect(
-      Math.abs(withPhantom.band.left - before.band.left),
-      `${mode}：看不见的下一页把带的左缘拖走了`,
-    ).toBeLessThan(1.5);
-    expect(
-      Math.abs(withPhantom.band.right - before.band.right),
-      `${mode}：看不见的下一页把带的右缘拖走了`,
-    ).toBeLessThan(1.5);
-    // …and nowhere near the pane's own edge, which is the shape of the report:
-    // the phantom reaches into the pane's margin, so a band that counted it
-    // runs to within a hair of the edge.
-    expect(
-      withPhantom.band.right - before.host.left,
-      `${mode}：带子顶到了阅读区的右缘（它量到了看不见的下一页）`,
-    ).toBeLessThan(area - 40);
-    // …and taking it away puts the band back, which is what says the two
-    // readings above are of the same page.
-    expect(
-      Math.abs(after.band.right - before.band.right),
-      `${mode}：带子没有回到原位`,
-    ).toBeLessThan(1.5);
+    // Read against the words, not against an earlier picture of the band — the
+    // shape `text nobody can see does not widen the band` already uses, and for
+    // the same reason: the probe widens the section's strip, and a platform
+    // whose font metrics fill the page differently re-anchors under it. A band
+    // compared with its own earlier position then reports a translation it is
+    // *right* to follow (91px on the Linux runner in 单页, 9px in 双页 — the
+    // same numbers on every attempt, which is why the retry never helped).
+    const covered = coveredLines(drawn, lines, `${mode}：`);
+    // As wide as the words, in 单页 only: there `lines` is the one column the
+    // band is on. On a spread the band covers one column and washes the other,
+    // and the merged fragments span both sides of the gutter — the cross-axis
+    // claim for a spread belongs to `on a spread the band covers one column`.
+    if (mode === "单页") hugsText(drawn, covered.covered, `${mode}：`);
+    // …and the probe is still out there, untouched. A band that had counted it
+    // would have its right edge on the probe's own left, which is 40px past the
+    // page the reader is looking at; this is the whole failure in one number,
+    // and it does not care where in the strip the page landed.
+    expect(drawn.band.right, `${mode}：带子的右缘伸到了看不见的下一页上`).toBeLessThan(probe!.left);
+
+    expect(await removePhantom(), "没有找到 section 的文档，注入没做").toBe(true);
     // Back to a showing sidebar for the next layout. Two different controls
     // answer — the rail's own chevron for a collapsed rail, the title bar's
     // toggle for a hidden one — and both are on screen, so the regex matches
