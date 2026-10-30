@@ -61,6 +61,17 @@ pnpm verify:all    # 两者
 
 `pnpm build` 会附带输出构建产物体积，前端资源体积的回归要看这个数字。
 
+### 改了 Rust 命令签名之后
+
+`src/lib/bindings.ts` 是 `cargo test export_bindings` 生成的（`src-tauri/src/lib.rs` 的 `specta_bindings` 模块），committed 但不手写。生成器自己排版：**制表符缩进、不折行、jsdoc 行尾留空格**，和 prettier 的产物不是同一份字节 —— 所以 `cargo test` 跑过之后这个文件必然变脏，`pre-commit` 的 `prettier --check` 会红。顺序固定成：
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml export_bindings
+pnpm exec prettier --write src/lib/bindings.ts
+```
+
+反过来（先格式化再跑 cargo test）等于白做。`specta-typescript 0.0.12` 没有 formatter 选项，`Layout` 只管文件结构不管缩进，所以这件事只能靠这两步的顺序，别去改生成器。
+
 ### 关于 `react-perf` 规则
 
 配置里**没有启用** `react-perf` 插件。它的三条主要规则（`jsx-no-new-object-as-prop`、`jsx-no-new-function-as-prop`、`jsx-no-jsx-as-prop`）只在子组件被 `memo` 包裹时才有意义，而这个项目的组件树刻意不手动 `memo` —— React 19 的渲染成本足够低，全面手动记忆化带来的复杂度和它省下的渲染相比不划算。什么时候重新启用：**当某个视图被 Profiler 证明存在渲染瓶颈时**，在该视图局部启用记忆化，而不是全局打开这组规则。
