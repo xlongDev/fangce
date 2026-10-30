@@ -400,29 +400,52 @@ function coveredLines<T extends Span>(drawn: Drawn, lines: readonly T[], label =
  * put the band 13–29% of the window wider than the words.)
  */
 function hugsText(drawn: Drawn, lines: readonly Interval[], label = "") {
-  const vertical = drawn.vertical;
   if (lines.length === 0) return;
+  const { low, high, bandLow, bandHigh, pad } = hug(drawn, lines);
+  expect(bandLow, `${label}带没有对齐正文的这一边`).toBeGreaterThanOrEqual(low - pad);
+  expect(bandLow, `${label}带没有对齐正文的这一边`).toBeLessThanOrEqual(low + pad);
+  expect(bandHigh, `${label}带没有对齐正文的那一边`).toBeGreaterThanOrEqual(high - pad);
+  expect(bandHigh, `${label}带没有对齐正文的那一边`).toBeLessThanOrEqual(high + pad);
+}
+
+/**
+ * Where the band sits against the lines it covers: both extents, and the pad
+ * allowed outside them.
+ *
+ * Split out of {@link hugsText} so a caller that has to *wait* for the two to
+ * agree can poll on exactly the numbers the assertion uses. A second copy of
+ * this arithmetic at the call site would eventually disagree with the one that
+ * decides pass or fail.
+ *
+ * The pad is a fraction of the reader's leading, which the page's own advance
+ * approximates. Half the advance, not three tenths: the band pads by 0.3 × the
+ * advance *it* measures, and with 使用书籍排版 the page's steps are bimodal
+ * (行距 and 段距), so the two medians can land on different modes and the two
+ * 0.3s disagree by a few pixels. Half an advance still sits far under the
+ * failure this exists to catch — a band as wide as the page instead of the
+ * words is tens of percent of the window.
+ */
+function hug(drawn: Drawn, lines: readonly Interval[]) {
+  const vertical = drawn.vertical;
   // `left`/`right` are the line's cross-axis extent in window coords in both
   // writing modes; `start`/`end` are the *reading* axis, which for vertical type
   // runs leftward and would compare apples to oranges here. The band's cross
   // extent runs the other way round: across the page for horizontal type, up and
   // down for vertical.
-  const low = Math.min(...lines.map((line) => line.left));
-  const high = Math.max(...lines.map((line) => line.right));
-  const bandLow = vertical ? drawn.band.top : drawn.band.left;
-  const bandHigh = vertical ? drawn.band.bottom : drawn.band.right;
-  // The pad outside the text is a fraction of the reader's leading, which the
-  // page's own advance approximates. Half the advance, not three tenths: the
-  // band pads by 0.3 × the advance *it* measures, and with 使用书籍排版 the
-  // page's steps are bimodal (行距 and 段距), so the two medians can land on
-  // different modes and the two 0.3s disagree by a few pixels. Half an advance
-  // still sits far under the failure this exists to catch — a band as wide as
-  // the page instead of the words is tens of percent of the window.
-  const pad = advanceOf(lines) * 0.5 + 2;
-  expect(bandLow, `${label}带没有对齐正文的这一边`).toBeGreaterThanOrEqual(low - pad);
-  expect(bandLow, `${label}带没有对齐正文的这一边`).toBeLessThanOrEqual(low + pad);
-  expect(bandHigh, `${label}带没有对齐正文的那一边`).toBeGreaterThanOrEqual(high - pad);
-  expect(bandHigh, `${label}带没有对齐正文的那一边`).toBeLessThanOrEqual(high + pad);
+  return {
+    low: Math.min(...lines.map((line) => line.left)),
+    high: Math.max(...lines.map((line) => line.right)),
+    bandLow: vertical ? drawn.band.top : drawn.band.left,
+    bandHigh: vertical ? drawn.band.bottom : drawn.band.right,
+    pad: advanceOf(lines) * 0.5 + 2,
+  };
+}
+
+/** Whether the band hugs those lines, by the same four bounds. */
+function hugs({ low, high, bandLow, bandHigh, pad }: ReturnType<typeof hug>): boolean {
+  return (
+    bandLow >= low - pad && bandLow <= low + pad && bandHigh >= high - pad && bandHigh <= high + pad
+  );
 }
 
 async function openBook(page: Page, query: string, title: RegExp) {
@@ -776,23 +799,48 @@ test("the band lands on the words, not the gap above them, on a chapter opener",
   await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
   await page.waitForTimeout(2600);
 
-  /** The lines the band is on, and the width it drew itself to match them. */
+  /**
+   * The lines the band is on, and the width it drew itself to match them.
+   *
+   * Re-read until the two agree, rather than waited for. A pane change resizes
+   * the reading area at once (CSS) and re-flows the section a few frames later
+   * (the paginator's own ResizeObserver → a fresh pagination, slow on CJK), and
+   * in between the ruler has already drawn itself against the new pane while the
+   * words are still where the old one left them. That is a *stable* pair —
+   * `rulerPicture` sees it stop moving and hands it back — so no amount of
+   * waiting fixes it; the two have to be measured again once they belong to the
+   * same layout. Measured on CI, webkit: exactly 72px, one sidebar's worth, and
+   * the retry after it caught the same pair.
+   *
+   * The assertions are unchanged and still run on the last reading, so a band
+   * that really is in the wrong place fails with its own numbers.
+   */
   const on = async (label = "") => {
-    // One read for both, not two: a re-measure landing between them compares a
-    // band drawn on the old page with lines from the new one, which is a 71px
-    // miss on a title that never moved relative to its own page (CI, webkit).
-    const { drawn: band, lines } = await rulerPicture(page);
-    expect(lines.length, `${label}标题页一个字的行盒都没量到`).toBeGreaterThan(0);
-    let covered = lines.filter((line) => {
-      const centre = (line.start + line.end) / 2;
-      return centre > band.band.top && centre < band.band.bottom;
-    });
-    // On a line at all, which is the half that was broken: the band covered a
-    // stretch of page with no text anywhere in it.
-    expect(covered.length, `${label}带子底下没有一行字（它落在标题与正文之间的空白上了）`).toBe(1);
-    // And as wide as the words it is on — the title, not the paragraphs far
-    // below it that share the block.
-    hugsText(band, covered, `${label}：`);
+    let seen: { drawn: Drawn; covered: Interval[] } | null = null;
+    const deadline = Date.now() + 8000;
+    for (;;) {
+      // One read for both, not two: a re-measure landing between them compares a
+      // band drawn on the old page with lines from the new one, which is a 71px
+      // miss on a title that never moved relative to its own page (CI, webkit).
+      const { drawn: band, lines } = await rulerPicture(page);
+      expect(lines.length, `${label}标题页一个字的行盒都没量到`).toBeGreaterThan(0);
+      const covered = lines.filter((line) => {
+        const centre = (line.start + line.end) / 2;
+        return centre > band.band.top && centre < band.band.bottom;
+      });
+      // On a line at all, which is the half that was broken: the band covered a
+      // stretch of page with no text anywhere in it.
+      if (covered.length === 1) {
+        seen = { drawn: band, covered };
+        // And as wide as the words it is on — the title, not the paragraphs far
+        // below it that share the block.
+        if (hugs(hug(band, covered))) break;
+      }
+      if (Date.now() > deadline) break;
+      await page.waitForTimeout(250);
+    }
+    expect(seen, `${label}带子底下没有一行字（它落在标题与正文之间的空白上了）`).not.toBeNull();
+    hugsText(seen!.drawn, seen!.covered, `${label}：`);
   };
 
   await on();
@@ -800,7 +848,6 @@ test("the band lands on the words, not the gap above them, on a chapter opener",
   // and a band centred on a block that tall lands in the gap again.
   for (const label of ["折叠侧边栏", "全屏阅读"]) {
     await page.getByRole("button", { name: label, exact: true }).first().click();
-    await page.waitForTimeout(2600);
     await on(`${label}：`);
   }
 });
