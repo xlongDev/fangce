@@ -56,6 +56,17 @@ const RULER_STEP_MS = 340;
 const RULER_APPEAR_MS = 220;
 
 /**
+ * How long a hidden band waits for the page it was hidden for.
+ *
+ * A turn hides the band and the page that arrives brings it back. A turn at the
+ * end of the book arrives nowhere, so the band waited for ever. Comfortably
+ * longer than any turn — the longest is a 340ms curl plus the landing measure —
+ * and short enough that a reader who paged past the end sees the band again
+ * rather than losing it.
+ */
+const TURN_LANDING_MS = 1200;
+
+/**
  * How many frames an empty measurement is re-asked for. Long enough for a
  * chapter to be fetched and a section to be laid out — the two arrivals that
  * bring the lines — and short enough that a page with genuinely nothing to
@@ -224,6 +235,8 @@ export function ReadingRuler({
   const stepTimerRef = useRef<number | null>(null);
   /** The frame on which a landing band fades in. */
   const revealRef = useRef(0);
+  /** Puts the band back if a turn never lands — see `onLayout`. */
+  const landingRef = useRef(0);
   // Where the reader left the band, as it was when this mount began. Placement
   // follows it until the reader moves the band themselves (`movedRef`), and the
   // band itself after that — so saving a drag cannot pull it back onto a line,
@@ -991,9 +1004,19 @@ export function ReadingRuler({
         // instead of riding this one out to its last line.
         if (!turn.landed) {
           setRevealed(false);
+          // …and it is put back if no page ever arrives. A turn at the very end
+          // of the book goes nowhere, so the landing relay that brings the band
+          // back never comes: measured at the last page, the band sat at
+          // `opacity: 0` / `translateY(-5px)` for good, and only a later resize
+          // or a jump would have shown it again. Nothing moved, so the band it
+          // was on is still the band it belongs on — revealing it is the whole
+          // repair. Long enough that a real turn always lands first.
+          window.clearTimeout(landingRef.current);
+          landingRef.current = window.setTimeout(() => setRevealed(true), TURN_LANDING_MS);
           return;
         }
       }
+      window.clearTimeout(landingRef.current);
       relayout();
     };
     host.addEventListener(RULER_LAYOUT_EVENT, onLayout);
@@ -1002,6 +1025,7 @@ export function ReadingRuler({
       cancelAnimationFrame(frame);
       cancelAnimationFrame(layoutFrame);
       cancelAnimationFrame(revealRef.current);
+      window.clearTimeout(landingRef.current);
       observer.disconnect();
       host.removeEventListener(RULER_LAYOUT_EVENT, onLayout);
     };

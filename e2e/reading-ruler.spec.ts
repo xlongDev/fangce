@@ -1639,6 +1639,36 @@ test("the band lands on whole lines, on a real EPUB, and again after a page turn
 });
 
 /**
+ * A turn that goes nowhere must not take the band with it.
+ *
+ * A page turn hides the band and the page that arrives brings it back. At the
+ * end of the book nothing arrives: `atEdge` is false there (it means "at a
+ * section boundary *with* a neighbour"), so the turn is handed to foliate's
+ * `next()`, which does nothing — and the landing relay that would have put the
+ * band back is never sent. Measured at the last page: `opacity: 0`,
+ * `transform: translateY(-5px)`, and it stayed that way until something else
+ * happened to re-place the ruler. A reader who paged past the end lost the
+ * ruler until they resized the window or jumped somewhere.
+ *
+ * No other test in this file could see it: they read the band's geometry, and a
+ * hidden band has geometry too — it is just 5px up and invisible.
+ */
+test("paging past the last page leaves the band on the page", async ({ page }) => {
+  await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  await enableRuler(page);
+  // To the end of the book. More presses than there are chapters, so the last
+  // few are turns that go nowhere — which is the state under test.
+  for (let i = 0; i < 8; i += 1) {
+    await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
+    await page.waitForTimeout(400);
+  }
+  await expect.poll(() => page.evaluate(REVEALED), { timeout: 6000 }).toBe(true);
+  // …and one page past it, the reported gesture.
+  await page.keyboard.press("PageDown");
+  await expect.poll(() => page.evaluate(REVEALED), { timeout: 6000 }).toBe(true);
+});
+
+/**
  * The one case in this suite that has failed while running alone.
  *
  * It was load-sensitive by measurement, not by guess: it failed three times in
