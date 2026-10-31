@@ -4,6 +4,7 @@ import {
   ArrowsClockwise,
   ArrowSquareOut,
   BookOpenText,
+  CaretDown,
   CloudArrowUp,
   Monitor,
   Moon,
@@ -28,7 +29,13 @@ import { resetAllSettings } from "@/stores/reset";
 import { showToast } from "@/stores/toasts";
 import { useSystemInfo } from "@/hooks/useSystemInfo";
 import { useSavePath } from "@/hooks/useSavePath";
-import { useAiConfig, useSaveAiConfig, useTestAiConfig } from "@/hooks/useAi";
+import {
+  useAiConfig,
+  useSaveAiConfig,
+  useTestAiConfig,
+  useDetectOcFerry,
+  useAiDefaultSystemPrompt,
+} from "@/hooks/useAi";
 import { useSaveSyncConfig, useSyncConfig, useSyncNow, useTestSyncConfig } from "@/hooks/useSync";
 import { useDeleteDictionary, useDictionaries, useImportDictionary } from "@/hooks/useDictionaries";
 import { useDeleteFont, useFonts, useImportFont } from "@/hooks/useFonts";
@@ -49,7 +56,14 @@ import {
 } from "@/features/settings/section";
 import { KeymapSection } from "@/features/settings/KeymapSection";
 import { SecretsNotice } from "@/features/settings/SecretsNotice";
-import type { AiConfig, SyncChange, SyncConfig, SyncReport, SyncTally } from "@/types/ipc";
+import type {
+  AiConfig,
+  OcFerryDiscovery,
+  SyncChange,
+  SyncConfig,
+  SyncReport,
+  SyncTally,
+} from "@/types/ipc";
 import { cn } from "@/lib/cn";
 import { SPRING } from "@/lib/motion";
 
@@ -765,9 +779,14 @@ function AiForm({ initial }: { initial: AiConfig }) {
   const [status, setStatus] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
   const save = useSaveAiConfig();
   const test = useTestAiConfig();
-  const dirty = (Object.keys(initial) as (keyof AiConfig)[]).some(
-    (key) => draft[key] !== initial[key],
-  );
+  const detect = useDetectOcFerry();
+  const defaultPrompt = useAiDefaultSystemPrompt();
+  const [discovered, setDiscovered] = useState<OcFerryDiscovery | null>(null);
+  const [picked, setPicked] = useState<string[]>([]);
+  const importedModels = draft.importedModels ?? [];
+  const dirty =
+    (Object.keys(initial) as (keyof AiConfig)[]).some((key) => draft[key] !== initial[key]) ||
+    importedModels.join("\n") !== (initial.importedModels ?? []).join("\n");
 
   const set = (field: keyof AiConfig) => (value: string) =>
     setDraft((prev) => ({ ...prev, [field]: value }));
@@ -786,6 +805,51 @@ function AiForm({ initial }: { initial: AiConfig }) {
       onSuccess: () => setStatus({ tone: "ok", text: "已保存。" }),
       onError: (error) => setStatus({ tone: "bad", text: String(error) }),
     });
+  };
+
+  const onRestorePrompt = () => {
+    if (!defaultPrompt.data) return;
+    set("systemPrompt")(defaultPrompt.data);
+    setStatus({ tone: "ok", text: "已恢复默认提示词，点「保存」生效。" });
+  };
+
+  const onDetect = () => {
+    setStatus(null);
+    setDiscovered(null);
+    detect.mutate(undefined, {
+      onSuccess: (disc) => {
+        setDiscovered(disc);
+        setPicked(disc.models);
+        setStatus({
+          tone: "ok",
+          text: `已连上 OC Ferry，检测到 ${disc.models.length} 个可用模型，请在「模型名称」下方选择要导入的。`,
+        });
+      },
+      onError: (error) => setStatus({ tone: "bad", text: String(error) }),
+    });
+  };
+
+  const togglePick = (id: string) =>
+    setPicked((prev) => (prev.includes(id) ? prev.filter((model) => model !== id) : [...prev, id]));
+
+  const importPicked = () => {
+    if (!discovered || picked.length === 0) {
+      setStatus({ tone: "bad", text: "请至少选择一个模型。" });
+      return;
+    }
+    const first = picked[0] ?? "";
+    setDraft((prev) => ({
+      ...prev,
+      apiKey: discovered.apiKey,
+      baseUrl: discovered.baseUrl,
+      importedModels: picked,
+      model: picked.includes(prev.model) ? prev.model : first,
+    }));
+    setStatus({
+      tone: "ok",
+      text: `已导入 ${picked.length} 个模型，当前使用「${picked.includes(draft.model) ? draft.model : first}」。记得点保存。`,
+    });
+    setDiscovered(null);
   };
 
   return (
@@ -831,15 +895,107 @@ function AiForm({ initial }: { initial: AiConfig }) {
           autoComplete="off"
         />
       </Row>
-      <Row label="模型名称" hint="例如 gpt-4o-mini、qwen2.5、deepseek-chat。">
-        <GlassInput
-          value={draft.model}
-          onChange={(event) => set("model")(event.target.value)}
-          placeholder="gpt-4o-mini"
-          aria-label="模型名称"
-          spellCheck={false}
-        />
+      <Row
+        label="模型名称"
+        hint={
+          importedModels.length > 0
+            ? "从已导入的 OC Ferry 模型中选择；重新检测可更换列表。"
+            : "例如 gpt-4o-mini、qwen2.5、deepseek-chat。"
+        }
+      >
+        {importedModels.length > 0 ? (
+          <div className="flex w-full items-center gap-2">
+            <div className="glass focus-within:focus-ring relative flex h-9 w-full min-w-0 items-center rounded-md">
+              <select
+                value={draft.model}
+                onChange={(event) => set("model")(event.target.value)}
+                aria-label="模型名称"
+                className="text-text-1 h-full w-full appearance-none truncate bg-transparent pr-8 pl-3 text-sm outline-none [&>option]:text-black"
+              >
+                {!importedModels.includes(draft.model) && draft.model ? (
+                  <option value={draft.model}>{draft.model}（未导入）</option>
+                ) : null}
+                {importedModels.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+              <CaretDown
+                size={12}
+                className="text-text-3 pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2"
+              />
+            </div>
+            <GlassButton
+              variant="subtle"
+              size="sm"
+              onClick={() => setDraft((prev) => ({ ...prev, importedModels: [] }))}
+            >
+              清除
+            </GlassButton>
+          </div>
+        ) : (
+          <GlassInput
+            value={draft.model}
+            onChange={(event) => set("model")(event.target.value)}
+            placeholder="gpt-4o-mini"
+            aria-label="模型名称"
+            spellCheck={false}
+          />
+        )}
       </Row>
+
+      {discovered ? (
+        <div className="glass rounded-lg p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-text-1 text-sm">
+              检测到 {discovered.models.length} 个可用模型
+            </span>
+            <button
+              type="button"
+              className="text-text-2 hover:text-text-1 text-xs"
+              onClick={() =>
+                setPicked(picked.length === discovered.models.length ? [] : discovered.models)
+              }
+            >
+              {picked.length === discovered.models.length ? "全不选" : "全选"}
+            </button>
+          </div>
+          <div className="max-h-52 space-y-1 overflow-auto">
+            {discovered.models.map((model) => {
+              const on = picked.includes(model);
+              return (
+                <button
+                  key={model}
+                  type="button"
+                  onClick={() => togglePick(model)}
+                  aria-pressed={on}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+                    on ? "bg-accent/15 text-text-1" : "text-text-2 hover:bg-surface-2",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0 rounded border",
+                      on ? "border-accent bg-accent" : "border-hairline",
+                    )}
+                  />
+                  <span className="truncate">{model}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-2 flex gap-2">
+            <GlassButton size="sm" onClick={importPicked} disabled={picked.length === 0}>
+              导入所选（{picked.length}）
+            </GlassButton>
+            <GlassButton variant="subtle" size="sm" onClick={() => setDiscovered(null)}>
+              取消
+            </GlassButton>
+          </div>
+        </div>
+      ) : null}
       <Row
         label="向量模型"
         hint="用于全书检索问答（RAG）。留空则只有划词与整章问答；须与聊天模型同一服务商。"
@@ -864,15 +1020,37 @@ function AiForm({ initial }: { initial: AiConfig }) {
           spellCheck={false}
         />
       </Row>
-      <Row label="系统提示词" hint="每次提问都会附带，决定助手的语气与边界。">
-        <GlassInput
+      <div className="px-5 py-3.5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-text-1 text-[13.5px] font-medium">系统提示词</p>
+            <p className="text-text-3 mt-1 text-[12px] leading-relaxed">
+              每次提问都会附带，决定助手的语气与边界。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onRestorePrompt}
+            disabled={!defaultPrompt.data}
+            className="text-text-3 hover:text-text-1 focus-visible:focus-ring shrink-0 rounded text-xs transition-colors disabled:pointer-events-none disabled:opacity-40"
+          >
+            恢复默认
+          </button>
+        </div>
+        <textarea
           value={draft.systemPrompt}
           onChange={(event) => set("systemPrompt")(event.target.value)}
+          rows={3}
           aria-label="系统提示词"
+          spellCheck={false}
+          className="glass text-text-1 placeholder:text-text-3 focus-visible:border-accent focus-visible:bg-surface-2 mt-2.5 min-h-[76px] w-full resize-y rounded-md border px-3 py-2 text-sm leading-relaxed transition-colors focus-visible:outline-none"
         />
-      </Row>
+      </div>
 
       <Actions>
+        <GlassButton variant="subtle" size="sm" onClick={onDetect} disabled={detect.isPending}>
+          {detect.isPending ? "正在检测…" : "检测本地 OC Ferry"}
+        </GlassButton>
         <GlassButton variant="subtle" size="sm" onClick={onTest} disabled={test.isPending}>
           {test.isPending ? "正在连接…" : "测试连接"}
         </GlassButton>

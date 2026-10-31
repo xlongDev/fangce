@@ -36,6 +36,22 @@ export const commands = {
    */
   aiDigest: (requestId: string, bookId: string, refresh: boolean) =>
     __TAURI_INVOKE<null>("ai_digest", { requestId, bookId, refresh }),
+  /**
+   *  `ai.detectOcFerry` — points the reader's single AI slot at a running OC Ferry.
+   *
+   *  OC Ferry is an Electron app that ferries OpenCode's free models to a local
+   *  OpenAI-compatible port (127.0.0.1:41980) and protects it with a bearer key
+   *  read from its own data dir. It rejects any request carrying an `Origin`
+   *  header, so this must run from the Rust side (where no `Origin` is attached),
+   *  never from the webview. The reader only has one AI endpoint, so we return
+   *  the endpoint, key and the vetted model ids for the settings form to adopt.
+   */
+  aiDetectOcFerry: () => __TAURI_INVOKE<OcFerryDiscovery>("ai_detect_oc_ferry"),
+  /**
+   *  `ai.defaultSystemPrompt` — the built-in prompt, so the settings page can
+   *  restore it without keeping a second copy that drifts from this one.
+   */
+  aiDefaultSystemPrompt: () => __TAURI_INVOKE<string>("ai_default_system_prompt"),
   /**  `annotation.create` — records one highlight and returns it. */
   annotationCreate: (
     bookId: string,
@@ -548,6 +564,11 @@ export type AiConfig = {
   /**  Empty for local endpoints that need no key. */
   apiKey: string;
   model: string;
+  /**
+   *  Models pulled in from a detected OC Ferry, for in-app switching. Empty for
+   *  a hand-typed endpoint. Persisted so the switcher survives a restart.
+   */
+  importedModels?: string[];
   /**  Prepended to every conversation; keeps answers in the reader's voice. */
   systemPrompt?: string;
   /**
@@ -1126,6 +1147,19 @@ export type Migrated = {
   unlocated: number;
   bookmarks: number;
   progress: boolean;
+};
+
+/**  What a running OC Ferry exposes for the reader to adopt. */
+export type OcFerryDiscovery = {
+  /**  `http://127.0.0.1:41980/v1` — the reader's `base_url`. */
+  baseUrl: string;
+  /**  Bearer key the reader must send; OC Ferry refuses without it. */
+  apiKey: string;
+  /**
+   *  Vetted model ids, e.g. `"OC · <name>"`. The reader adopts the first; the
+   *  user can type any other id into the model field.
+   */
+  models: string[];
 };
 
 /**  What one page contributed. */

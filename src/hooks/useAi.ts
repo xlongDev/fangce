@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { desktopQuery, ipc, onAiStream } from "@/lib/ipc";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import type { AiConfig, AiMessage, RagHit } from "@/types/ipc";
+import type { OcFerryDiscovery } from "@/lib/bindings";
 
 /** Browser dev mode has no backend; the settings form still needs a shape. */
 const OFFLINE_CONFIG: AiConfig = {
@@ -43,6 +44,25 @@ export function useSaveAiConfig() {
 export function useTestAiConfig() {
   return useMutation({
     mutationFn: (config: AiConfig) => ipc.aiTest(config),
+    meta: { silent: true },
+  });
+}
+
+/** The built-in system prompt, so the settings page can restore it without a
+ *  hand-kept copy drifting from the backend's. Static for a session. */
+export function useAiDefaultSystemPrompt() {
+  return useQuery<string>({
+    queryKey: ["ai", "default-system-prompt"],
+    queryFn: desktopQuery("", () => ipc.aiDefaultSystemPrompt()),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
+/** Detects a running OC Ferry on the loopback and returns its endpoint, key and
+ *  vetted model ids, so the AI settings can be pointed at it without copying. */
+export function useDetectOcFerry() {
+  return useMutation<OcFerryDiscovery, unknown, void>({
+    mutationFn: () => ipc.aiDetectOcFerry(),
     meta: { silent: true },
   });
 }

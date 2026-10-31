@@ -8,6 +8,8 @@
 //! SSE parsing is a pure function over bytes so it can be tested without a
 //! socket, which is the only part with real branching.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
@@ -207,7 +209,17 @@ where
     Ok(())
 }
 
+/// How long to wait before retrying a probe that met a 429.
+const PROBE_RETRY_DELAY: Duration = Duration::from_millis(1500);
+
 /// One-shot check that the endpoint answers at all.
+///
+/// A shared local endpoint can be momentarily full — OC Ferry caps its
+/// forwarding port at four concurrent chats, and another client (WorkBuddy,
+/// say) often holds some of them — so a single 429 is retried once after a
+/// short pause before it is reported. The pause lives here, not in
+/// `provider_error`, because it is "try again in a moment", not how a status
+/// should read.
 pub async fn probe(client: &reqwest::Client, config: &super::AiConfig) -> AppResult<()> {
     let url = super::completions_url(&config.base_url);
     let body = ProbeRequest {
@@ -216,19 +228,27 @@ pub async fn probe(client: &reqwest::Client, config: &super::AiConfig) -> AppRes
         max_tokens: 1,
     };
 
-    let mut request = client.post(&url).json(&body);
-    if !config.api_key.is_empty() {
-        request = request.bearer_auth(&config.api_key);
+    let mut retried = false;
+    loop {
+        let mut request = client.post(&url).json(&body);
+        if !config.api_key.is_empty() {
+            request = request.bearer_auth(&config.api_key);
+        }
+        let response = request.send().await.map_err(http_error)?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let text = response.text().await.unwrap_or_default();
+        // One retry only: ride out a momentarily full port, but do not hammer a
+        // provider that is genuinely refusing us.
+        if status.as_u16() == 429 && !retried {
+            retried = true;
+            tokio::time::sleep(PROBE_RETRY_DELAY).await;
+            continue;
+        }
+        return Err(provider_error(status.as_u16(), &text));
     }
-
-    let response = request.send().await.map_err(http_error)?;
-    if !response.status().is_success() {
-        return Err(provider_error(
-            response.status().as_u16(),
-            &response.text().await.unwrap_or_default(),
-        ));
-    }
-    Ok(())
 }
 
 fn http_error(err: reqwest::Error) -> AppError {

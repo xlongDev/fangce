@@ -4,9 +4,11 @@
 //! long answer never blocks the UI thread and never waits for a full response
 //! body to arrive.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Serialize;
+use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::ai::chat::{self, ChatMessage, Role, StreamEvent};
@@ -65,6 +67,14 @@ pub fn ai_set_config(state: State<'_, AppState>, config: AiConfig) -> AppResult<
     crate::ai::config(&state.library)
 }
 
+/// `ai.defaultSystemPrompt` — the built-in prompt, so the settings page can
+/// restore it without keeping a second copy that drifts from this one.
+#[tauri::command]
+#[specta::specta]
+pub fn ai_default_system_prompt() -> String {
+    crate::ai::DEFAULT_SYSTEM_PROMPT.to_string()
+}
+
 /// `ai.test` — proves endpoint, key and model name work *together*.
 ///
 /// Deliberately does not save: pressing "测试连接" must not persist a half-typed
@@ -81,6 +91,7 @@ pub async fn ai_test(config: AiConfig) -> AppResult<()> {
         base_url: crate::net::secure_base_url(&config.base_url, "接口地址")?,
         model: config.model.trim().to_string(),
         api_key: config.api_key.trim().to_string(),
+        imported_models: config.imported_models.clone(),
         system_prompt: config.system_prompt,
         embedding_model: config.embedding_model,
         rerank_model: config.rerank_model,
@@ -90,6 +101,113 @@ pub async fn ai_test(config: AiConfig) -> AppResult<()> {
         return Err(AppError::InvalidArgument("模型名称不能为空".into()));
     }
     chat::probe(&client()?, &checked).await
+}
+
+/// What a running OC Ferry exposes for the reader to adopt.
+#[derive(specta::Type, Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcFerryDiscovery {
+    /// `http://127.0.0.1:41980/v1` — the reader's `base_url`.
+    pub base_url: String,
+    /// Bearer key the reader must send; OC Ferry refuses without it.
+    pub api_key: String,
+    /// Vetted model ids, e.g. `"OC · <name>"`. The reader adopts the first; the
+    /// user can type any other id into the model field.
+    pub models: Vec<String>,
+}
+
+/// `ai.detectOcFerry` — points the reader's single AI slot at a running OC Ferry.
+///
+/// OC Ferry is an Electron app that ferries OpenCode's free models to a local
+/// OpenAI-compatible port (127.0.0.1:41980) and protects it with a bearer key
+/// read from its own data dir. It rejects any request carrying an `Origin`
+/// header, so this must run from the Rust side (where no `Origin` is attached),
+/// never from the webview. The reader only has one AI endpoint, so we return
+/// the endpoint, key and the vetted model ids for the settings form to adopt.
+#[tauri::command]
+#[specta::specta]
+pub async fn ai_detect_oc_ferry() -> AppResult<OcFerryDiscovery> {
+    const PORT: u16 = 41980;
+
+    let data_dir = oc_ferry_data_dir()
+        .ok_or_else(|| AppError::Message("找不到 OC Ferry 的数据目录，请确认它已安装。".into()))?;
+    let api_key = std::fs::read_to_string(data_dir.join("api-key"))
+        .map_err(|_| {
+            AppError::Message("找不到 OC Ferry 的 api-key，请确认它已启动过一次。".into())
+        })?
+        .trim()
+        .to_string();
+    if api_key.is_empty() {
+        return Err(AppError::Message("OC Ferry 的 api-key 为空，请确认它已启动过一次。".into()));
+    }
+
+    let base_url = format!("http://127.0.0.1:{PORT}/v1");
+    let response = client()?
+        .get(format!("{base_url}/models"))
+        .bearer_auth(&api_key)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|err| {
+            AppError::Message(format!(
+                "连不上本机 OC Ferry（127.0.0.1:{PORT}）：{err}。请确认它的托盘程序正在运行。",
+            ))
+        })?;
+
+    if !response.status().is_success() {
+        return Err(AppError::Message(format!(
+            "OC Ferry 返回 {}，请确认它已启动且未被占用。",
+            response.status()
+        )));
+    }
+
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|err| AppError::Message(format!("OC Ferry 的响应无法解析：{err}")))?;
+    let models: Vec<String> = body
+        .get("data")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if models.is_empty() {
+        return Err(AppError::Message(
+            "OC Ferry 已连上，但暂未判定出可用模型（可能还在检测，或免费池为空）。".into(),
+        ));
+    }
+
+    Ok(OcFerryDiscovery { base_url, api_key, models })
+}
+
+/// OC Ferry's per-user data directory, mirroring its README:
+/// macOS `~/Library/Application Support/OC Ferry`, Windows `%APPDATA%\OC Ferry`,
+/// Linux `$XDG_CONFIG_HOME/OC Ferry` (falling back to `~/.config/OC Ferry`).
+/// `FERRY_DATA_DIR` overrides all of the above, as it does for OC Ferry itself.
+fn oc_ferry_data_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("FERRY_DATA_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    let sub = "OC Ferry";
+    if cfg!(target_os = "macos") {
+        std::env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join("Library/Application Support").join(sub))
+    } else if cfg!(target_os = "windows") {
+        std::env::var_os("APPDATA").map(|appdata| PathBuf::from(appdata).join(sub))
+    } else if cfg!(target_os = "linux") {
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+            Some(PathBuf::from(xdg).join(sub))
+        } else {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config").join(sub))
+        }
+    } else {
+        None
+    }
 }
 
 /// `ai.chat` — streams an answer to [`AI_STREAM_EVENT`].
