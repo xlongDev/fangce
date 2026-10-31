@@ -1609,6 +1609,7 @@ test("the band lands on whole lines, on a real EPUB, and again after a page turn
   await openBook(page, "/?demo=1&epub=1", /页码样书/);
   await enableRuler(page);
 
+  /** The block the band is on, and where that block sits in the page's lines. */
   const onWholeLines = async (label: string) => {
     // Through `bandOnLines`, like every other read that follows a layout change:
     // after a turn the band is hidden until its landing relay arrives, and a
@@ -1616,26 +1617,37 @@ test("the band lands on whole lines, on a real EPUB, and again after a page turn
     // out of the band, not just the numbers around it.
     const { drawn, lines } = await bandOnLines(page, `${label}：`);
     expect(lines.length, `${label}：一个字的行盒都没量到`).toBeGreaterThan(3);
-    return coveredLines(drawn, lines, `${label}：`);
+    const covered = coveredLines(drawn, lines, `${label}：`);
+    // One read for all of it: a line list re-read after the block was measured
+    // belongs to whatever layout the page is in by then, which is the mismatch
+    // this file has already been bitten by twice.
+    const first = lines.findIndex((line) => line.start === covered.first);
+    return { covered, first };
   };
 
   const before = await onWholeLines("翻页前");
   // `PageDown`, not an arrow: the ruler owns the arrows while it is on — that is
   // what reading with it means — and these are the page-turner's own keys.
   await page.keyboard.press("PageDown");
-  await page.waitForTimeout(1400);
-  const after = await onWholeLines("翻页后");
+  // Read until the band has moved to the page that arrived, rather than for a
+  // fixed 1.4s. The turn loads and re-paginates a section, and a read taken
+  // before that lands is a perfectly good reading of the page that is leaving —
+  // it covers whole lines too, so nothing but *where* it sits can tell.
+  let after = await onWholeLines("翻页后");
+  const deadline = Date.now() + 8000;
+  while ((after.first < 0 || after.first > 3) && Date.now() < deadline) {
+    await page.waitForTimeout(250);
+    after = await onWholeLines("翻页后");
+  }
 
   // The page moved under the band and the band was re-derived from the page it is
   // now over: it still covers whole lines of the page in front of the reader.
-  expect(after.count, "翻页之后带覆盖的行数变了").toBe(before.count);
+  expect(after.covered.count, "翻页之后带覆盖的行数变了").toBe(before.covered.count);
   // A turn is a page the reader *arrives on*, so the band meets it at its start
   // — the first block of the new page, not wherever the band was when the old
   // page left (that is the bottom of it, after a page read with the ruler).
-  const lines = await rulerLines(page);
-  const firstIndex = lines.findIndex((line) => line.start === after.first);
-  expect(firstIndex, "翻页之后带没有回到下一页的顶部").toBeGreaterThanOrEqual(0);
-  expect(firstIndex, "翻页之后带没有回到下一页的顶部").toBeLessThanOrEqual(3);
+  expect(after.first, "翻页之后带没有回到下一页的顶部").toBeGreaterThanOrEqual(0);
+  expect(after.first, "翻页之后带没有回到下一页的顶部").toBeLessThanOrEqual(3);
 });
 
 /**
