@@ -28,7 +28,7 @@ fix(library): keep sort order after deleting a book
 perf(search): batch FTS5 inserts inside one transaction
 ```
 
-`subject` 用英文，祈使句，首字母小写，结尾不加句号。
+`subject` 和正文都用英文，祈使句，首字母小写，结尾不加句号。正文写「为什么」和实测数字，不写「改了什么」—— 后者看 diff 就有。
 
 ## 3. 本地环境
 
