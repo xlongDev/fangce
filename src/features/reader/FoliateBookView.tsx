@@ -136,6 +136,9 @@ export type FoliateHandle = {
   section: (dir: 1 | -1) => void;
   /** True at the first/last page of the current section, with a neighbour. */
   atEdge: (dir: 1 | -1) => boolean;
+  /** True when a page turn in `dir` would move at all — the last page of the
+   *  book is the one place `atEdge` and this disagree. */
+  canTurn: (dir: 1 | -1) => boolean;
   /** Jump to a TOC entry by its index in the flattened list. */
   goToEntry: (index: number) => void;
   /**
@@ -1699,6 +1702,14 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         // is one section there, and `next()` already crosses.
         if (!renderer?.isAtSectionEdge) return false;
         return renderer.isAtSectionEdge(dir);
+      },
+      canTurn: (dir) => {
+        const renderer = viewRef.current?.renderer;
+        // Same renderer gap as `atEdge`: without the edge report there is no
+        // way to know, and refusing to turn would be worse than a turn that
+        // might not move.
+        if (!renderer?.canTurn) return true;
+        return renderer.canTurn(dir);
       },
       goToEntry: (index) => {
         const view = viewRef.current;

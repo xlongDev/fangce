@@ -135,6 +135,10 @@ declare module "foliate-js/view.js" {
     /** True at the first/last page of the current section, with a neighbour
      *  section — used for explicit cross-chapter keyboard paging. */
     isAtSectionEdge(dir: 1 | -1): boolean;
+    /** True when a page turn in `dir` would move at all: within the section, or
+     *  across into a neighbour. The two disagree only at the ends of the book,
+     *  where `isAtSectionEdge` is false because there is no neighbour left. */
+    canTurn(dir: 1 | -1): boolean;
     /** Currently-loaded section documents, used to backfill key forwarders
      *  right after `open()`; absent on `foliate-fxl`. */
     getContents(): { index: number; doc: Document; overlayer?: FoliateOverlayer }[];

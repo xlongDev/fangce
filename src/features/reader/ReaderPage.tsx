@@ -1145,6 +1145,10 @@ export function ReaderView({
         // next chapter" deterministic for keyboard paging.
         const handle = foliateRef.current;
         if (!handle) return null;
+        // Nothing to turn: this is the last page of the book. Announcing the
+        // turn anyway hides the ruler, and no page arrives to bring it back —
+        // the band stayed off the page until something else re-placed it.
+        if (!handle.canTurn(dir)) return null;
         // Same handover as the prose turn below: out of the way while the page
         // moves, back on the page that arrives (foliate relays that itself, with
         // the direction it was flipped).
@@ -1155,6 +1159,16 @@ export function ReaderView({
       }
       const el = scrollRef.current;
       if (!el) return null;
+      const max = el.scrollWidth - el.clientWidth;
+      const pos = el.scrollLeft;
+      const atColumnEdge = dir === 1 ? pos >= max - 2 : pos <= 2;
+      // The same dead turn as the foliate branch above, one level down: at the
+      // last column of the last chapter `goTo` clamps and nothing moves, so a
+      // turn announced here would take the ruler with it and never bring it
+      // back. (PDF steps its own pages and reverts at the ends — see
+      // `pdfTurn` — so it is left alone.)
+      const atBookEdge = dir === 1 ? chapterIdx >= chapters.length - 1 : chapterIdx <= 0;
+      if (!isPdf && atColumnEdge && atBookEdge) return null;
       // A prose page turn is a page the reader arrives on: the ruler is told the
       // turn has started — it steps out of the way rather than riding this page
       // down to its last line — and meets the new page at the far edge when the
@@ -1176,8 +1190,6 @@ export function ReaderView({
           reduce,
         });
       }
-      const max = el.scrollWidth - el.clientWidth;
-      const pos = el.scrollLeft;
       if (dir === 1 && pos >= max - 2) {
         goTo(chapterIdx + 1);
         return null;
@@ -1202,6 +1214,7 @@ export function ReaderView({
     },
     [
       chapterIdx,
+      chapters.length,
       goTo,
       isPdf,
       layoutModeRef,

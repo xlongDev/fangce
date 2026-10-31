@@ -3976,6 +3976,26 @@ export class Paginator extends HTMLElement {
             ? this.#renderedPage >= this.#renderedPages - 1
             : this.#renderedPage <= 0
     }
+    /**
+     * True when a page turn in `dir` would actually move — within this section,
+     * or across into a neighbouring one.
+     *
+     * `isAtSectionEdge` answers the narrower question (am I at a boundary *with*
+     * a neighbour), so it is false both in the middle of a section and at the
+     * true end of a book. 方册 asks this one before announcing a turn: a turn
+     * announced with nowhere to go leaves the reading ruler waiting for a page
+     * that never arrives, and the band stays hidden for good.
+     */
+    canTurn(dir) {
+        if (this.#adjacentIndex(dir) != null) return true
+        if (this.scrolled)
+            return dir === 1
+                ? this.#renderedEnd < this.#renderedViewSize - 2
+                : this.#renderedStart > 0
+        return dir === 1
+            ? this.#renderedPage < this.#renderedPages - 1
+            : this.#renderedPage > 0
+    }
     #adjacentIndex(dir, fromIndex) {
         if (fromIndex === undefined) fromIndex = this.#primaryIndex
         for (let index = fromIndex + dir; this.#canGoToIndex(index); index += dir)
