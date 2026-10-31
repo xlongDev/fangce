@@ -357,14 +357,28 @@ const across = (box: Box, vertical: boolean) =>
  * in the gap between two lines, on blank paper, hundreds of pixels from the words
  * it was marking. What has to hold is the stand-off at each end.
  */
+/**
+ * The lines whose centre is inside the band, on the reading axis.
+ *
+ * Split out of {@link coveredLines} because that one asserts — and a retry has
+ * to be able to look at a transient state (a band drawn against the new pane,
+ * the words still where the old one left them) without throwing on it.
+ */
+function covering<T extends Span>(drawn: Drawn, lines: readonly T[]): T[] {
+  const vertical = drawn.vertical;
+  const low = vertical ? drawn.band.left : drawn.band.top;
+  const high = vertical ? drawn.band.right : drawn.band.bottom;
+  return lines.filter((line) => {
+    const centre = (line.start + line.end) / 2;
+    return centre > low && centre < high;
+  });
+}
+
 function coveredLines<T extends Span>(drawn: Drawn, lines: readonly T[], label = "") {
   const vertical = drawn.vertical;
   const low = vertical ? drawn.band.left : drawn.band.top;
   const high = vertical ? drawn.band.right : drawn.band.bottom;
-  let covered = lines.filter((line) => {
-    const centre = (line.start + line.end) / 2;
-    return centre > low && centre < high;
-  });
+  const covered = covering(drawn, lines);
   expect(covered.length, `${label}带没有盖住任何一行`).toBeGreaterThan(0);
 
   const lead = advanceOf(lines);
@@ -624,6 +638,48 @@ async function rulerPicture(page: Page): Promise<{ drawn: Drawn; lines: Interval
   return last!;
 }
 
+/** How long a caller will keep re-reading for a band and its lines to agree.
+ *  Generous: the re-flow it waits out is a few hundred ms even on a loaded
+ *  runner, and this only has to outlast the pathological case. */
+const AGREE_DEADLINE = 6000;
+
+/**
+ * The band and the lines it covers, re-read until the two belong to one layout.
+ *
+ * A pane change resizes the reading area at once (CSS) and re-flows the section
+ * a few frames later (the paginator's own ResizeObserver → a fresh pagination,
+ * slow on CJK). In between, the ruler has already drawn itself against the new
+ * pane while the words are still where the old one left them — a *stable* pair,
+ * which `rulerPicture` hands back because it only checks that the reading
+ * stopped moving, not that the two halves belong together. No amount of waiting
+ * fixes that; the pair has to be measured again once the layout catches up.
+ * Measured on CI, webkit: exactly 72px, one sidebar's worth.
+ *
+ * So this waits for the two to *agree* rather than for the clock, and returns
+ * the last reading either way — the caller's own assertions still run on it, so
+ * a band that really is in the wrong place fails with its own numbers.
+ */
+async function bandOnLines(
+  page: Page,
+  label = "",
+): Promise<{ drawn: Drawn; lines: Interval[]; covered: Interval[] }> {
+  let seen: { drawn: Drawn; lines: Interval[]; covered: Interval[] } | null = null;
+  const deadline = Date.now() + AGREE_DEADLINE;
+  for (;;) {
+    const { drawn, lines } = await rulerPicture(page);
+    expect(lines.length, `${label}一个字的行盒都没量到`).toBeGreaterThan(0);
+    const covered = covering(drawn, lines);
+    if (covered.length > 0) {
+      seen = { drawn, lines, covered };
+      if (hugs(hug(drawn, covered))) break;
+    }
+    if (Date.now() > deadline) break;
+    await page.waitForTimeout(250);
+  }
+  expect(seen, `${label}带没有盖住任何一行（它落在两段文字之间的空白上了）`).not.toBeNull();
+  return seen!;
+}
+
 /** How much of the reading area the parts add up to, along the reading axis. */
 const spanAlong = (drawn: Drawn) =>
   along(drawn.before.box, drawn.vertical) +
@@ -802,45 +858,19 @@ test("the band lands on the words, not the gap above them, on a chapter opener",
   /**
    * The lines the band is on, and the width it drew itself to match them.
    *
-   * Re-read until the two agree, rather than waited for. A pane change resizes
-   * the reading area at once (CSS) and re-flows the section a few frames later
-   * (the paginator's own ResizeObserver → a fresh pagination, slow on CJK), and
-   * in between the ruler has already drawn itself against the new pane while the
-   * words are still where the old one left them. That is a *stable* pair —
-   * `rulerPicture` sees it stop moving and hands it back — so no amount of
-   * waiting fixes it; the two have to be measured again once they belong to the
-   * same layout. Measured on CI, webkit: exactly 72px, one sidebar's worth, and
-   * the retry after it caught the same pair.
-   *
-   * The assertions are unchanged and still run on the last reading, so a band
-   * that really is in the wrong place fails with its own numbers.
+   * Re-read until the two agree, rather than waited for — see `bandOnLines` for
+   * why a fixed wait cannot work here. The assertions are unchanged and run on
+   * the last reading, so a band that really is in the wrong place fails with
+   * its own numbers.
    */
   const on = async (label = "") => {
-    let seen: { drawn: Drawn; covered: Interval[] } | null = null;
-    const deadline = Date.now() + 8000;
-    for (;;) {
-      // One read for both, not two: a re-measure landing between them compares a
-      // band drawn on the old page with lines from the new one, which is a 71px
-      // miss on a title that never moved relative to its own page (CI, webkit).
-      const { drawn: band, lines } = await rulerPicture(page);
-      expect(lines.length, `${label}标题页一个字的行盒都没量到`).toBeGreaterThan(0);
-      const covered = lines.filter((line) => {
-        const centre = (line.start + line.end) / 2;
-        return centre > band.band.top && centre < band.band.bottom;
-      });
-      // On a line at all, which is the half that was broken: the band covered a
-      // stretch of page with no text anywhere in it.
-      if (covered.length === 1) {
-        seen = { drawn: band, covered };
-        // And as wide as the words it is on — the title, not the paragraphs far
-        // below it that share the block.
-        if (hugs(hug(band, covered))) break;
-      }
-      if (Date.now() > deadline) break;
-      await page.waitForTimeout(250);
-    }
-    expect(seen, `${label}带子底下没有一行字（它落在标题与正文之间的空白上了）`).not.toBeNull();
-    hugsText(seen!.drawn, seen!.covered, `${label}：`);
+    const { drawn, covered } = await bandOnLines(page, label);
+    // On a line at all, which is the half that was broken: the band covered a
+    // stretch of page with no text anywhere in it.
+    expect(covered.length, `${label}带子底下没有一行字（它落在标题与正文之间的空白上了）`).toBe(1);
+    // And as wide as the words it is on — the title, not the paragraphs far
+    // below it that share the block.
+    hugsText(drawn, covered, `${label}：`);
   };
 
   await on();
@@ -1275,13 +1305,12 @@ test("the band still hugs the text when the sidebar leaves the pane", async ({ p
   for (const label of ["折叠侧边栏", "隐藏侧边栏", "全屏阅读"]) {
     if (label === "隐藏侧边栏") await unfold();
     await page.getByRole("button", { name: label, exact: true }).first().click();
-    // Wait for the band to come to rest, *then* read the page: the pane re-wraps
-    // and the band re-derives a frame or two after the transition starts, and a
-    // line list read in between belongs to a layout neither number came from.
-    await page.waitForTimeout(1600);
-    const drawn = await rulerDrawn(page);
-    await page.waitForTimeout(200);
-    const lines = await rulerLines(page);
+    // The pane re-wraps and the band re-derives a frame or two after the
+    // transition starts, so the two have to be read as one picture — and read
+    // *again* until that picture belongs to a single layout. A band drawn
+    // against the new pane while the words are still in the old one is a stable
+    // pair, which is why a fixed wait here was not enough (see `bandOnLines`).
+    const { drawn, lines } = await bandOnLines(page, `${label}：`);
     expect(lines.length, `${label}：一个字的行盒都没量到`).toBeGreaterThan(3);
     // On whole lines, and as wide as the ones it is on.
     const covered = coveredLines(drawn, lines, `${label}：`);
