@@ -1610,8 +1610,11 @@ test("the band lands on whole lines, on a real EPUB, and again after a page turn
   await enableRuler(page);
 
   const onWholeLines = async (label: string) => {
-    const drawn = await rulerDrawn(page);
-    const lines = await rulerLines(page);
+    // Through `bandOnLines`, like every other read that follows a layout change:
+    // after a turn the band is hidden until its landing relay arrives, and a
+    // read taken before that is the *offset* geometry — which moves lines in and
+    // out of the band, not just the numbers around it.
+    const { drawn, lines } = await bandOnLines(page, `${label}：`);
     expect(lines.length, `${label}：一个字的行盒都没量到`).toBeGreaterThan(3);
     return coveredLines(drawn, lines, `${label}：`);
   };
