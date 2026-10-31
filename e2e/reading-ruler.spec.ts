@@ -540,6 +540,34 @@ async function enableRuler(page: Page) {
  *  reads of the value that is about to change. */
 const SETTLE_STEP = 100;
 
+/** Whether the band is on the page, rather than 5px above it. */
+const REVEALED = `(() => {
+  const band = document.querySelector("[data-ruler-band]");
+  return !!band && getComputedStyle(band).opacity === "1";
+})()`;
+
+/**
+ * Waits for the band to have arrived on the page.
+ *
+ * Until it is revealed the band is drawn `translateY(-5px)` off its place — the
+ * appear animation — and the reveal is a frame callback after the measure. On a
+ * loaded runner that callback can be delayed past three settle reads, so
+ * `rulerDrawn` hands back the *offset* geometry and the wash that is meant to
+ * touch the band reads 5px short (measured on CI, webkit: exactly 5px, and the
+ * whole ruler is still at `opacity: 0` while it happens).
+ *
+ * Only the tiling assertion can see that. Every other number in this file is a
+ * span — a distance — and a translation leaves those unchanged, which is why
+ * this waits here rather than in `rulerDrawn`: the band is legitimately off the
+ * page after some turns, and the tests that read it there are measuring shape.
+ */
+async function revealed(page: Page): Promise<void> {
+  for (let i = 0; i < 40; i += 1) {
+    if (await page.evaluate(REVEALED)) return;
+    await page.waitForTimeout(SETTLE_STEP);
+  }
+}
+
 async function rulerDrawn(page: Page): Promise<Drawn> {
   let last: Drawn | null = null;
   let still = 0;
@@ -702,6 +730,9 @@ test("the band and its washes tile the reading area, at the parked fraction", as
   await openBook(page, "/?demo=1", /我们为什么会生病/);
   await enableRuler(page);
 
+  // The only test that asserts where the band *is* rather than how far apart
+  // things are, so the only one a band still off its place by 5px can fail.
+  await revealed(page);
   const drawn = await rulerDrawn(page);
   const height = drawn.host.bottom - drawn.host.top;
   const width = drawn.host.right - drawn.host.left;
