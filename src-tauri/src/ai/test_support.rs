@@ -78,6 +78,43 @@ pub fn mock_chat(replies: Vec<String>) -> MockChat {
     MockChat { base_url: format!("http://127.0.0.1:{port}"), seen }
 }
 
+/// The same, but each frame is written after a pause.
+///
+/// "Does it stream" is a question with an answer only if the server actually
+/// takes its time. A mock that replies instantly cannot tell a working pipeline
+/// from one that buffers the whole body and then hands it over.
+pub fn mock_chat_slow(frames: Vec<String>, gap: std::time::Duration) -> MockChat {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let captured = seen.clone();
+
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else { return };
+        let request = read_request(&mut stream);
+        if let Ok(mut slot) = captured.lock() {
+            slot.push(request);
+        }
+        // Close-delimited: no Content-Length, so the body ends when the socket
+        // does and the client can start reading frames immediately.
+        let head =
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+        if stream.write_all(head.as_bytes()).is_err() {
+            return;
+        }
+        let _ = stream.flush();
+        for frame in frames {
+            std::thread::sleep(gap);
+            if stream.write_all(frame.as_bytes()).is_err() {
+                return;
+            }
+            let _ = stream.flush();
+        }
+    });
+
+    MockChat { base_url: format!("http://127.0.0.1:{port}"), seen }
+}
+
 /// Reads one whole request, headers and body.
 fn read_request(stream: &mut std::net::TcpStream) -> String {
     let mut raw = Vec::new();

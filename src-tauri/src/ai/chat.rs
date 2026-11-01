@@ -905,6 +905,50 @@ mod tests {
     }
 
     #[test]
+    fn frames_reach_the_caller_as_they_arrive() {
+        // The reader's complaint was that answers appeared all at once. This
+        // settles whose side that is on: the mock pauses between frames, so if
+        // the callback sees them spread out, the pipeline streams and the
+        // provider is buffering.
+        use crate::ai::test_support::{direct_client, mock_chat_slow};
+        use std::time::{Duration, Instant};
+
+        let gap = Duration::from_millis(120);
+        let mock = mock_chat_slow(
+            vec![
+                "data: {\"choices\":[{\"delta\":{\"content\":\"第一\"}}]}\n\n".to_string(),
+                "data: {\"choices\":[{\"delta\":{\"content\":\"第二\"}}]}\n\n".to_string(),
+                "data: [DONE]\n\n".to_string(),
+            ],
+            gap,
+        );
+        let config = AiConfig { base_url: mock.base_url.clone(), ..AiConfig::default() };
+        let client = direct_client();
+
+        let mut arrivals: Vec<Instant> = Vec::new();
+        let mut text = String::new();
+        tauri::async_runtime::block_on(stream_chat(
+            &client,
+            &config,
+            vec![ChatMessage::new(Role::User, "你好")],
+            None,
+            &mut |event| {
+                arrivals.push(Instant::now());
+                if let StreamEvent::Delta(chunk) = event {
+                    text.push_str(&chunk);
+                }
+                true
+            },
+        ))
+        .expect("stream");
+
+        assert_eq!(text, "第一第二");
+        assert!(arrivals.len() >= 2, "应当分多次到达：{}", arrivals.len());
+        let spread = arrivals[arrivals.len() - 1] - arrivals[0];
+        assert!(spread >= gap, "两次回调间隔 {spread:?} 小于帧间隔 {gap:?}，说明被缓冲了");
+    }
+
+    #[test]
     fn a_tool_round_is_written_in_the_wire_shape() {
         // The messages cross IPC in camelCase and the wire wants snake_case.
         // Sending `toolCalls` made every second round fail with a 400 that read
