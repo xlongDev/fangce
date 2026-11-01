@@ -596,7 +596,7 @@ pub(crate) struct StreamArgs<'a> {
 /// A delta with every optional field empty, so each event only fills the one it
 /// carries. Written once because nine literals drifting apart is how a field
 /// gets forgotten on one path.
-fn blank(request_id: &str) -> AiDelta {
+pub(crate) fn blank(request_id: &str) -> AiDelta {
     AiDelta {
         request_id: request_id.to_string(),
         text: None,

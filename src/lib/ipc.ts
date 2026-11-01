@@ -16,6 +16,7 @@ import type {
   ImportProgress,
   RagProgress,
   SourceProgress,
+  SummaryProgress,
 } from "@/lib/bindings";
 
 /** Which face the floating bar is drawing — generated from the backend, where
@@ -322,6 +323,7 @@ const RAG_INDEX_EVENT = "rag://index-progress";
 
 /** Event carrying knowledge graph build progress. */
 const GRAPH_BUILD_EVENT = "graph://build-progress";
+const SUMMARY_BUILD_EVENT = "summary://build-progress";
 
 /** Event carrying one book download's chapter progress. */
 const SOURCE_DOWNLOAD_EVENT = "source://download-progress";
@@ -418,6 +420,14 @@ export async function onGraphProgress(
 ): Promise<UnlistenFn | undefined> {
   if (!isTauri()) return undefined;
   return listen<GraphProgress>(GRAPH_BUILD_EVENT, (event) => handler(event.payload));
+}
+
+/** Subscribes to chapter-summary build progress; no-op outside the Tauri shell. */
+export async function onSummaryProgress(
+  handler: (progress: SummaryProgress) => void,
+): Promise<UnlistenFn | undefined> {
+  if (!isTauri()) return undefined;
+  return listen<SummaryProgress>(SUMMARY_BUILD_EVENT, (event) => handler(event.payload));
 }
 
 /** Subscribes to book download progress; no-op outside the Tauri shell. */

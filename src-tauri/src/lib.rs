@@ -166,6 +166,9 @@ pub fn run() -> tauri::Result<()> {
             commands::rag::rag_index_book,
             commands::graph::graph_status,
             commands::graph::graph_build,
+            commands::summary::chapter_summaries,
+            commands::summary::chapter_summary_build,
+            commands::summary::chapter_recap,
             commands::graph::graph_query,
             commands::source::source_list,
             commands::source::source_save,
@@ -426,6 +429,9 @@ mod specta_bindings {
                 commands::font::font_delete,
                 commands::graph::graph_status,
                 commands::graph::graph_build,
+                commands::summary::chapter_summaries,
+                commands::summary::chapter_summary_build,
+                commands::summary::chapter_recap,
                 commands::graph::graph_query,
                 commands::lookup::lookup_translate,
                 commands::lookup::lookup_wikipedia,
@@ -473,6 +479,7 @@ mod specta_bindings {
             .typ::<commands::ai::AiDelta>()
             .typ::<commands::rag::RagProgress>()
             .typ::<commands::graph::GraphProgress>()
+            .typ::<commands::summary::SummaryProgress>()
             .typ::<commands::source::SourceProgress>()
             .error_handling(tauri_specta::ErrorHandlingMode::Throw)
             .dangerously_cast_bigints_to_number();

@@ -5,3 +5,4 @@ pub mod conversation;
 pub mod graph;
 pub mod guide;
 pub mod ocr;
+pub mod summary;

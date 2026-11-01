@@ -179,12 +179,25 @@ export function useAiChat() {
     [start],
   );
 
+  /**
+   * 前情提要 for one book, built from the summaries already cached.
+   *
+   * Streamed through the same event as every other answer, so the panel renders
+   * it as it arrives and reports a provider error the same way — a second
+   * mechanism for one paragraph would be a second set of edge cases.
+   */
+  const sendRecap = useCallback(
+    (bookId: string, upto: number) =>
+      start((requestId) => ipc.chapterRecap(requestId, bookId, upto)),
+    [start],
+  );
+
   const reset = useCallback(() => {
     activeRequest.current = null;
     setState(IDLE);
   }, []);
 
-  return { ...state, send, sendDigest, reset };
+  return { ...state, send, sendDigest, sendRecap, reset };
 }
 
 /** One rendered exchange. The panel draws these; the hook grows the last one. */

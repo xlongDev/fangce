@@ -20,6 +20,7 @@ const PANELS = [
   { key: "settings", label: "阅读设置" },
   { key: "toc", label: "目录与书签" },
   { key: "annotations", label: "标注" },
+  { key: "summary", label: "章节摘要" },
 ] as const;
 
 interface Metrics {

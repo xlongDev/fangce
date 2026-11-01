@@ -18,7 +18,7 @@ pub mod image;
 pub mod lookup;
 pub mod rerank;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 pub mod tools;
 pub mod usage;
 pub mod vision;

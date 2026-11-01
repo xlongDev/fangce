@@ -15,6 +15,7 @@ import {
   EyeSlash,
   Faders,
   Graph,
+  Notebook,
   HighlighterCircle,
   ListBullets,
   Lightning,
@@ -41,7 +42,7 @@ import { cn } from "@/lib/cn";
 
 /** Which side panel is open. Only one at a time, so they never stack. */
 export type Panel =
-  "none" | "annotations" | "search" | "ai" | "guide" | "graph" | "toc" | "settings";
+  "none" | "annotations" | "search" | "ai" | "guide" | "graph" | "summary" | "toc" | "settings";
 
 /**
  * Reader chrome buttons: same anatomy as the sidebar's glass buttons, but
@@ -185,6 +186,17 @@ export function ReaderToolButtons({
       {/* The assistant had no door of its own: it could only be opened by
           selecting text and picking 问 AI, so a reader who wanted to ask
           something else had no way in. */}
+      {/* Next to the graph because it answers the other half of the same
+          question: the graph says who someone is, the summaries say what
+          happened. */}
+      <GlassIconButton
+        label="章节摘要"
+        size="sm"
+        className={CHROME_BTN}
+        onClick={() => onTogglePanel("summary")}
+      >
+        <Notebook size={16} />
+      </GlassIconButton>
       <GlassIconButton
         label="AI 助手"
         size="sm"

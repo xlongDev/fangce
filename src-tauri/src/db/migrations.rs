@@ -560,6 +560,29 @@ CREATE INDEX ai_messages_conversation ON ai_messages (conversation_id, id);
 ALTER TABLE ai_messages ADD COLUMN tools TEXT;
 "#,
     },
+    Migration {
+        version: 21,
+        name: "chapter_summaries",
+        // One row per chapter, keyed the same way `chapters` is so a deleted
+        // book takes its summaries with it.
+        //
+        // `chars` is the chapter's length at the moment it was summarised. A
+        // chapter is re-extracted when a book is reopened after an import that
+        // deferred it, and a summary of the old text would then describe
+        // something that is no longer there — comparing lengths is the cheap
+        // way to notice without hashing every chapter.
+        sql: r#"
+CREATE TABLE chapter_summaries (
+  book_id    TEXT NOT NULL REFERENCES books (id) ON DELETE CASCADE,
+  idx        INTEGER NOT NULL,
+  summary    TEXT NOT NULL,
+  chars      INTEGER NOT NULL,
+  model      TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (book_id, idx)
+);
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.

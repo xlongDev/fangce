@@ -464,6 +464,28 @@ export const commands = {
    */
   graphBuild: (bookId: string) => __TAURI_INVOKE<GraphBuildReport>("graph_build", { bookId }),
   /**
+   *  `summary.list` — every chapter up to the reader's position, with whatever
+   *  summary exists.
+   *
+   *  The limit is applied here rather than in the panel: a list that carries
+   *  chapters the reader has not reached is one screenshot away from spoiling the
+   *  book.
+   */
+  chapterSummaries: (bookId: string, upto: number) =>
+    __TAURI_INVOKE<ChapterSummary[]>("chapter_summaries", { bookId, upto }),
+  /**  `summary.build` — summarises the chapters up to `upto` that have none. */
+  chapterSummaryBuild: (bookId: string, upto: number) =>
+    __TAURI_INVOKE<SummaryBuildReport>("chapter_summary_build", { bookId, upto }),
+  /**
+   *  `summary.recap` — streams a 前情提要 built from the cached summaries.
+   *
+   *  Streamed through the same event as every other answer, so the panel gets the
+   *  same incremental rendering, the same error handling and the same 停止 button
+   *  without a second mechanism.
+   */
+  chapterRecap: (requestId: string, bookId: string, upto: number) =>
+    __TAURI_INVOKE<null>("chapter_recap", { requestId, bookId, upto }),
+  /**
    *  `graph.query` — all entities when `entity` is `null`, otherwise the
    *  neighborhood of that one entity.
    */
@@ -1093,6 +1115,16 @@ export type ChapterRules = {
   url?: string;
 };
 
+/**  One row of the panel. */
+export type ChapterSummary = {
+  idx: number;
+  title: string;
+  /**  Empty when this chapter has no usable summary yet. */
+  summary: string;
+  /**  When it was written; 0 for a chapter that has none. */
+  createdAt: number;
+};
+
 /**
  *  One turn in a conversation. `system` arrives separately, not as a message.
  *
@@ -1720,6 +1752,22 @@ export type StoredMessage_Serialize = {
   /**  What the assistant looked up or drew while answering. */
   tools: ToolCallView_Serialize[];
   createdAt: number;
+};
+
+/**  What one build produced. */
+export type SummaryBuildReport = {
+  written: number;
+  /**
+   *  Chapters the model could not summarise. Non-zero means the panel is
+   *  thinner than the book, which is worth saying out loud.
+   */
+  skipped: number;
+  total: number;
+};
+
+export type SummaryProgress = {
+  done: number;
+  total: number;
 };
 
 /**  Where the state document lives and how to sign in. */

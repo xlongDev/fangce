@@ -8,6 +8,7 @@ import type { FoliateSearchHit } from "@/features/reader/FoliateBookView";
 import { GuidePanel } from "@/features/reader/GuidePanel";
 import { ReaderDrawer } from "@/features/reader/ReaderDrawer";
 import { SettingsPanel } from "@/features/reader/SettingsPanel";
+import { SummaryPanel } from "@/features/reader/SummaryPanel";
 import { TocPanel } from "@/features/reader/TocPanel";
 import type { Panel } from "@/features/reader/ReaderChrome";
 import { GraphPanel } from "@/features/graph/GraphPanel";
@@ -31,6 +32,8 @@ export function panelTitle(panel: Exclude<Panel, "none">): string {
       return "知识图谱";
     case "guide":
       return "AI 导读";
+    case "summary":
+      return "章节摘要";
     default:
       return "AI 助手";
   }
@@ -196,6 +199,11 @@ export function ReaderPanels({
                 onJump={ai.onJumpCitation}
                 seedQuestion={ai.question}
               />
+            )}
+            {/* The drawer already knows the reader's position and how to jump
+                — the same two things the table of contents uses. */}
+            {panel === "summary" && (
+              <SummaryPanel bookId={bookId} currentIdx={toc.currentIdx} onJump={toc.onJump} />
             )}
             {panel === "guide" && <GuidePanel bookId={bookId} />}
           </Reveal>

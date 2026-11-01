@@ -21,7 +21,7 @@ mod retrieval;
 mod shelf;
 mod transfer;
 
-pub use assist::{conversation, graph, guide, ocr};
+pub use assist::{conversation, graph, guide, ocr, summary};
 pub use io::{clippings, export, import, pack, source};
 pub use lookup::{dictionaries, markup, mdict, stardict};
 pub use marks::{annotations, bookmarks, migrate};
