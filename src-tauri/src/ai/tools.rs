@@ -294,6 +294,20 @@ fn lookup_character(ctx: &ToolContext<'_>, arguments: &Value) -> Result<ToolOutc
         return Err(format!("知识图谱里没有「{name}」；可以改用 search_book 检索原文"));
     };
 
+    // The graph is built from the whole book, so a card would otherwise name
+    // everything a character ever does. Under 防剧透 it only shows what the
+    // reader has already passed, and says that it did.
+    let (relations, before) = match ctx.max_chapter {
+        Some(limit) => {
+            let total = relations.len();
+            let kept: Vec<_> =
+                relations.into_iter().filter(|relation| relation.chapter_idx <= limit).collect();
+            (kept, total)
+        }
+        None => (relations, 0),
+    };
+    let truncated = before > relations.len();
+
     Ok(ToolOutcome {
         view: ToolCallView {
             name: "character".into(),
@@ -304,7 +318,13 @@ fn lookup_character(ctx: &ToolContext<'_>, arguments: &Value) -> Result<ToolOutc
             mindmap: None,
             wordcloud: None,
         },
-        for_model: card_text(&entity.name, &entity.kind, entity.mentions, &relations),
+        for_model: {
+            let mut card = card_text(&entity.name, &entity.kind, entity.mentions, &relations);
+            if truncated {
+                card.push_str("（已按读者的阅读进度过滤，后面的关系没有显示。）\n");
+            }
+            card
+        },
     })
 }
 
@@ -450,6 +470,18 @@ async fn read_chapter(ctx: &ToolContext<'_>, arguments: &Value) -> Result<ToolOu
         return Err("章节号从 1 开始".into());
     }
     let idx = (chapter - 1) as usize;
+
+    // 防剧透 is a promise the whole assistant makes, not just the search. The
+    // model can name any chapter number, so this is the only place that can
+    // keep it — and it has to say what to do instead, or the model retries.
+    if let Some(limit) = ctx.max_chapter
+        && idx > limit
+    {
+        return Err(format!(
+            "读者开着防剧透，只能读第 1 到 {} 章；第 {chapter} 章还没读到。改用 search_book，或依据已有内容回答。",
+            limit + 1
+        ));
+    }
 
     // Chapter bodies are lazily extracted for older imports; reading one is the
     // same debt the reader pays when it opens the book. Called outside `with`:
@@ -689,7 +721,7 @@ fn make_wordcloud(ctx: &ToolContext<'_>, arguments: &Value) -> Result<ToolOutcom
 
     let (texts, sampled_from) = if scope == "book" {
         ensure_book_text(ctx, book_id)?;
-        book_sample(ctx, book_id)?
+        book_sample(ctx, book_id, ctx.max_chapter)?
     } else {
         let chapter = arguments
             .get("chapter")
@@ -698,6 +730,13 @@ fn make_wordcloud(ctx: &ToolContext<'_>, arguments: &Value) -> Result<ToolOutcom
             .ok_or_else(|| "缺少 chapter".to_string())?;
         if chapter < 1 {
             return Err("章节号从 1 开始".into());
+        }
+        // Same promise as `read_chapter`: a cloud of a chapter the reader has
+        // not reached names the people in it.
+        if let Some(limit) = ctx.max_chapter
+            && chapter - 1 > limit as i64
+        {
+            return Err(format!("读者开着防剧透，只能统计第 1 到 {} 章。", limit + 1));
         }
         ensure_book_text(ctx, book_id)?;
         let content: Option<String> = ctx
@@ -771,13 +810,18 @@ fn make_wordcloud(ctx: &ToolContext<'_>, arguments: &Value) -> Result<ToolOutcom
 fn book_sample(
     ctx: &ToolContext<'_>,
     book_id: &str,
+    max_chapter: Option<usize>,
 ) -> Result<(Vec<String>, Option<usize>), String> {
+    // Under 防剧透 the count stops at the reader's position, or a cloud of the
+    // whole book would name a character who has not appeared yet.
+    let ceiling = max_chapter.map_or(i64::MAX, |limit| limit as i64);
     let total: usize = ctx
         .library
         .with(|conn| {
             let chars: i64 = conn.query_row(
-                "SELECT COALESCE(SUM(LENGTH(content)), 0) FROM chapters WHERE book_id = ?1",
-                rusqlite::params![book_id],
+                "SELECT COALESCE(SUM(LENGTH(content)), 0) FROM chapters \
+                 WHERE book_id = ?1 AND idx <= ?2",
+                rusqlite::params![book_id, ceiling],
                 |row| row.get(0),
             )?;
             Ok(chars.max(0) as usize)
@@ -793,9 +837,10 @@ fn book_sample(
     let slices = ctx
         .library
         .with(|conn| {
-            let mut stmt =
-                conn.prepare("SELECT content FROM chapters WHERE book_id = ?1 ORDER BY idx")?;
-            let mut rows = stmt.query(rusqlite::params![book_id])?;
+            let mut stmt = conn.prepare(
+                "SELECT content FROM chapters WHERE book_id = ?1 AND idx <= ?2 ORDER BY idx",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![book_id, ceiling])?;
             let mut out = Vec::new();
             while let Some(row) = rows.next()? {
                 let content: String = row.get(0)?;
@@ -915,6 +960,93 @@ mod tests {
     }
 
     /* ------------------------------------------------- against a library */
+
+    #[test]
+    fn spoiler_safe_refuses_to_read_ahead() {
+        let harness = Harness::new("tool-spoiler");
+        harness.add_chapter(0, "第一章", "林昭走进大殿。");
+        harness.add_chapter(1, "第二章", "他推门走了出去。");
+        let client = direct_client();
+        let config = AiConfig::default();
+        // The reader is in chapter 2 (index 1).
+        let ctx = ToolContext {
+            library: &harness.library,
+            client: &client,
+            config: &config,
+            book_id: Some("b"),
+            max_chapter: Some(1),
+            cancelled: &|| false,
+        };
+
+        let error =
+            match tauri::async_runtime::block_on(read_chapter(&ctx, &json!({ "chapter": 5 }))) {
+                Ok(_) => panic!("防剧透开着还读到了第 5 章"),
+                Err(message) => message,
+            };
+        assert!(error.contains("防剧透"), "{error}");
+        // The model has to be told what to do instead, or it retries the call.
+        assert!(error.contains("search_book"), "{error}");
+
+        // The chapter the reader is in is still readable — the limit is
+        // inclusive, not exclusive.
+        tauri::async_runtime::block_on(read_chapter(&ctx, &json!({ "chapter": 2 })))
+            .expect("当前章应当可读");
+    }
+
+    #[test]
+    fn a_card_hides_relations_the_reader_has_not_reached() {
+        let harness = Harness::new("tool-spoiler-card");
+        harness.add_entity("林昭", "人物", 5);
+        harness.add_relation("林昭", "拜师", "玄清道人", "他在山门前跪了三日", 1);
+        harness.add_relation("林昭", "杀死", "玄清道人", "雨夜，剑落", 9);
+        let client = direct_client();
+        let config = AiConfig::default();
+        let ctx = ToolContext {
+            library: &harness.library,
+            client: &client,
+            config: &config,
+            book_id: Some("b"),
+            max_chapter: Some(3),
+            cancelled: &|| false,
+        };
+
+        let outcome = lookup_character(&ctx, &json!({ "name": "林昭" })).expect("card");
+
+        assert!(outcome.for_model.contains("拜师"), "{}", outcome.for_model);
+        assert!(
+            !outcome.for_model.contains("杀死"),
+            "第 9 章的关系不该出现：{}",
+            outcome.for_model
+        );
+        assert!(outcome.for_model.contains("按读者的阅读进度过滤"), "{}", outcome.for_model);
+        assert_eq!(outcome.view.detail, "1 条关系", "行上的数字也要是过滤后的");
+    }
+
+    #[test]
+    fn a_book_cloud_counts_only_what_was_read() {
+        let harness = Harness::new("tool-spoiler-cloud");
+        harness.add_chapter(0, "第一章", "林昭走进大殿。林昭看着世界。");
+        harness.add_chapter(9, "第十章", "苏晚苏晚苏晚苏晚苏晚苏晚");
+        let client = direct_client();
+        let config = AiConfig::default();
+        let ctx = ToolContext {
+            library: &harness.library,
+            client: &client,
+            config: &config,
+            book_id: Some("b"),
+            max_chapter: Some(2),
+            cancelled: &|| false,
+        };
+
+        let outcome = make_wordcloud(&ctx, &json!({ "scope": "book" })).expect("cloud");
+        let words = outcome.view.wordcloud.expect("词表");
+
+        assert!(words.iter().any(|entry| entry.word == "林昭"), "{words:?}");
+        assert!(
+            !words.iter().any(|entry| entry.word == "苏晚"),
+            "第 10 章的名字不该出现：{words:?}"
+        );
+    }
 
     #[test]
     fn a_character_card_is_read_from_the_graph() {
