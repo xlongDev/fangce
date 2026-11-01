@@ -88,6 +88,19 @@ export function ImageRows({ draft, set }: { draft: AiConfigFull; set: Setter }) 
           />
         </Row>
       )}
+
+      {backend !== "" && (
+        // Said here rather than discovered at the first failed click. The
+        // obvious address to try is the one the reader already uses for chat,
+        // and a proxy that forwards chat models does not draw — OC Ferry
+        // registers /v1/chat/completions and /v1/models and answers everything
+        // else with a bare 404.
+        <p className="text-text-3 px-5 py-3 text-[11.5px] leading-relaxed">
+          对话接口能出图不代表这个地址能出图：只转发对话模型的代理（OC Ferry 就是这样，它只有
+          /v1/chat/completions）没有图像接口。本地出图用 A1111（127.0.0.1:7860），云端用任意 OpenAI
+          兼容的图像服务。
+        </p>
+      )}
     </>
   );
 }

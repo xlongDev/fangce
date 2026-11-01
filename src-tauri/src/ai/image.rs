@@ -200,7 +200,19 @@ async fn post_json(
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(AppError::Message(format!("文生图返回 {status}：{}", excerpt(&text))));
+        // A 404 is the one status that is about the *address* rather than the
+        // request: the host answered, so the key is beside the point. It has two
+        // causes, and the body rarely tells them apart — a wrong model name
+        // (OpenAI answers `model_not_found` with 404) or no image route at all.
+        // The second is the common one on a reader's machine: a proxy that
+        // forwards chat models and nothing else registers no `/images/...`, and
+        // its body says only "Not found", which reads as a typo in the path.
+        let hint = if status == reqwest::StatusCode::NOT_FOUND {
+            "（404 一般是地址或模型名不对。若这个地址是只转发对话模型的代理 —— 例如 OC Ferry，它只提供 /v1/chat/completions —— 那它根本没有图像接口，立绘要另配一个专门的图像服务。）"
+        } else {
+            ""
+        };
+        return Err(AppError::Message(format!("文生图返回 {status}：{}{hint}", excerpt(&text))));
     }
     serde_json::from_str(&text)
         .map_err(|err| AppError::Message(format!("文生图返回的不是 JSON：{err}")))
@@ -505,5 +517,47 @@ mod tests {
         let text = error.to_string();
         assert!(text.contains("404"), "{text}");
         assert!(text.contains("model not found"), "{error}");
+    }
+
+    #[test]
+    fn a_404_names_the_likely_cause() {
+        // Measured against the running OC Ferry: `POST /v1/images/generations`
+        // answers 404 with the body "Not found", and nothing else. On its own
+        // that reads as a typo in the path, which sends the reader looking in
+        // the wrong place.
+        let (base, _) = serve_with("404 Not Found", r#"{"error":{"message":"Not found"}}"#.into());
+        let mut config = config("openai_compat");
+        config.image_base_url = base;
+
+        let error = tauri::async_runtime::block_on(draw(
+            &client(),
+            &config,
+            &PortraitRequest { prompt: "x", negative: "", width: 512, height: 512 },
+        ))
+        .expect_err("应当失败");
+
+        let text = error.to_string();
+        assert!(text.contains("OC Ferry"), "{text}");
+        assert!(text.contains("图像接口"), "{text}");
+    }
+
+    #[test]
+    fn a_rejected_key_does_not_get_the_404_advice() {
+        // 401 is about the key. Sending the reader off to change the address
+        // would be advice that cannot work.
+        let (base, _) = serve_with("401 Unauthorized", r#"{"error":"bad key"}"#.into());
+        let mut config = config("openai_compat");
+        config.image_base_url = base;
+
+        let error = tauri::async_runtime::block_on(draw(
+            &client(),
+            &config,
+            &PortraitRequest { prompt: "x", negative: "", width: 512, height: 512 },
+        ))
+        .expect_err("应当失败");
+
+        let text = error.to_string();
+        assert!(text.contains("bad key"), "{text}");
+        assert!(!text.contains("OC Ferry"), "401 不该谈地址：{text}");
     }
 }
