@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { BookOpenText, MagnifyingGlass, TextAa, TreeStructure } from "@phosphor-icons/react";
+import { BookOpenText, MagnifyingGlass, TextAa, TreeStructure, User } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 
 import { cn } from "@/lib/cn";
@@ -8,6 +8,7 @@ import type { RagHit, ToolCallView } from "@/types/ipc";
 const ICONS: Record<string, Icon> = {
   search_book: MagnifyingGlass,
   read_chapter: BookOpenText,
+  character: User,
   mindmap: TreeStructure,
   wordcloud: TextAa,
 };

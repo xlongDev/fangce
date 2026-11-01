@@ -282,6 +282,25 @@ pub fn counts(conn: &Connection, book_id: &str) -> AppResult<(usize, usize)> {
 }
 
 /// The whole entity list, or the neighborhood of one entity.
+/// One entity's own row, or `None` when the graph has never seen the name.
+///
+/// `query` returns either the whole list or one entity's relations; neither
+/// carries a single entity's kind, and a card without one says nothing about
+/// what it is.
+pub fn entity(conn: &Connection, book_id: &str, name: &str) -> AppResult<Option<GraphEntity>> {
+    let mut stmt =
+        conn.prepare("SELECT name, kind, mentions FROM entities WHERE book_id = ?1 AND name = ?2")?;
+    let mut rows = stmt.query(params![book_id, name])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(GraphEntity {
+            name: row.get(0)?,
+            kind: row.get(1)?,
+            mentions: row.get::<_, i64>(2)? as usize,
+        })),
+        None => Ok(None),
+    }
+}
+
 pub fn query(conn: &Connection, book_id: &str, entity: Option<&str>) -> AppResult<GraphView> {
     let mut view = GraphView::default();
     match entity {

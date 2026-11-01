@@ -18,6 +18,7 @@ use crate::ai::chat::{FunctionDef, ToolCall, ToolDef};
 use crate::ai::wordcloud::{self, WordCount};
 use crate::ai::{embeddings, rerank};
 use crate::db::Library;
+use crate::library::graph::{self as book_graph, GraphRelation};
 use crate::library::rag::{self, RagHit};
 
 /// With a reranker configured, first-stage recall is this many times wider than
@@ -112,6 +113,20 @@ pub fn definitions() -> Vec<ToolDef> {
         ToolDef {
             kind: "function",
             function: FunctionDef {
+                name: "character",
+                description: "查书里某个角色或实体的档案：它是什么、和谁有什么关系、各出现在哪一章。这本书抽过知识图谱时，问「某某是谁」「A 和 B 什么关系」先用它——比检索原文更准，也省一次向量检索。",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "实体名，用书里的写法，不要改写。" }
+                    },
+                    "required": ["name"]
+                }),
+            },
+        },
+        ToolDef {
+            kind: "function",
+            function: FunctionDef {
                 name: "mindmap",
                 description: "生成一张思维导图并展示给读者。用于「梳理人物关系」「概括本书结构」这类需要层级结构的回答。生成后不要再用文字重复一遍导图内容。",
                 parameters: json!({
@@ -168,6 +183,7 @@ pub async fn run(ctx: &ToolContext<'_>, call: &ToolCall) -> ToolOutcome {
     let result = match call.name.as_str() {
         "search_book" => search_book(ctx, &arguments).await,
         "read_chapter" => read_chapter(ctx, &arguments),
+        "character" => lookup_character(ctx, &arguments),
         "mindmap" => mindmap(&arguments),
         "wordcloud" => make_wordcloud(ctx, &arguments),
         other => Err(format!("没有叫 {other} 的工具")),
@@ -199,6 +215,7 @@ fn label_of(name: &str) -> &'static str {
     match name {
         "search_book" => "检索",
         "read_chapter" => "读取章节",
+        "character" => "查角色",
         "mindmap" => "生成思维导图",
         "wordcloud" => "统计词频",
         _ => "工具",
@@ -210,6 +227,98 @@ fn ensure_book_text(ctx: &ToolContext<'_>, book_id: &str) -> Result<(), String> 
     crate::library::chapters::ensure_text(ctx.library, book_id)
         .map(|_| ())
         .map_err(|err| err.to_string())
+}
+
+/* --------------------------------------------------------------- the graph */
+
+/// The most relations a card hands the model.
+///
+/// A character who appears in every chapter has hundreds; what the model needs
+/// is the shape of them, and the rest is context spent on repetition.
+const MAX_CARD_RELATIONS: usize = 40;
+
+/// One entity's card, read from the knowledge graph rather than from the text.
+///
+/// The graph already exists for the panel; using it here is what makes 「林昭是
+/// 谁」 cheap and grounded instead of a fresh search over the whole book. When
+/// the book has no graph the tool says so and names the fallback, because a
+/// model that is merely told "failed" will retry the same call.
+fn lookup_character(ctx: &ToolContext<'_>, arguments: &Value) -> Result<ToolOutcome, String> {
+    let name = arguments
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| "缺少 name".to_string())?;
+    let book_id = ctx
+        .book_id
+        .ok_or_else(|| "当前没有打开的书，查不了角色；可以请读者先打开一本".to_string())?;
+
+    let (entities, _) = ctx
+        .library
+        .with(|conn| book_graph::counts(conn, book_id))
+        .map_err(|err| err.to_string())?;
+    if entities == 0 {
+        return Err(
+            "这本书还没有抽取知识图谱；改用 search_book 检索原文，或用 read_chapter 读章节".into(),
+        );
+    }
+
+    let found = ctx
+        .library
+        .with(|conn| {
+            let entity = book_graph::entity(conn, book_id, name)?;
+            let relations = book_graph::query(conn, book_id, Some(name))?.relations;
+            Ok((entity, relations))
+        })
+        .map_err(|err| err.to_string())?;
+
+    let (entity, relations) = found;
+    let Some(entity) = entity else {
+        return Err(format!("知识图谱里没有「{name}」；可以改用 search_book 检索原文"));
+    };
+
+    Ok(ToolOutcome {
+        view: ToolCallView {
+            name: "character".into(),
+            label: format!("角色「{name}」"),
+            detail: format!("{} 条关系", relations.len()),
+            ok: true,
+            sources: Vec::new(),
+            mindmap: None,
+            wordcloud: None,
+        },
+        for_model: card_text(&entity.name, &entity.kind, entity.mentions, &relations),
+    })
+}
+
+/// The card as the model reads it. Split out because it is the whole of what
+/// this tool says, and the only part worth asserting on.
+fn card_text(name: &str, kind: &str, mentions: usize, relations: &[GraphRelation]) -> String {
+    let mut out = format!("「{name}」（{kind}，全书提及 {mentions} 次）\n");
+    if relations.is_empty() {
+        out.push_str("\n图谱里没有与它相关的关系。\n");
+        return out;
+    }
+
+    out.push_str("\n关系：\n");
+    for relation in relations.iter().take(MAX_CARD_RELATIONS) {
+        out.push_str(&format!(
+            "- {} {} {}（第 {} 章）",
+            relation.subject,
+            relation.relation,
+            relation.object,
+            relation.chapter_idx + 1
+        ));
+        if !relation.evidence.is_empty() {
+            out.push_str(&format!("：{}", relation.evidence));
+        }
+        out.push('\n');
+    }
+    if relations.len() > MAX_CARD_RELATIONS {
+        out.push_str(&format!("（还有 {} 条关系未列出）\n", relations.len() - MAX_CARD_RELATIONS));
+    }
+    out
 }
 
 /* ------------------------------------------------------------- retrieval */
@@ -523,11 +632,21 @@ mod tests {
     #[test]
     fn every_tool_is_described_and_has_required_arguments() {
         let defs = definitions();
-        assert_eq!(defs.len(), 4);
+        // Named rather than counted: a new tool is a decision about what the
+        // model may do, and it should be made here as well as in `definitions`.
+        assert_eq!(
+            defs.iter().map(|def| def.function.name).collect::<Vec<_>>(),
+            ["search_book", "read_chapter", "character", "mindmap", "wordcloud"],
+        );
         for def in &defs {
             assert!(!def.function.description.is_empty(), "{}", def.function.name);
             assert_eq!(def.kind, "function");
             assert_eq!(def.function.parameters["type"], json!("object"));
+            assert!(
+                def.function.parameters["required"].as_array().is_some_and(|list| !list.is_empty()),
+                "{} 没有声明必填参数",
+                def.function.name
+            );
         }
     }
 
@@ -572,9 +691,64 @@ mod tests {
 
     #[test]
     fn every_tool_has_a_label_of_its_own() {
-        for name in ["search_book", "read_chapter", "mindmap", "wordcloud"] {
+        for name in ["search_book", "read_chapter", "character", "mindmap", "wordcloud"] {
             assert_ne!(label_of(name), "工具", "{name} 缺一个标签");
         }
         assert_eq!(label_of("nope"), "工具");
+    }
+
+    #[test]
+    fn a_card_says_what_the_entity_is_and_where_it_was_seen() {
+        let relations = vec![
+            GraphRelation {
+                subject: "林昭".into(),
+                relation: "拜师".into(),
+                object: "玄清道人".into(),
+                evidence: "他在山门前跪了三日".into(),
+                chapter_idx: 2,
+            },
+            GraphRelation {
+                subject: "苏晚".into(),
+                relation: "认得".into(),
+                object: "林昭".into(),
+                evidence: String::new(),
+                chapter_idx: 7,
+            },
+        ];
+        let text = card_text("林昭", "人物", 42, &relations);
+
+        assert!(text.starts_with("「林昭」（人物，全书提及 42 次）"), "{text}");
+        // Both directions of the relation reach the card, with the chapter a
+        // reader would be sent to.
+        assert!(text.contains("- 林昭 拜师 玄清道人（第 3 章）：他在山门前跪了三日"), "{text}");
+        assert!(text.contains("- 苏晚 认得 林昭（第 8 章）\n"), "{text}");
+    }
+
+    #[test]
+    fn a_card_without_relations_says_so_rather_than_looking_empty() {
+        let text = card_text("断剑", "物品", 1, &[]);
+        assert!(text.contains("没有与它相关的关系"), "{text}");
+        assert!(!text.contains("关系："), "{text}");
+    }
+
+    #[test]
+    fn a_card_cuts_the_archive_and_says_how_much_it_cut() {
+        let relations: Vec<GraphRelation> = (0..MAX_CARD_RELATIONS + 5)
+            .map(|index| GraphRelation {
+                subject: "林昭".into(),
+                relation: format!("关系{index}"),
+                object: "某人".into(),
+                evidence: String::new(),
+                chapter_idx: index,
+            })
+            .collect();
+        let text = card_text("林昭", "人物", 200, &relations);
+
+        assert!(text.contains(&format!("关系{}", MAX_CARD_RELATIONS - 1)), "{text}");
+        assert!(
+            !text.contains(&format!("关系{MAX_CARD_RELATIONS}（")),
+            "超出上限的不该出现：{text}"
+        );
+        assert!(text.contains("还有 5 条关系未列出"), "{text}");
     }
 }
