@@ -395,6 +395,12 @@ export function AskAiPanel({
         >
           让助手查书
         </button>
+        {/* What the switch actually turns on. The label promises looking things
+            up; it also unlocks the character card, the mind map and the word
+            cloud, and a reader who only reads "查书" will never ask for those. */}
+        {!ragMode && (
+          <span className="text-text-3 truncate text-[11px]">检索 · 人物卡 · 导图 · 词云</span>
+        )}
         {ragMode && ragReady && !thisBookIndexed && (
           <button
             type="button"
