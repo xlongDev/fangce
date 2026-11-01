@@ -462,7 +462,7 @@ export const commands = {
    *  `graph.build` — extracts entities and relations chapter by chapter and
    *  replaces the book's graph. Progress arrives on [`GRAPH_BUILD_EVENT`].
    */
-  graphBuild: (bookId: string) => __TAURI_INVOKE<number>("graph_build", { bookId }),
+  graphBuild: (bookId: string) => __TAURI_INVOKE<GraphBuildReport>("graph_build", { bookId }),
   /**
    *  `graph.query` — all entities when `entity` is `null`, otherwise the
    *  neighborhood of that one entity.
@@ -1326,6 +1326,26 @@ export type Font_Serialize = {
    *  rather than derived from the id, for the same reason `file` is.
    */
   license?: string | null;
+};
+
+/**
+ *  Builds the graph for one book: extract chapter by chapter, fold, replace.
+ *
+ *  `on_progress` reports `(done, total)` chapter counts. A failed chapter
+ *  aborts the build and leaves the previous graph untouched — the replacement
+ *  runs only after every chapter succeeded.
+ *  What one build produced.
+ */
+export type GraphBuildReport = {
+  entities: number;
+  relations: number;
+  /**
+   *  Chapters whose reply could not be parsed. Non-zero means the graph is
+   *  thinner than the book for those chapters — worth saying out loud rather
+   *  than shipping a quietly incomplete graph.
+   */
+  skipped: number;
+  chapters: number;
 };
 
 /**  One extracted entity. */

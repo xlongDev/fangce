@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { desktopQuery, ipc, onGraphProgress } from "@/lib/ipc";
+import { showToast } from "@/stores/toasts";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import type { GraphProgress } from "@/types/ipc";
 
@@ -70,6 +71,17 @@ export function useGraphBuild(bookId: string) {
 
   const build = useMutation({
     mutationFn: () => ipc.graphBuild(bookId),
+    onSuccess: (report) => {
+      // A chapter whose reply could not be parsed is skipped rather than
+      // aborting the build, so the graph can be thinner than the book. Saying
+      // so is the difference between a partial answer and a wrong one.
+      if (report.skipped > 0) {
+        showToast(
+          "error",
+          `${report.chapters} 章里有 ${report.skipped} 章没能抽出来，图谱会偏薄。换一个更擅长按格式输出的模型可以补上。`,
+        );
+      }
+    },
     onSettled: () => {
       setProgress(null);
       queryClient.invalidateQueries({ queryKey: ["graph"] });

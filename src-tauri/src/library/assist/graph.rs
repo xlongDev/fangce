@@ -7,6 +7,8 @@
 
 use std::collections::HashMap;
 
+use futures_util::StreamExt as _;
+
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +20,15 @@ use crate::error::{AppError, AppResult};
 /// Chapters shorter than this have nothing worth extracting; skipping them
 /// saves an LLM call each.
 const MIN_CHAPTER_CHARS: usize = 40;
+
+/// How many chapters are extracted at once.
+///
+/// One call per chapter is the design — batching them into one prompt makes the
+/// model blur two chapters together — but sequentially it is 76 calls in a row
+/// for a normal book, which is minutes of a panel that looks stuck. Four at a
+/// time is where the endpoint stops being the only thing happening, without
+/// tripping the rate limits that the free endpoints enforce.
+const CONCURRENCY: usize = 4;
 
 /// A name longer than this is almost always the model pasting prose instead of
 /// a name, so the merge step drops it.
@@ -203,13 +214,26 @@ fn replace(
 /// `on_progress` reports `(done, total)` chapter counts. A failed chapter
 /// aborts the build and leaves the previous graph untouched — the replacement
 /// runs only after every chapter succeeded.
+/// What one build produced.
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphBuildReport {
+    pub entities: usize,
+    pub relations: usize,
+    /// Chapters whose reply could not be parsed. Non-zero means the graph is
+    /// thinner than the book for those chapters — worth saying out loud rather
+    /// than shipping a quietly incomplete graph.
+    pub skipped: usize,
+    pub chapters: usize,
+}
+
 pub async fn build(
     library: &Library,
     client: &reqwest::Client,
     config: &AiConfig,
     book_id: &str,
     on_progress: &(dyn Fn(usize, usize) + Send + Sync),
-) -> AppResult<usize> {
+) -> AppResult<GraphBuildReport> {
     if !crate::ai::is_ready(config) {
         return Err(AppError::InvalidArgument(
             "还没有配置 AI 模型，先到设置里填写接口地址与模型名称".into(),
@@ -237,12 +261,48 @@ pub async fn build(
     let total = chapters.len();
     let mut entity_totals: HashMap<String, (String, usize)> = HashMap::new();
     let mut relation_totals: HashMap<(String, String, String), (String, usize)> = HashMap::new();
-    for (done, (idx, content)) in chapters.iter().enumerate() {
-        if content.trim().chars().count() >= MIN_CHAPTER_CHARS {
-            let extracted = extract_chapter(client, config, content).await?;
-            merge(&mut entity_totals, &mut relation_totals, extracted, *idx);
+
+    // One bad reply used to abort the build, throwing away every chapter that
+    // had already been extracted — which is why a 76-chapter book never got
+    // past chapter 2. A chapter that fails is now counted and skipped, and the
+    // report says how many.
+    let mut stream = futures_util::stream::iter(chapters)
+        .map(|(idx, content)| async move {
+            if content.trim().chars().count() < MIN_CHAPTER_CHARS {
+                return (idx, None);
+            }
+            (idx, Some(extract_chapter(client, config, &content).await))
+        })
+        .buffer_unordered(CONCURRENCY);
+
+    let mut extracted = 0usize;
+    let mut skipped = 0usize;
+    let mut last_error: Option<AppError> = None;
+    let mut done = 0usize;
+    while let Some((idx, result)) = stream.next().await {
+        match result {
+            None => {}
+            Some(Ok(raw)) => {
+                merge(&mut entity_totals, &mut relation_totals, raw, idx);
+                extracted += 1;
+            }
+            Some(Err(err)) => {
+                skipped += 1;
+                tracing::warn!(idx, error = %err, "这一章没抽出来，跳过");
+                last_error = Some(err);
+            }
         }
-        on_progress(done + 1, total);
+        done += 1;
+        on_progress(done, total);
+    }
+
+    // Nothing at all came back: the endpoint is wrong, the key is wrong, or the
+    // model cannot follow instructions. Writing an empty graph over a good one
+    // would be the worst possible outcome, so this is an error.
+    if extracted == 0 {
+        return Err(last_error.unwrap_or_else(|| {
+            AppError::Message("这本书没有可抽取的正文，检查章节是否已解析".into())
+        }));
     }
 
     let mut entities: Vec<GraphEntity> = entity_totals
@@ -262,8 +322,19 @@ pub async fn build(
         .collect();
 
     replace(library, book_id, &entities, &relations)?;
-    tracing::info!(book_id, entities = entities.len(), relations = relations.len(), "图谱已重建");
-    Ok(entities.len())
+    tracing::info!(
+        book_id,
+        entities = entities.len(),
+        relations = relations.len(),
+        skipped,
+        "图谱已重建"
+    );
+    Ok(GraphBuildReport {
+        entities: entities.len(),
+        relations: relations.len(),
+        skipped,
+        chapters: total,
+    })
 }
 
 /// Stored node and edge counts for one book.

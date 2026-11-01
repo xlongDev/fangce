@@ -47,7 +47,7 @@ pub async fn graph_build(
     app: AppHandle,
     state: State<'_, AppState>,
     book_id: String,
-) -> AppResult<usize> {
+) -> AppResult<crate::library::graph::GraphBuildReport> {
     let config = ai::config(&state.library)?;
     let client = super::ai::client()?;
     let library = state.library.clone();
@@ -58,9 +58,15 @@ pub async fn graph_build(
     })
     .await;
     match entities {
-        Ok(count) => {
-            let _ = app.emit(GRAPH_BUILD_EVENT, GraphProgress { done: count, total: count });
-            Ok(count)
+        Ok(report) => {
+            // The last progress event used to report the *entity* count as
+            // done/total, which made the bar jump to a number that had nothing
+            // to do with chapters.
+            let _ = app.emit(
+                GRAPH_BUILD_EVENT,
+                GraphProgress { done: report.chapters, total: report.chapters },
+            );
+            Ok(report)
         }
         Err(err) => Err(err),
     }
