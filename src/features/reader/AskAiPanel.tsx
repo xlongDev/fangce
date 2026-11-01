@@ -19,6 +19,7 @@ import {
 } from "@/hooks/useAi";
 import { useIndexBook, useRagStatus } from "@/hooks/useRag";
 import { useSavePath } from "@/hooks/useSavePath";
+import { setToolsEnabled, toolsEnabled } from "@/lib/aiToolPreference";
 import {
   forgetConversation,
   rememberConversation,
@@ -88,7 +89,9 @@ export function AskAiPanel({
   const { choose } = useSavePath();
 
   const [input, setInput] = useState(seedQuestion);
-  const [ragMode, setRagMode] = useState(false);
+  // On unless the reader turned it off: tools the model cannot see are tools
+  // it cannot pick, and 「梳理人物关系」 without them is a paragraph.
+  const [ragMode, setRagMode] = useState(toolsEnabled);
   const [renaming, setRenaming] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
 
@@ -385,7 +388,11 @@ export function AskAiPanel({
         <button
           type="button"
           aria-pressed={ragMode}
-          onClick={() => setRagMode((on) => !on)}
+          onClick={() => {
+            const next = !ragMode;
+            setRagMode(next);
+            setToolsEnabled(next);
+          }}
           className={cn(
             "focus-visible:focus-ring rounded-full border px-2.5 py-1 text-[12px] transition-colors",
             ragMode

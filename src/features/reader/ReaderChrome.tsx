@@ -11,6 +11,7 @@ import {
   CaretLeft,
   CaretRight,
   Check,
+  ChatCircleText,
   EyeSlash,
   Faders,
   Graph,
@@ -180,6 +181,17 @@ export function ReaderToolButtons({
         onClick={() => onTogglePanel("graph")}
       >
         <Graph size={16} />
+      </GlassIconButton>
+      {/* The assistant had no door of its own: it could only be opened by
+          selecting text and picking 问 AI, so a reader who wanted to ask
+          something else had no way in. */}
+      <GlassIconButton
+        label="AI 助手"
+        size="sm"
+        className={CHROME_BTN}
+        onClick={() => onTogglePanel("ai")}
+      >
+        <ChatCircleText size={16} />
       </GlassIconButton>
       <GlassIconButton
         label="AI 导读"
