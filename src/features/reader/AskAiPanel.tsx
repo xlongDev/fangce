@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { DownloadSimple, PencilSimple, Plus, Trash, X } from "@phosphor-icons/react";
 
 import { AiErrorCard } from "@/components/common/AiErrorCard";
@@ -19,6 +19,11 @@ import {
 } from "@/hooks/useAi";
 import { useIndexBook, useRagStatus } from "@/hooks/useRag";
 import { useSavePath } from "@/hooks/useSavePath";
+import {
+  forgetConversation,
+  rememberConversation,
+  rememberedConversation,
+} from "@/lib/aiConversationMemory";
 import { completeAiConfig } from "@/lib/aiConfig";
 import { cn } from "@/lib/cn";
 import { showToast } from "@/stores/toasts";
@@ -97,6 +102,7 @@ export function AskAiPanel({
   const startNew = () => {
     setConversationId(null);
     setRenaming(false);
+    rememberConversation(bookId, null);
     chat.reset();
   };
 
@@ -108,11 +114,35 @@ export function AskAiPanel({
     try {
       const loaded = await loadConversation.mutateAsync(id);
       setConversationId(id);
+      rememberConversation(bookId, id);
       chat.hydrate(loaded.messages.map(toTurn));
     } catch (error) {
+      // A pointer to a conversation that no longer exists — deleted from
+      // another window, or by a reset. Drop it rather than fail on every open.
+      forgetConversation(bookId);
       showToast("error", String(error));
     }
   };
+
+  /**
+   * Reopens the conversation the reader was last in.
+   *
+   * The drawer unmounts this panel when it closes, so the stream state goes with
+   * it. Every message is already in the database; without this the reader would
+   * have to find their own conversation in the dropdown after every close.
+   *
+   * The ref is the guard, not the dependency list: `open` is rebuilt every
+   * render, and this has to run exactly once per mount.
+   */
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current) return;
+    restored.current = true;
+    const remembered = rememberedConversation(bookId);
+    if (!remembered) return;
+    void open(remembered);
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookId]);
 
   const ask = async (question: string) => {
     const trimmed = question.trim();
@@ -127,6 +157,7 @@ export function AskAiPanel({
         const created = await createConversation.mutateAsync(bookId);
         id = created.id;
         setConversationId(id);
+        rememberConversation(bookId, id);
       } catch (error) {
         showToast("error", String(error));
         return;
