@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::ai::AiConfig;
-use crate::ai::chat::{FunctionDef, ToolCall, ToolDef};
+use crate::ai::chat::{self, ChatMessage, FunctionDef, Role, StreamEvent, ToolCall, ToolDef};
 use crate::ai::wordcloud::{self, WordCount};
 use crate::ai::{embeddings, rerank};
 use crate::db::Library;
@@ -25,10 +25,23 @@ use crate::library::rag::{self, RagHit};
 /// the final cut before `/rerank` picks the best few.
 const RECALL_MULTIPLIER: usize = 4;
 
-/// How much of one chapter may travel to the model. A chapter past this is cut
-/// and told so — silently truncating would let the model claim the ending does
-/// not exist.
-const MAX_CHAPTER_CHARS: usize = 30_000;
+/// A chapter shorter than this travels whole.
+const READ_FULL_UNDER: usize = 12_000;
+
+/// A longer chapter is compressed in pieces of about this many characters.
+const SEGMENT_CHARS: usize = 10_000;
+
+/// The most pieces compressed in one call.
+///
+/// A file with no chapter detection imports as one enormous chapter, so the
+/// count is not bounded by anything the reader chose. Past this the pieces are
+/// sampled evenly, which keeps the beginning, the middle and the ending in the
+/// digest instead of only the beginning.
+const MAX_SEGMENTS: usize = 8;
+
+/// Roughly how many characters the whole digest should come to — the same order
+/// as a full chapter, so the model sees one consistent size either way.
+const DIGEST_CHARS: usize = 10_000;
 
 /// One tool call as the panel draws it.
 #[derive(specta::Type, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -70,6 +83,9 @@ pub struct ToolContext<'a> {
     pub book_id: Option<&'a str>,
     /// The reader's position, for a spoiler-safe search.
     pub max_chapter: Option<usize>,
+    /// True once the reader has pressed 停止. Compressing a long chapter is
+    /// several model calls, and none of them should start after that.
+    pub cancelled: &'a (dyn Fn() -> bool + Sync),
 }
 
 /// The schemas sent with every agent request.
@@ -182,7 +198,7 @@ pub async fn run(ctx: &ToolContext<'_>, call: &ToolCall) -> ToolOutcome {
 
     let result = match call.name.as_str() {
         "search_book" => search_book(ctx, &arguments).await,
-        "read_chapter" => read_chapter(ctx, &arguments),
+        "read_chapter" => read_chapter(ctx, &arguments).await,
         "character" => lookup_character(ctx, &arguments),
         "mindmap" => mindmap(&arguments),
         "wordcloud" => make_wordcloud(ctx, &arguments),
@@ -424,7 +440,7 @@ async fn search_book(ctx: &ToolContext<'_>, arguments: &Value) -> Result<ToolOut
     })
 }
 
-fn read_chapter(ctx: &ToolContext<'_>, arguments: &Value) -> Result<ToolOutcome, String> {
+async fn read_chapter(ctx: &ToolContext<'_>, arguments: &Value) -> Result<ToolOutcome, String> {
     let book_id = ctx.book_id.ok_or_else(|| "没有打开的书".to_string())?;
     let chapter = arguments
         .get("chapter")
@@ -461,38 +477,147 @@ fn read_chapter(ctx: &ToolContext<'_>, arguments: &Value) -> Result<ToolOutcome,
     }
 
     let total = content.chars().count();
-    let body: String = if total > MAX_CHAPTER_CHARS {
-        content.chars().take(MAX_CHAPTER_CHARS).collect()
-    } else {
-        content.clone()
-    };
-    let truncated = total > MAX_CHAPTER_CHARS;
+    if total <= READ_FULL_UNDER {
+        return Ok(ToolOutcome {
+            view: ToolCallView {
+                name: "read_chapter".into(),
+                label: format!("读取第 {chapter} 章"),
+                detail: format!("{title}（{total} 字）"),
+                ok: true,
+                sources: Vec::new(),
+                mindmap: None,
+                wordcloud: None,
+            },
+            for_model: format!("第 {chapter} 章「{title}」的正文：\n\n{content}"),
+        });
+    }
 
+    let (digest, compressed, pieces) = compress_chapter(ctx, &content).await?;
     Ok(ToolOutcome {
         view: ToolCallView {
             name: "read_chapter".into(),
             label: format!("读取第 {chapter} 章"),
-            detail: if truncated {
-                format!("{title}（前 {MAX_CHAPTER_CHARS} 字）")
-            } else {
-                format!("{title}（{total} 字）")
-            },
+            detail: format!("{title}（{total} 字 → 提要）"),
             ok: true,
             sources: Vec::new(),
             mindmap: None,
             wordcloud: None,
         },
         for_model: format!(
-            "第 {chapter} 章「{title}」的正文：\n\n{body}{}",
-            if truncated {
-                format!(
-                    "\n\n（这一章共 {total} 字，上面只是前 {MAX_CHAPTER_CHARS} 字，后面的内容你还没有看到。）"
-                )
-            } else {
-                String::new()
-            }
+            "第 {chapter} 章「{title}」的提要（本章共 {total} 字，分 {pieces} 段，压缩了其中 {compressed} 段）：\n\n{digest}"
         ),
     })
+}
+
+/// Compresses a chapter too long to send whole.
+///
+/// Truncating — what this used to do — is worse than it looks: the model gets a
+/// chapter that simply stops, and answers about the ending as if it had read it.
+/// Compressing every piece keeps the whole chapter present; the price is a model
+/// call per piece, which is why it only happens past `READ_FULL_UNDER`.
+async fn compress_chapter(
+    ctx: &ToolContext<'_>,
+    content: &str,
+) -> Result<(String, usize, usize), String> {
+    let pieces = split_segments(content, SEGMENT_CHARS);
+    let count = pieces.len();
+    let picks = segment_picks(count);
+
+    let target = (DIGEST_CHARS / picks.len()).max(500);
+    let mut parts: Vec<String> = Vec::with_capacity(picks.len());
+    for (position, &piece) in picks.iter().enumerate() {
+        if (ctx.cancelled)() {
+            return Err("读者停止了这一轮".into());
+        }
+        parts.push(digest_segment(ctx, pieces[piece], target, position + 1, picks.len()).await?);
+    }
+
+    let mut out = parts.join("\n\n");
+    if picks.len() < count {
+        out.push_str(&format!(
+            "\n\n（本章共 {count} 段，上面是均匀抽取的 {} 段，其余段没有压缩。）",
+            picks.len()
+        ));
+    }
+    Ok((out, picks.len(), count))
+}
+
+/// Which pieces to compress.
+///
+/// All of them when they fit; otherwise evenly spaced, so the opening, the
+/// middle and the ending all survive instead of only the opening.
+fn segment_picks(count: usize) -> Vec<usize> {
+    if count <= MAX_SEGMENTS {
+        return (0..count).collect();
+    }
+    (0..MAX_SEGMENTS).map(|slot| slot * (count - 1) / (MAX_SEGMENTS - 1)).collect()
+}
+
+/// One piece of a long chapter, compressed by the chat model.
+///
+/// Deliberately not sent through the reader's system prompt: this is an errand,
+/// not a conversation, and a persona prompt would turn a summary into an answer.
+async fn digest_segment(
+    ctx: &ToolContext<'_>,
+    segment: &str,
+    target: usize,
+    position: usize,
+    of: usize,
+) -> Result<String, String> {
+    let prompt = format!(
+        "下面是同一章正文的第 {position}/{of} 段。把它压缩成不超过 {target} 字的提要。\n\
+         保留：人物、地点、发生的事、因果与转折、有信息量的对话结论。\n\
+         去掉：景物铺陈、重复描写、没有信息量的寒暄。\n\
+         这一段可能从句子中间开始或结束，按内容概括即可，不要猜测缺失的部分。\n\
+         只输出提要正文，不要复述任务，不要加标题。\n\n{segment}"
+    );
+
+    let mut digest = String::new();
+    chat::stream_chat(
+        ctx.client,
+        ctx.config,
+        vec![ChatMessage::new(Role::User, prompt)],
+        None,
+        &mut |event| {
+            if let StreamEvent::Delta(text) = event {
+                digest.push_str(&text);
+            }
+            !(ctx.cancelled)()
+        },
+    )
+    .await
+    .map_err(|err| format!("压缩第 {position} 段失败：{err}"))?;
+
+    let trimmed = digest.trim();
+    if trimmed.is_empty() {
+        return Err(format!("压缩第 {position} 段时模型没有返回内容"));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Splits into pieces of at most `size` characters.
+///
+/// Character boundaries, not bytes — slicing a UTF-8 sequence in half panics. A
+/// piece may begin mid-sentence, which the prompt tells the model to expect.
+fn split_segments(text: &str, size: usize) -> Vec<&str> {
+    if size == 0 {
+        return vec![text];
+    }
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut count = 0;
+    for (index, _) in text.char_indices() {
+        if count == size {
+            out.push(&text[start..index]);
+            start = index;
+            count = 0;
+        }
+        count += 1;
+    }
+    if start < text.len() {
+        out.push(&text[start..]);
+    }
+    out
 }
 
 /* ------------------------------------------------------------- rendering */
@@ -695,6 +820,45 @@ mod tests {
             assert_ne!(label_of(name), "工具", "{name} 缺一个标签");
         }
         assert_eq!(label_of("nope"), "工具");
+    }
+
+    #[test]
+    fn a_short_text_is_one_piece() {
+        assert_eq!(split_segments("林昭", 10), vec!["林昭"]);
+    }
+
+    #[test]
+    fn splitting_never_cuts_a_character_in_half() {
+        // Every character here is three bytes; slicing on bytes would panic.
+        let text = "林昭走进大殿";
+        let pieces = split_segments(text, 2);
+        assert_eq!(pieces, vec!["林昭", "走进", "大殿"]);
+        assert_eq!(pieces.concat(), text);
+    }
+
+    #[test]
+    fn an_exact_multiple_leaves_no_empty_tail() {
+        assert_eq!(split_segments("abcdef", 3), vec!["abc", "def"]);
+    }
+
+    #[test]
+    fn a_zero_window_is_the_whole_text() {
+        assert_eq!(split_segments("abc", 0), vec!["abc"]);
+    }
+
+    #[test]
+    fn every_piece_is_compressed_when_they_fit() {
+        assert_eq!(segment_picks(3), vec![0, 1, 2]);
+        assert_eq!(segment_picks(MAX_SEGMENTS).len(), MAX_SEGMENTS);
+    }
+
+    #[test]
+    fn a_long_chapter_is_sampled_from_end_to_end() {
+        let picks = segment_picks(100);
+        assert_eq!(picks.len(), MAX_SEGMENTS);
+        assert_eq!(picks[0], 0, "开头必须被覆盖");
+        assert_eq!(*picks.last().expect("非空"), 99, "结尾必须被覆盖");
+        assert!(picks.windows(2).all(|pair| pair[0] < pair[1]), "不能重复或倒退：{picks:?}");
     }
 
     #[test]

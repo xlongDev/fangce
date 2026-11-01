@@ -509,15 +509,17 @@ pub(crate) async fn run_stream(
 ) -> AppResult<crate::ai::agent::AgentOutcome> {
     let library = &state.library;
     let client = client()?;
+    let request_id = args.request_id.to_string();
+    let cancel = state.ai_runs.begin(&request_id);
     let ctx = crate::ai::tools::ToolContext {
         library,
         client: &client,
         config: args.config,
         book_id: args.book_id,
         max_chapter: args.max_chapter,
+        cancelled: &|| cancel.load(std::sync::atomic::Ordering::Relaxed),
     };
 
-    let request_id = args.request_id.to_string();
     let mut sink = |event: crate::ai::agent::AgentEvent| {
         use crate::ai::agent::AgentEvent;
         let mut delta = blank(&request_id);
