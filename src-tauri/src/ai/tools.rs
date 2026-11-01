@@ -844,6 +844,7 @@ fn strip_fence(markdown: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::test_support::{Harness, answer, direct_client, mock_chat};
 
     #[test]
     fn every_tool_is_described_and_has_required_arguments() {
@@ -911,6 +912,119 @@ mod tests {
             assert_ne!(label_of(name), "工具", "{name} 缺一个标签");
         }
         assert_eq!(label_of("nope"), "工具");
+    }
+
+    /* ------------------------------------------------- against a library */
+
+    #[test]
+    fn a_character_card_is_read_from_the_graph() {
+        let harness = Harness::new("tool-character");
+        harness.add_entity("林昭", "人物", 42);
+        harness.add_entity("玄清道人", "人物", 7);
+        harness.add_relation("林昭", "拜师", "玄清道人", "他在山门前跪了三日", 2);
+
+        let client = direct_client();
+        let config = AiConfig::default();
+        let ctx = ToolContext {
+            library: &harness.library,
+            client: &client,
+            config: &config,
+            book_id: Some("b"),
+            max_chapter: None,
+            cancelled: &|| false,
+        };
+
+        let outcome = lookup_character(&ctx, &json!({ "name": "林昭" })).expect("card");
+
+        assert!(outcome.view.ok);
+        assert_eq!(outcome.view.label, "角色「林昭」");
+        assert_eq!(outcome.view.detail, "1 条关系");
+        assert!(outcome.for_model.contains("人物，全书提及 42 次"), "{}", outcome.for_model);
+        assert!(
+            outcome.for_model.contains("林昭 拜师 玄清道人（第 3 章）：他在山门前跪了三日"),
+            "{}",
+            outcome.for_model
+        );
+    }
+
+    #[test]
+    fn a_book_without_a_graph_names_the_tool_to_use_instead() {
+        // A model told only "failed" retries the same call; one told what else it
+        // has switches.
+        let harness = Harness::new("tool-character-empty");
+        let client = direct_client();
+        let config = AiConfig::default();
+        let ctx = ToolContext {
+            library: &harness.library,
+            client: &client,
+            config: &config,
+            book_id: Some("b"),
+            max_chapter: None,
+            cancelled: &|| false,
+        };
+
+        let error = match lookup_character(&ctx, &json!({ "name": "林昭" })) {
+            Ok(_) => panic!("没有图谱时不该返回卡片"),
+            Err(message) => message,
+        };
+
+        assert!(error.contains("search_book"), "{error}");
+    }
+
+    #[test]
+    fn a_long_chapter_is_compressed_instead_of_cut() {
+        // 24,990 characters, so three pieces of about ten thousand.
+        let harness = Harness::new("tool-compress");
+        harness.add_chapter(0, "第一章", &"林昭走进大殿。".repeat(3570));
+        let mock =
+            mock_chat(vec![answer("第一段提要"), answer("第二段提要"), answer("第三段提要")]);
+
+        let config = AiConfig { base_url: mock.base_url.clone(), ..AiConfig::default() };
+        let client = direct_client();
+        let ctx = ToolContext {
+            library: &harness.library,
+            client: &client,
+            config: &config,
+            book_id: Some("b"),
+            max_chapter: None,
+            cancelled: &|| false,
+        };
+
+        let outcome = tauri::async_runtime::block_on(read_chapter(&ctx, &json!({ "chapter": 1 })))
+            .expect("read");
+
+        assert!(outcome.view.detail.contains("→ 提要"), "{}", outcome.view.detail);
+        assert!(outcome.for_model.contains("压缩了其中 3 段"), "{}", outcome.for_model);
+        // Every piece is summarised, and the digests are joined rather than the
+        // first one standing in for the chapter.
+        assert_eq!(mock.count(), 3);
+        assert!(outcome.for_model.contains("第一段提要"), "{}", outcome.for_model);
+        assert!(outcome.for_model.contains("第三段提要"), "{}", outcome.for_model);
+        assert!(!outcome.for_model.contains("后面的内容你还没有看到"), "不该再有截断说明");
+    }
+
+    #[test]
+    fn a_short_chapter_is_sent_whole_and_costs_nothing() {
+        let harness = Harness::new("tool-short");
+        harness.add_chapter(0, "第一章", "林昭走进大殿。");
+        // No mock: a request here would fail to connect, so reaching the network
+        // at all would turn this test red.
+        let config = AiConfig::default();
+        let client = direct_client();
+        let ctx = ToolContext {
+            library: &harness.library,
+            client: &client,
+            config: &config,
+            book_id: Some("b"),
+            max_chapter: None,
+            cancelled: &|| false,
+        };
+
+        let outcome = tauri::async_runtime::block_on(read_chapter(&ctx, &json!({ "chapter": 1 })))
+            .expect("read");
+
+        assert!(!outcome.view.detail.contains("提要"), "{}", outcome.view.detail);
+        assert!(outcome.for_model.contains("林昭走进大殿。"), "{}", outcome.for_model);
     }
 
     #[test]
