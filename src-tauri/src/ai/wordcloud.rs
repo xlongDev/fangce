@@ -26,14 +26,6 @@ pub struct WordCount {
     pub count: u32,
 }
 
-/// How much text one call may chew through.
-///
-/// Measured on real prose: 322,722 characters in 1.48 s, about 220k characters a
-/// second. A 300k-character book is therefore ~1.4 s and the cap below is ~18 s —
-/// the cap exists so a pathological import cannot turn one question into a
-/// minute of work.
-pub const MAX_CHARS: usize = 4_000_000;
-
 /// A single `Jieba` costs ~10 MB of dictionary and a moment to build, so it is
 /// built once per process rather than per call.
 fn segmenter() -> &'static Jieba {
@@ -166,6 +158,10 @@ fn is_noise(word: &str) -> bool {
 }
 
 /// Counts words across `texts` and returns the `limit` most frequent.
+///
+/// Measured on real prose: 322,722 characters in 1.48 s, about 220k characters a
+/// second. How much text to hand over is therefore a decision about one
+/// question's cost, and it is made by the caller (`ai::tools::SAMPLE_CHARS`).
 ///
 /// Ties are broken alphabetically so two runs over the same book produce the
 /// same list — a word cloud that reshuffles on every ask reads as random.
