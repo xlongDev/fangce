@@ -40,6 +40,12 @@ const BOOK_PREFIX: &str = "/book/";
 /// `Registry::font`).
 const FONT_PREFIX: &str = "/font/";
 
+/// Path prefix under which generated character portraits are addressed.
+///
+/// `<book id>/<slug>` — two segments, because a portrait belongs to one book and
+/// two books may both have a 林昭.
+const PORTRAIT_PREFIX: &str = "/portrait/";
+
 /// How long a font response may be reused. The URL carries a UUID minted at
 /// import, so this content can never change under it.
 const FONT_CACHE: &str = "public, max-age=31536000, immutable";
@@ -63,13 +69,14 @@ pub struct Registry(Arc<Mutex<Option<Ready>>>);
 struct Ready {
     library: Library,
     fonts_dir: PathBuf,
+    portraits_dir: PathBuf,
 }
 
 impl Registry {
     /// Publishes the opened library. Called once, from setup.
-    pub fn set(&self, library: Library, fonts_dir: PathBuf) {
+    pub fn set(&self, library: Library, fonts_dir: PathBuf, portraits_dir: PathBuf) {
         if let Ok(mut slot) = self.0.lock() {
-            *slot = Some(Ready { library, fonts_dir });
+            *slot = Some(Ready { library, fonts_dir, portraits_dir });
         }
     }
 
@@ -101,6 +108,9 @@ fn serve(registry: &Registry, request: &Request<Vec<u8>>) -> Response<Cow<'stati
     }
     if let Some(id) = font_id(path) {
         return registry.font(id, &uri);
+    }
+    if let Some((book, name)) = portrait_parts(path) {
+        return registry.portrait(book, name, &uri);
     }
     tracing::warn!(uri = %uri, "资源协议收到无法识别的路径");
     empty(StatusCode::NOT_FOUND)
@@ -139,6 +149,33 @@ impl Registry {
         }
     }
 
+    /// Serves one generated portrait.
+    ///
+    /// No cache header: the file is rewritten in place when the reader asks for
+    /// another take, and the URL has to stay the same for the panel to find it
+    /// again — so the browser is told to ask every time.
+    fn portrait(&self, book: &str, name: &str, uri: &str) -> Response<Cow<'static, [u8]>> {
+        let Some(Ready { portraits_dir, .. }) = self.ready() else {
+            tracing::debug!(uri = %uri, "书库尚未就绪，拒绝资源请求");
+            return empty(StatusCode::SERVICE_UNAVAILABLE);
+        };
+
+        let path = crate::ai::image::portrait_path(&portraits_dir, book, name);
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                let mut response = Response::new(Cow::Owned(bytes));
+                let headers = response.headers_mut();
+                headers.insert(CONTENT_TYPE, HeaderValue::from_static("image/png"));
+                headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+                response
+            }
+            Err(err) => {
+                tracing::debug!(path = %path.display(), error = %err, "读取立绘失败");
+                empty(StatusCode::NOT_FOUND)
+            }
+        }
+    }
+
     /// Serves one imported font.
     ///
     /// Two of these headers carry weight rather than decoration. A font is
@@ -149,7 +186,7 @@ impl Registry {
     /// UUID minted at import time, so it is immutable by construction, while
     /// refetching a 20 MB CJK face once per section would be visible as stutter.
     fn font(&self, id: &str, uri: &str) -> Response<Cow<'static, [u8]>> {
-        let Some(Ready { library, fonts_dir }) = self.ready() else {
+        let Some(Ready { library, fonts_dir, .. }) = self.ready() else {
             tracing::debug!(uri = %uri, "书库尚未就绪，拒绝资源请求");
             return empty(StatusCode::SERVICE_UNAVAILABLE);
         };
@@ -250,10 +287,14 @@ impl Registry {
 /// malformed or hostile URL from reaching a query at all.
 fn resource_id<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
     let id = path.strip_prefix(prefix)?;
-    let valid = !id.is_empty()
+    valid_id(id).then_some(id)
+}
+
+/// Whether a path segment could be one of our ids.
+fn valid_id(id: &str) -> bool {
+    !id.is_empty()
         && id.len() <= 64
-        && id.bytes().all(|byte| byte.is_ascii_hexdigit() || byte == b'-');
-    valid.then_some(id)
+        && id.bytes().all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
 }
 
 /// Cover id from a request path.
@@ -264,6 +305,21 @@ fn cover_id(path: &str) -> Option<&str> {
 /// Book id from a request path.
 fn book_id(path: &str) -> Option<&str> {
     resource_id(path, BOOK_PREFIX)
+}
+
+/// Book id and character name from a portrait request path.
+///
+/// The book segment is held to the same rule as a cover id; the name is not,
+/// because it is Chinese, and `image::portrait_path` sanitises it before it ever
+/// reaches the filesystem.
+fn portrait_parts(path: &str) -> Option<(&str, &str)> {
+    let rest = path.strip_prefix(PORTRAIT_PREFIX)?;
+    let (book, name) = rest.split_once('/')?;
+    let name = name.strip_suffix(".png").unwrap_or(name);
+    if book.is_empty() || name.is_empty() || name.len() > 200 {
+        return None;
+    }
+    valid_id(book).then_some((book, name))
 }
 
 /// Imported font id from a request path.

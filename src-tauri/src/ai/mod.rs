@@ -14,6 +14,7 @@
 pub mod agent;
 pub mod chat;
 pub mod embeddings;
+pub mod image;
 pub mod lookup;
 pub mod rerank;
 pub mod tools;
@@ -103,6 +104,24 @@ pub struct AiConfig {
     /// translation.
     #[serde(default)]
     pub deepl_key: String,
+
+    /// Text-to-image backend for character portraits: `a1111`, `openai_compat`,
+    /// or empty for "off".
+    ///
+    /// A separate switch from the chat model on purpose. Most readers have a
+    /// chat key and no way to draw; turning portraits on should not be something
+    /// they have to undo.
+    #[serde(default)]
+    pub image_backend: String,
+    /// Where that backend lives. Empty for the backend's own default port.
+    #[serde(default)]
+    pub image_base_url: String,
+    /// Key for it. A local Stable Diffusion needs none.
+    #[serde(default)]
+    pub image_api_key: String,
+    /// Model name. Ignored by A1111, which draws with whatever is loaded.
+    #[serde(default)]
+    pub image_model: String,
 
     /// Saved endpoints. Seeded from the flat fields on first save, so the
     /// switcher is never empty.
@@ -203,6 +222,10 @@ impl Default for AiConfig {
             embedding_model: String::new(),
             embedding_base_url: String::new(),
             embedding_api_key: String::new(),
+            image_backend: String::new(),
+            image_base_url: String::new(),
+            image_api_key: String::new(),
+            image_model: String::new(),
             rerank_model: String::new(),
             deepl_key: String::new(),
             profiles: Vec::new(),
@@ -292,6 +315,22 @@ pub fn set_config(library: &Library, next: &AiConfig) -> AppResult<AiConfig> {
         crate::net::secure_base_url(&next.embedding_base_url, "向量接口地址")?
     };
     stored.embedding_api_key = next.embedding_api_key.trim().to_string();
+    stored.image_backend = match next.image_backend.trim() {
+        "" => String::new(),
+        value @ ("a1111" | "openai_compat") => value.to_string(),
+        other => {
+            return Err(AppError::InvalidArgument(format!("不认识的文生图后端：{other}")));
+        }
+    };
+    // Only validated when the feature is on: an empty address means "use the
+    // backend's default", which is a port this side would have to guess at.
+    stored.image_base_url = if next.image_base_url.trim().is_empty() {
+        String::new()
+    } else {
+        crate::net::secure_base_url(&next.image_base_url, "文生图接口地址")?
+    };
+    stored.image_api_key = next.image_api_key.trim().to_string();
+    stored.image_model = next.image_model.trim().to_string();
     stored.rerank_model = next.rerank_model.trim().to_string();
     stored.deepl_key = next.deepl_key.trim().to_string();
     stored.temperature = next.temperature.clamp(0.0, 2.0);

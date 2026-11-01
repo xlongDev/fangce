@@ -1,11 +1,18 @@
 import { useState } from "react";
-import { ChatCircleText, Database, SlidersHorizontal, Sparkle } from "@phosphor-icons/react";
+import {
+  ChatCircleText,
+  Database,
+  ImageSquare,
+  SlidersHorizontal,
+  Sparkle,
+} from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { Actions, Feedback, SettingsGroup, Unsaved } from "@/features/settings/section";
 import { SecretsNotice } from "@/features/settings/SecretsNotice";
 import { ConnectionRows } from "@/features/settings/ai/ConnectionRows";
 import { GenerationRows } from "@/features/settings/ai/GenerationRows";
+import { ImageRows } from "@/features/settings/ai/ImageRows";
 import { PromptRows } from "@/features/settings/ai/PromptRows";
 import { RetrievalRows } from "@/features/settings/ai/RetrievalRows";
 import {
@@ -313,6 +320,17 @@ function AiForm({ initial, defaults }: { initial: AiConfigFull; defaults: AiConf
           onProbeLocal={onProbeLocal}
           probingLocal={probeLocal.isPending}
         />
+      </SettingsGroup>
+
+      <SettingsGroup
+        id="ai"
+        anchor="ai-image"
+        icon={ImageSquare}
+        title="AI 立绘"
+        description="给角色卡画一张立绘。默认关闭；打开后会先用对话模型写描述，再交给图像接口。"
+        badge={<Unsaved dirty={dirty} />}
+      >
+        <ImageRows draft={draft} set={set} />
       </SettingsGroup>
     </>
   );

@@ -91,6 +91,15 @@ pub fn cover_url(book_id: &str) -> String {
     format!("{}/cover/{book_id}", resource_origin())
 }
 
+/// Absolute URL for a generated character portrait.
+///
+/// The name is slugged here as well as on the way in, so the URL a command hands
+/// back is exactly the one the protocol resolves — a reader that pasted a name
+/// with a slash in it would otherwise get a 404 from its own picture.
+pub fn portrait_url(book_id: &str, name: &str) -> String {
+    format!("{}/portrait/{book_id}/{}", resource_origin(), crate::ai::image::slug(name))
+}
+
 /// Absolute URL for an imported font's bytes.
 ///
 /// Built here rather than in the renderer for the same reason as the cover URL:

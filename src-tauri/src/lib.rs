@@ -134,6 +134,8 @@ pub fn run() -> tauri::Result<()> {
             commands::ai::ai_chat,
             commands::ai::ai_agent_chat,
             commands::ai::ai_cancel,
+            commands::ai::ai_character_portrait,
+            commands::ai::ai_character_portrait_url,
             commands::ai::ai_digest,
             commands::ai::ai_detect_oc_ferry,
             commands::ai::ai_default_system_prompt,
@@ -207,7 +209,11 @@ pub fn run() -> tauri::Result<()> {
                 let library = db::Library::open(&layout.data_dir)?;
                 // The fonts directory goes with it: it is the one resource the
                 // protocol has to resolve itself (see `resource::Registry`).
-                registry.set(library.clone(), layout.fonts_dir.clone());
+                registry.set(
+                    library.clone(),
+                    layout.fonts_dir.clone(),
+                    crate::ai::image::portraits_dir(&layout.covers_dir),
+                );
 
                 // Credentials written before they were sealed are still in the
                 // clear in this database file. Best-effort: a machine with no
@@ -365,6 +371,8 @@ mod specta_bindings {
                 commands::ai::ai_chat,
                 commands::ai::ai_agent_chat,
                 commands::ai::ai_cancel,
+                commands::ai::ai_character_portrait,
+                commands::ai::ai_character_portrait_url,
                 commands::ai::ai_digest,
                 commands::ai::ai_detect_oc_ferry,
                 commands::ai::ai_default_system_prompt,

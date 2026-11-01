@@ -65,7 +65,7 @@ pub const SECRET_FIELDS: [(&str, &[&str]); 2] = [
     // `profileKeys.*` is the one entry that is not a plain field: it names an
     // object whose *values* are all credentials (one API key per saved AI
     // profile). See [`for_each_secret`].
-    ("ai.config", &["apiKey", "deeplKey", "embeddingApiKey", "profileKeys.*"]),
+    ("ai.config", &["apiKey", "deeplKey", "embeddingApiKey", "imageApiKey", "profileKeys.*"]),
     ("sync.webdav", &["username", "password"]),
 ];
 

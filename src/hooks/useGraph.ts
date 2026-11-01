@@ -31,6 +31,36 @@ export function useGraphQuery(bookId: string, entity: string | null) {
   });
 }
 
+/** Where this character's portrait lives, if one was ever drawn.
+ *
+ *  A query rather than a mutation because the panel asks it on every open, and
+ *  the answer is a file that either exists or does not.
+ */
+export function useCharacterPortrait(bookId: string, name: string | null) {
+  return useQuery<string | null>({
+    queryKey: ["graph", "portrait", bookId, name],
+    queryFn: desktopQuery<string | null>(null, () =>
+      name ? ipc.aiCharacterPortraitUrl(bookId, name) : Promise.resolve(null),
+    ),
+    enabled: name !== null,
+    staleTime: 30_000,
+  });
+}
+
+/** Draws a new portrait, then re-asks where it lives. */
+export function useGeneratePortrait(bookId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<string, unknown, { name: string; appearance: string }>({
+    mutationFn: ({ name, appearance }) => ipc.aiCharacterPortrait(bookId, name, appearance),
+    // Inline: the failure is shown under the button that caused it, and it names
+    // a settings group the reader has to go and fix.
+    meta: { silent: true },
+    onSuccess: (_url, { name }) => {
+      queryClient.invalidateQueries({ queryKey: ["graph", "portrait", bookId, name] });
+    },
+  });
+}
+
 /** Rebuilds one book's graph, tracking live chapter progress. */
 export function useGraphBuild(bookId: string) {
   const queryClient = useQueryClient();

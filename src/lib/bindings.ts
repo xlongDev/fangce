@@ -52,6 +52,25 @@ export const commands = {
    */
   aiCancel: (requestId: string) => __TAURI_INVOKE<void>("ai_cancel", { requestId }),
   /**
+   *  `ai.characterPortrait` — draws a portrait for one character and returns its URL.
+   *
+   *  Two model calls, in this order: the chat model writes the prompt, the image
+   *  backend draws it. The chat model is the right tool for the first — the reader
+   *  typed a name and a line of description, and a picture needs a paragraph — and
+   *  it is also the only place the two prompt families can be produced without a
+   *  per-vendor template table.
+   */
+  aiCharacterPortrait: (bookId: string, name: string, appearance: string) =>
+    __TAURI_INVOKE<string>("ai_character_portrait", { bookId, name, appearance }),
+  /**
+   *  `ai.characterPortraitUrl` — where an existing portrait lives, if there is one.
+   *
+   *  A separate call from the one that draws: the panel asks this on every open,
+   *  and it must not start a generation.
+   */
+  aiCharacterPortraitUrl: (bookId: string, name: string) =>
+    __TAURI_INVOKE<string | null>("ai_character_portrait_url", { bookId, name }),
+  /**
    *  `ai.digest` — streams a reading guide for one book.
    *
    *  The cache is consulted first, and a hit is replayed as a single delta: the
@@ -701,6 +720,21 @@ export type AiConfig = {
    *  translation.
    */
   deeplKey?: string;
+  /**
+   *  Text-to-image backend for character portraits: `a1111`, `openai_compat`,
+   *  or empty for "off".
+   *
+   *  A separate switch from the chat model on purpose. Most readers have a
+   *  chat key and no way to draw; turning portraits on should not be something
+   *  they have to undo.
+   */
+  imageBackend?: string;
+  /**  Where that backend lives. Empty for the backend's own default port. */
+  imageBaseUrl?: string;
+  /**  Key for it. A local Stable Diffusion needs none. */
+  imageApiKey?: string;
+  /**  Model name. Ignored by A1111, which draws with whatever is loaded. */
+  imageModel?: string;
   /**
    *  Saved endpoints. Seeded from the flat fields on first save, so the
    *  switcher is never empty.

@@ -3,6 +3,7 @@ import { ArrowUUpLeft } from "@phosphor-icons/react";
 
 import { AiErrorCard } from "@/components/common/AiErrorCard";
 import { useGraphBuild, useGraphQuery, useGraphStatus } from "@/hooks/useGraph";
+import { PortraitCard } from "@/features/graph/PortraitCard";
 import type { GraphEntity } from "@/types/ipc";
 
 /** The kinds the extractor is asked for, in the order a reader looks for them.
@@ -125,6 +126,7 @@ export function GraphPanel({
           <p className="text-text-3 ml-auto shrink-0 text-[11px]">{relations.length} 条关系</p>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+          <PortraitCard bookId={bookId} entity={selected} />
           {relations.length === 0 ? (
             <p className="text-text-3 text-[13px] leading-relaxed">没有抽到与它相关的关系。</p>
           ) : (

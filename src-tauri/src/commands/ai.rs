@@ -238,6 +238,120 @@ pub struct OcFerryDiscovery {
     pub models: Vec<String>,
 }
 
+/// What every portrait is asked not to be.
+///
+/// A local SD checkpoint draws extra fingers and watermarks without being told
+/// twice; a hosted model is better but not reliable about text. One list, in
+/// English, because that is what both were trained on.
+const PORTRAIT_NEGATIVE: &str = "lowres, blurry, bad anatomy, extra fingers, extra limbs,      watermark, signature, text, logo, jpeg artifacts";
+
+/// `ai.characterPortrait` — draws a portrait for one character and returns its URL.
+///
+/// Two model calls, in this order: the chat model writes the prompt, the image
+/// backend draws it. The chat model is the right tool for the first — the reader
+/// typed a name and a line of description, and a picture needs a paragraph — and
+/// it is also the only place the two prompt families can be produced without a
+/// per-vendor template table.
+#[tauri::command]
+#[specta::specta]
+pub async fn ai_character_portrait(
+    state: State<'_, AppState>,
+    book_id: String,
+    name: String,
+    appearance: String,
+) -> AppResult<String> {
+    let config = crate::ai::config(&state.library)?;
+    let backend = crate::ai::image::Backend::parse(&config.image_backend).ok_or_else(|| {
+        AppError::InvalidArgument("还没有配置文生图后端，先到设置里选一个".into())
+    })?;
+    // The prompt has to be written by something; a machine with no chat model
+    // cannot get past the first of the two calls.
+    if !is_ready(&config) {
+        return Err(AppError::InvalidArgument(NOT_CONFIGURED.into()));
+    }
+    if backend == crate::ai::image::Backend::OpenAiCompat && config.image_model.trim().is_empty() {
+        return Err(AppError::InvalidArgument("这个文生图后端需要一个模型名".into()));
+    }
+
+    let subject = portrait_subject(&state.library, &book_id, &name, &appearance)?;
+    let client = client()?;
+    let prompt =
+        crate::ai::image::write_prompt(&client, &config, backend.prompt_style(), &subject).await?;
+    let bytes = crate::ai::image::draw(
+        &client,
+        &config,
+        &crate::ai::image::PortraitRequest {
+            prompt: &prompt,
+            negative: PORTRAIT_NEGATIVE,
+            // Portrait proportions. A1111 draws exactly this; a hosted service
+            // rounds it to its nearest supported size.
+            width: 512,
+            height: 768,
+        },
+    )
+    .await?;
+
+    let path = crate::ai::image::portrait_path(&state.layout.covers_dir, &book_id, &name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, bytes)?;
+
+    tracing::info!(book = %book_id, name = %name, backend = backend.as_str(), "立绘已生成");
+    Ok(crate::library::portrait_url(&book_id, &name))
+}
+
+/// `ai.characterPortraitUrl` — where an existing portrait lives, if there is one.
+///
+/// A separate call from the one that draws: the panel asks this on every open,
+/// and it must not start a generation.
+#[tauri::command]
+#[specta::specta]
+pub fn ai_character_portrait_url(
+    state: State<'_, AppState>,
+    book_id: String,
+    name: String,
+) -> Option<String> {
+    let path = crate::ai::image::portrait_path(&state.layout.covers_dir, &book_id, &name);
+    path.is_file().then(|| crate::library::portrait_url(&book_id, &name))
+}
+
+/// What the chat model is told about the character.
+///
+/// The reader's own words come first — they have a picture in mind and the book
+/// does not. The graph fills in the rest, which is why this is cheap: the
+/// evidence was extracted once, when the graph was built.
+fn portrait_subject(
+    library: &Library,
+    book_id: &str,
+    name: &str,
+    appearance: &str,
+) -> AppResult<String> {
+    let mut out = format!("名字：{name}\n");
+    if let Some(entity) = library.with(|conn| crate::library::graph::entity(conn, book_id, name))? {
+        out.push_str(&format!("类型：{}\n", entity.kind));
+    }
+    if !appearance.trim().is_empty() {
+        out.push_str(&format!("读者写的形象：{}\n", appearance.trim()));
+    }
+
+    let relations = library.with(|conn| crate::library::graph::query(conn, book_id, Some(name)))?;
+    let evidence: Vec<&str> = relations
+        .relations
+        .iter()
+        .map(|relation| relation.evidence.trim())
+        .filter(|text| !text.is_empty())
+        .take(6)
+        .collect();
+    if !evidence.is_empty() {
+        out.push_str("书里的片段：\n");
+        for line in evidence {
+            out.push_str(&format!("- {line}\n"));
+        }
+    }
+    Ok(out)
+}
+
 /// `ai.cancel` — asks the turn with this request id to stop.
 ///
 /// Fire and forget: the answer that already arrived stays on screen, and the
