@@ -110,6 +110,8 @@ export function ReaderPanels({
     context: string | null;
     onClearContext: () => void;
     chapterTitle: string;
+    /** The reader's position, for a spoiler-safe retrieval. */
+    chapterIdx: number;
     paragraphs: string[];
     onJumpCitation: (hit: RagHit) => void;
   };
@@ -183,6 +185,7 @@ export function ReaderPanels({
                 selection={ai.context}
                 onClearSelection={ai.onClearContext}
                 chapterTitle={ai.chapterTitle}
+                chapterIdx={ai.chapterIdx}
                 paragraphs={ai.paragraphs}
                 onJump={ai.onJumpCitation}
               />

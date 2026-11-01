@@ -132,9 +132,21 @@ pub fn run() -> tauri::Result<()> {
             commands::ai::ai_set_config,
             commands::ai::ai_test,
             commands::ai::ai_chat,
+            commands::ai::ai_agent_chat,
+            commands::ai::ai_cancel,
             commands::ai::ai_digest,
             commands::ai::ai_detect_oc_ferry,
             commands::ai::ai_default_system_prompt,
+            commands::ai::ai_defaults,
+            commands::ai::ai_list_models,
+            commands::ai::ai_probe_local_embeddings,
+            commands::conversation::ai_conversation_list,
+            commands::conversation::ai_conversation_get,
+            commands::conversation::ai_conversation_create,
+            commands::conversation::ai_conversation_rename,
+            commands::conversation::ai_conversation_delete,
+            commands::conversation::ai_conversation_append,
+            commands::conversation::ai_conversation_export,
             commands::lookup::lookup_translate,
             commands::lookup::lookup_wikipedia,
             commands::lookup::lookup_wiktionary,
@@ -150,7 +162,6 @@ pub fn run() -> tauri::Result<()> {
             commands::font::font_delete,
             commands::rag::rag_status,
             commands::rag::rag_index_book,
-            commands::rag::rag_chat,
             commands::graph::graph_status,
             commands::graph::graph_build,
             commands::graph::graph_query,
@@ -209,7 +220,12 @@ pub fn run() -> tauri::Result<()> {
                 }
 
                 tracing::info!(path = %layout.data_dir.display(), "application data directory ready");
-                app.manage(AppState { started_at: Instant::now(), layout, library });
+                app.manage(AppState {
+                    started_at: Instant::now(),
+                    layout,
+                    library,
+                    ai_runs: Default::default(),
+                });
 
                 // Last, because it is the one piece of the shell that can be
                 // built without the library: a tray that fails to appear should
@@ -347,9 +363,21 @@ mod specta_bindings {
                 commands::ai::ai_set_config,
                 commands::ai::ai_test,
                 commands::ai::ai_chat,
+                commands::ai::ai_agent_chat,
+                commands::ai::ai_cancel,
                 commands::ai::ai_digest,
                 commands::ai::ai_detect_oc_ferry,
                 commands::ai::ai_default_system_prompt,
+                commands::ai::ai_defaults,
+                commands::ai::ai_list_models,
+                commands::ai::ai_probe_local_embeddings,
+                commands::conversation::ai_conversation_list,
+                commands::conversation::ai_conversation_get,
+                commands::conversation::ai_conversation_create,
+                commands::conversation::ai_conversation_rename,
+                commands::conversation::ai_conversation_delete,
+                commands::conversation::ai_conversation_append,
+                commands::conversation::ai_conversation_export,
                 commands::annotation::annotation_create,
                 commands::annotation::annotation_update,
                 commands::annotation::annotation_anchor,
@@ -399,7 +427,6 @@ mod specta_bindings {
                 commands::ocr::ocr_scanned_pages,
                 commands::rag::rag_status,
                 commands::rag::rag_index_book,
-                commands::rag::rag_chat,
                 commands::reader::reader_toc,
                 commands::reader::reader_chapter,
                 commands::reader::reader_set_progress,

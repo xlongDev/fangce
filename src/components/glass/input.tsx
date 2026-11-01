@@ -1,5 +1,6 @@
-import { forwardRef, type InputHTMLAttributes } from "react";
+import { forwardRef, type InputHTMLAttributes, type SelectHTMLAttributes } from "react";
 import * as SwitchPrimitive from "@radix-ui/react-switch";
+import { CaretDown } from "@phosphor-icons/react";
 
 import { cn } from "@/lib/cn";
 
@@ -26,6 +27,58 @@ export const GlassInput = forwardRef<HTMLInputElement, GlassInputProps>(function
     />
   );
 });
+
+/** A glass `<select>` that matches [`GlassInput`] on the same row.
+ *
+ *  Native, not a listbox of our own: the OS draws the popup, which is what
+ *  keyboard users and screen readers already know how to drive, and a fourteen
+ *  entry provider list is exactly where a custom menu starts costing more than
+ *  it returns. The caret is ours because the native one does not sit still
+ *  across platforms.
+ */
+export const GlassSelect = forwardRef<HTMLSelectElement, GlassSelectProps>(function GlassSelect(
+  { className, children, ...rest },
+  ref,
+) {
+  return (
+    <div className="glass focus-within:focus-ring relative flex h-9 w-full min-w-0 items-center rounded-md">
+      <select
+        ref={ref}
+        className={cn(
+          "text-text-1 h-full w-full appearance-none truncate bg-transparent pr-8 pl-3 text-sm outline-none",
+          // The popup is painted by the OS, so the glass theme's light-on-dark
+          // ink would be unreadable on it.
+          "[&>option]:text-black",
+          className,
+        )}
+        {...rest}
+      >
+        {children}
+      </select>
+      <CaretDown
+        size={12}
+        className="text-text-3 pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2"
+      />
+    </div>
+  );
+});
+
+interface GlassSelectProps extends SelectHTMLAttributes<HTMLSelectElement> {}
+
+/** A native range input, tinted with the accent. */
+export function GlassRange({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      type="range"
+      className={cn(
+        "accent-accent h-9 w-full cursor-pointer bg-transparent",
+        "focus-visible:focus-ring rounded",
+        className,
+      )}
+      {...rest}
+    />
+  );
+}
 
 interface GlassSwitchProps {
   checked: boolean;

@@ -8,7 +8,7 @@
 //! it, not before.
 
 use rusqlite::{Connection, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::ai::AiConfig;
 use crate::ai::embeddings;
@@ -20,11 +20,8 @@ use crate::error::{AppError, AppResult};
 /// far better than they tolerate mid-sentence cuts.
 const TARGET_CHARS: usize = 600;
 
-/// How many chunks an answer cites.
-pub const TOP_K: usize = 6;
-
 /// One retrieved chunk, handed to the frontend and to the prompt builder.
-#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RagHit {
     pub book_id: String,
@@ -134,10 +131,12 @@ pub async fn reindex(
     }
 
     let mut vectors = Vec::with_capacity(total);
+    // Resolved once: every batch must go to the endpoint this book is being
+    // indexed against, and the search side resolves the same way.
+    let (base_url, api_key) = crate::ai::embedding_endpoint(config);
     for (done, batch) in planned.chunks(embeddings::BATCH).enumerate() {
         let texts: Vec<String> = batch.iter().map(|(_, text, _, _)| text.clone()).collect();
-        let mut embedded =
-            embeddings::embed(client, &config.base_url, &config.api_key, model, &texts).await?;
+        let mut embedded = embeddings::embed(client, base_url, api_key, model, &texts).await?;
         for vector in &mut embedded {
             embeddings::normalize(vector)
                 .ok_or_else(|| AppError::Message("模型返回了零向量，无法用于检索".into()))?;
@@ -175,20 +174,28 @@ pub async fn reindex(
 
 /// Brute-force top-k over normalized vectors. Scope is one book when
 /// `book_id` is set, the whole library otherwise.
+///
+/// `max_chapter` keeps the scan to chapters at or before a position — the
+/// reader's own, for a spoiler-safe question. It is inclusive because the
+/// reader is usually *in* that chapter and asking about it.
 pub fn search(
     conn: &Connection,
     model: &str,
     query: &[f32],
     book_id: Option<&str>,
+    max_chapter: Option<usize>,
     k: usize,
 ) -> AppResult<Vec<RagHit>> {
     let dims = query.len() as i64;
     let mut stmt = conn.prepare(
         "SELECT c.book_id, b.title, c.chapter_idx, c.start_char, c.text, c.embedding
            FROM chunks c JOIN books b ON b.id = c.book_id
-          WHERE c.model = ?1 AND c.dims = ?2 AND (?3 IS NULL OR c.book_id = ?3)",
+          WHERE c.model = ?1 AND c.dims = ?2
+            AND (?3 IS NULL OR c.book_id = ?3)
+            AND (?4 IS NULL OR c.chapter_idx <= ?4)",
     )?;
-    let mut rows = stmt.query(params![model, dims, book_id])?;
+    let max_chapter = max_chapter.map(|idx| idx as i64);
+    let mut rows = stmt.query(params![model, dims, book_id, max_chapter])?;
     let mut scored: Vec<(f32, RagHit)> = Vec::new();
     while let Some(row) = rows.next()? {
         let Some(vector) = embeddings::from_bytes(&row.get::<_, Vec<u8>>(5)?) else {

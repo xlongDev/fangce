@@ -508,6 +508,58 @@ DROP TRIGGER IF EXISTS chapters_fts_au;
 DROP TABLE IF EXISTS chapters_fts;
 "#,
     },
+    Migration {
+        version: 19,
+        name: "init_ai_conversations",
+        // The assistant's history, kept next to the chunks because both are
+        // derived from the same book and both die with it.
+        //
+        // A conversation belongs to one book (`book_id` nullable: a question
+        // asked with nothing open is still a conversation), and the cascade is
+        // what stops a deleted book leaving orphaned transcripts behind. The
+        // message row carries its own `reasoning`, `citations` and `usage` as
+        // JSON rather than as columns: nothing queries into them, and a shape
+        // that changes with the provider's wire format should not be a schema
+        // migration.
+        sql: r#"
+CREATE TABLE ai_conversations (
+  id         TEXT PRIMARY KEY,
+  book_id    TEXT REFERENCES books (id) ON DELETE CASCADE,
+  title      TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX ai_conversations_book ON ai_conversations (book_id, updated_at DESC);
+CREATE INDEX ai_conversations_recent ON ai_conversations (updated_at DESC);
+
+CREATE TABLE ai_messages (
+  id              INTEGER PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES ai_conversations (id) ON DELETE CASCADE,
+  role            TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+  content         TEXT NOT NULL,
+  reasoning       TEXT,
+  citations       TEXT,
+  usage           TEXT,
+  created_at      INTEGER NOT NULL
+);
+
+CREATE INDEX ai_messages_conversation ON ai_messages (conversation_id, id);
+"#,
+    },
+    Migration {
+        version: 20,
+        name: "ai_message_tools",
+        // What the assistant looked up while answering: the searches it ran and
+        // the maps and clouds it drew. A JSON column rather than a table
+        // because a tool row is only ever read back with its message, whole.
+        //
+        // Without this the mind map and the word cloud would exist only until
+        // the panel closed, which is the one thing a reader expects to keep.
+        sql: r#"
+ALTER TABLE ai_messages ADD COLUMN tools TEXT;
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.

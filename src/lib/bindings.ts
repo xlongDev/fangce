@@ -22,8 +22,35 @@ export const commands = {
    *  of events and is terminated by one with `done: true`, which also carries
    *  `error` when the stream failed part way through.
    */
-  aiChat: (requestId: string, messages: ChatMessage[]) =>
+  aiChat: (requestId: string, messages: ChatMessage_Deserialize[]) =>
     __TAURI_INVOKE<null>("ai_chat", { requestId, messages }),
+  /**
+   *  `ai.agentChat` — the reading assistant with tools: the model decides what to
+   *  look up instead of being handed six chunks up front.
+   *
+   *  This is what the panel's 检索全书库 toggle uses. The tools are offered on
+   *  every round, and a model that cannot call them simply answers — which is why
+   *  there is no separate "no tool support" switch to maintain.
+   *
+   *  `history` is the conversation so far, already trimmed by the renderer.
+   *  `max_chapter` keeps a spoiler-safe search inside the reader's position.
+   */
+  aiAgentChat: (
+    requestId: string,
+    question: string,
+    bookId: string | null,
+    history: ChatMessage_Deserialize[],
+    maxChapter: number | null,
+  ) => __TAURI_INVOKE<null>("ai_agent_chat", { requestId, question, bookId, history, maxChapter }),
+  /**
+   *  `ai.cancel` — asks the turn with this request id to stop.
+   *
+   *  Fire and forget: the answer that already arrived stays on screen, and the
+   *  stream's own `done` event is what tells the panel it is over. Returns nothing
+   *  because there is nothing to report — an id that is already finished is not
+   *  an error, it is the reader pressing stop a moment too late.
+   */
+  aiCancel: (requestId: string) => __TAURI_INVOKE<void>("ai_cancel", { requestId }),
   /**
    *  `ai.digest` — streams a reading guide for one book.
    *
@@ -52,6 +79,84 @@ export const commands = {
    *  restore it without keeping a second copy that drifts from this one.
    */
   aiDefaultSystemPrompt: () => __TAURI_INVOKE<string>("ai_default_system_prompt"),
+  /**
+   *  `ai.defaults` — a fully populated default config, so the settings page can
+   *  offer "恢复默认" without keeping a second copy of the numbers that drifts.
+   */
+  aiDefaults: () => __TAURI_INVOKE<AiConfig>("ai_defaults"),
+  /**
+   *  `ai.listModels` — `GET {baseUrl}/models`, for the model picker.
+   *
+   *  Deliberately does not save: listing models must not persist a half-typed key.
+   */
+  aiListModels: (config: AiConfig) => __TAURI_INVOKE<string[]>("ai_list_models", { config }),
+  /**
+   *  `ai.probeLocalEmbeddings` — finds a local runtime and its embedding models.
+   *
+   *  This is the cheap answer to "I want embeddings to run locally": the reader
+   *  already has, or can install in one download, a runtime that embeds better
+   *  than anything this app could bundle — and shipping a 47 MB model plus an
+   *  ONNX runtime to duplicate that is a trade this app does not need to make.
+   *  Probing the two default ports is what turns "configure it yourself" into one
+   *  button.
+   *
+   *  Returns every runtime that answered; an empty list means none did, which is
+   *  not an error — most readers have none installed.
+   */
+  aiProbeLocalEmbeddings: () =>
+    __TAURI_INVOKE<LocalEmbeddingEndpoint[]>("ai_probe_local_embeddings"),
+  /**  `ai.conversationList` — the switcher's rows, newest first. */
+  aiConversationList: (bookId: string | null) =>
+    __TAURI_INVOKE<ConversationSummary[]>("ai_conversation_list", { bookId }),
+  /**  `ai.conversationGet` — one conversation with its messages. */
+  aiConversationGet: (id: string) =>
+    __TAURI_INVOKE<Conversation_Serialize>("ai_conversation_get", { id }),
+  /**  `ai.conversationCreate` — starts an empty one; the first question titles it. */
+  aiConversationCreate: (bookId: string | null) =>
+    __TAURI_INVOKE<ConversationSummary>("ai_conversation_create", { bookId }),
+  /**  `ai.conversationRename` */
+  aiConversationRename: (id: string, title: string) =>
+    __TAURI_INVOKE<null>("ai_conversation_rename", { id, title }),
+  /**  `ai.conversationDelete` */
+  aiConversationDelete: (id: string) => __TAURI_INVOKE<null>("ai_conversation_delete", { id }),
+  /**
+   *  `ai.conversationAppend` — stores one finished turn.
+   *
+   *  Called by the renderer twice per exchange: once for the question as it is
+   *  sent, once for the answer when the stream completes. A stream that failed
+   *  half way through therefore leaves nothing behind.
+   */
+  aiConversationAppend: (
+    id: string,
+    role: string,
+    content: string,
+    reasoning: string | null,
+    citations: RagHit[],
+    usage: {
+      input: number;
+      cached: number;
+      output: number;
+    } | null,
+    tools: ToolCallView_Deserialize[],
+  ) =>
+    __TAURI_INVOKE<StoredMessage_Serialize>("ai_conversation_append", {
+      id,
+      role,
+      content,
+      reasoning,
+      citations,
+      usage,
+      tools,
+    }),
+  /**
+   *  `ai.conversationExport` — writes one conversation out as Markdown.
+   *
+   *  The path comes from the native save panel, so this only has to write. The
+   *  formatting lives in `library::conversation` where it can be tested without a
+   *  filesystem.
+   */
+  aiConversationExport: (id: string, path: string) =>
+    __TAURI_INVOKE<null>("ai_conversation_export", { id, path }),
   /**  `annotation.create` — records one highlight and returns it. */
   annotationCreate: (
     bookId: string,
@@ -398,12 +503,6 @@ export const commands = {
   ragStatus: (bookId: string) => __TAURI_INVOKE<RagStatus>("rag_status", { bookId }),
   /**  `rag.indexBook` — rebuilds the embedding index for one book. */
   ragIndexBook: (bookId: string) => __TAURI_INVOKE<number>("rag_index_book", { bookId }),
-  /**
-   *  `rag.chat` — retrieval-backed answer: embed the question, take the top
-   *  chunks, then stream an answer that cites them.
-   */
-  ragChat: (requestId: string, question: string, bookId: string | null) =>
-    __TAURI_INVOKE<null>("rag_chat", { requestId, question, bookId }),
   /**  `reader.toc` — chapter metadata in reading order. */
   readerToc: (bookId: string) => __TAURI_INVOKE<ChapterMeta[]>("reader_toc", { bookId }),
   /**
@@ -573,9 +672,24 @@ export type AiConfig = {
   systemPrompt?: string;
   /**
    *  Embedding model for RAG. Empty disables library-wide retrieval; the chat
-   *  assistant works without it. Same endpoint and key as chat.
+   *  assistant works without it.
    */
   embeddingModel?: string;
+  /**
+   *  Where embeddings are computed. Empty means "the chat endpoint", which is
+   *  what most hosted providers want — one key, one base URL, two models.
+   *
+   *  Set it to run the two halves in different places, which is the whole
+   *  reason a reader would want a local vector model: chat on a hosted model,
+   *  embeddings on Ollama in the next process, no key and no per-token bill
+   *  for the part that reads the entire book.
+   */
+  embeddingBaseUrl?: string;
+  /**
+   *  Key for [`Self::embedding_base_url`]; empty falls back to `api_key`, and
+   *  a local runtime needs neither.
+   */
+  embeddingApiKey?: string;
   /**
    *  Reranker for retrieval, Cohere-compatible `/rerank`. Empty disables the
    *  second-stage ranking. Same endpoint and key as chat.
@@ -587,6 +701,61 @@ export type AiConfig = {
    *  translation.
    */
   deeplKey?: string;
+  /**
+   *  Saved endpoints. Seeded from the flat fields on first save, so the
+   *  switcher is never empty.
+   */
+  profiles?: AiProfile[];
+  activeProfileId?: string;
+  /**
+   *  The key of every saved profile, by id — including the active one, which
+   *  is also mirrored into `api_key` so nothing that reads it has to know
+   *  profiles exist. A **credential**: sealed at rest, blanked out of backups
+   *  (see `crate::secrets::SECRET_FIELDS`).
+   */
+  profileKeys?: { [key in string]: string };
+  /**
+   *  Sampling temperature. Sent on every request; a model that rejects it is
+   *  retried without it (see `chat::stream_chat`).
+   *
+   *  `f64` rather than `f32` because JSON numbers are doubles: a `f32` 0.4
+   *  widens to 0.4000000059604645 on the wire, which is a number no reader
+   *  typed and no provider documents.
+   */
+  temperature?: number | null;
+  /**  Upper bound on one answer. */
+  maxTokens?: number;
+  /**
+   *  How many past exchanges travel with a new question. Trimmed in the
+   *  renderer, which is where the conversation lives.
+   */
+  contextTurns?: number;
+  /**
+   *  How many model↔tool round trips one question may take. Stored now; the
+   *  agent loop that reads it lands with the tool work.
+   */
+  maxToolRounds?: number;
+  /**
+   *  Appended after the main prompt. A place to say "这本是网络小说，别端着"
+   *  without losing the built-in voice.
+   */
+  systemPromptExtra?: string;
+  /**
+   *  Ask the provider for a reasoning stream. Vendor-specific: the parameter
+   *  that turns it on is not the same one anywhere (see
+   *  `chat::thinking_params`), and a provider that cannot be identified gets
+   *  no parameter at all rather than a guess.
+   */
+  deepThinking?: boolean;
+  /**  Show the token/cost bar under an answer. */
+  showTokenUsage?: boolean;
+  tokenPrice?: TokenPrice;
+  /**  Questions offered above the input box before the first one is asked. */
+  quickQuestions?: string[];
+  /**  Keep retrieval to chapters at or before the reader's position. */
+  spoilerSafe?: boolean;
+  /**  How many chunks retrieval hands the model. */
+  ragTopK?: number;
 };
 
 /**  One chunk of a streamed answer. */
@@ -598,6 +767,8 @@ export type AiDelta_Deserialize = {
   requestId: string;
   /**  Present on incremental text. */
   text: string | null;
+  /**  Present on incremental reasoning, for models that stream it separately. */
+  reasoning?: string | null;
   /**  Set on the final event; `null` while streaming. */
   done: boolean;
   /**  Provider's stop reason when it reports one. */
@@ -606,6 +777,13 @@ export type AiDelta_Deserialize = {
   error: string | null;
   /**  RAG sources, present on the final event of a retrieval-backed answer. */
   citations?: RagHit[];
+  /**  Token counts, present on the final event when the provider reports them. */
+  usage?: TokenUsage | null;
+  /**
+   *  One finished tool call, so the panel can draw a row for it while the
+   *  answer is still being written.
+   */
+  tool?: ToolCallView_Deserialize | null;
 };
 
 /**  One chunk of a streamed answer. */
@@ -614,6 +792,8 @@ export type AiDelta_Serialize = {
   requestId: string;
   /**  Present on incremental text. */
   text: string | null;
+  /**  Present on incremental reasoning, for models that stream it separately. */
+  reasoning?: string | null;
   /**  Set on the final event; `null` while streaming. */
   done: boolean;
   /**  Provider's stop reason when it reports one. */
@@ -622,6 +802,31 @@ export type AiDelta_Serialize = {
   error: string | null;
   /**  RAG sources, present on the final event of a retrieval-backed answer. */
   citations?: RagHit[];
+  /**  Token counts, present on the final event when the provider reports them. */
+  usage?: TokenUsage | null;
+  /**
+   *  One finished tool call, so the panel can draw a row for it while the
+   *  answer is still being written.
+   */
+  tool?: ToolCallView_Serialize | null;
+};
+
+/**
+ *  One saved endpoint, so switching between a local model and a cloud one does
+ *  not mean retyping three fields.
+ *
+ *  🔴 **A profile is a snapshot, not a runtime branch.** The flat `base_url` /
+ *  `api_key` / `model` on [`AiConfig`] stay the single source of truth every
+ *  consumer reads — RAG, OCR, translation, the reading guide and the graph all
+ *  call `ai::config()` and take it from there. Switching a profile copies the
+ *  snapshot back into those flat fields; nothing else in the app learns that
+ *  profiles exist.
+ */
+export type AiProfile = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  model: string;
 };
 
 /**  A highlight as the UI sees it. */
@@ -854,10 +1059,44 @@ export type ChapterRules = {
   url?: string;
 };
 
-/**  One turn in a conversation. `system` arrives separately, not as a message. */
-export type ChatMessage = {
+/**
+ *  One turn in a conversation. `system` arrives separately, not as a message.
+ *
+ *  The two tool fields are what makes a multi-round exchange expressible: an
+ *  assistant turn that decided to call tools carries them, and each answer to
+ *  one comes back as a `tool` turn naming the call it answers. Both are skipped
+ *  when empty, so an ordinary conversation serialises exactly as it used to.
+ */
+export type ChatMessage = ChatMessage_Serialize | ChatMessage_Deserialize;
+
+/**
+ *  One turn in a conversation. `system` arrives separately, not as a message.
+ *
+ *  The two tool fields are what makes a multi-round exchange expressible: an
+ *  assistant turn that decided to call tools carries them, and each answer to
+ *  one comes back as a `tool` turn naming the call it answers. Both are skipped
+ *  when empty, so an ordinary conversation serialises exactly as it used to.
+ */
+export type ChatMessage_Deserialize = {
   role: Role;
   content: string;
+  toolCalls?: ToolCall[];
+  toolCallId?: string | null;
+};
+
+/**
+ *  One turn in a conversation. `system` arrives separately, not as a message.
+ *
+ *  The two tool fields are what makes a multi-round exchange expressible: an
+ *  assistant turn that decided to call tools carries them, and each answer to
+ *  one comes back as a `tool` turn naming the call it answers. Both are skipped
+ *  when empty, so an ordinary conversation serialises exactly as it used to.
+ */
+export type ChatMessage_Serialize = {
+  role: Role;
+  content: string;
+  toolCalls?: ToolCall[];
+  toolCallId?: string | null;
 };
 
 /**
@@ -866,6 +1105,34 @@ export type ChatMessage = {
  */
 export type ContentRules = {
   paragraphs?: string;
+};
+
+/**  A conversation and everything in it. */
+export type Conversation = Conversation_Serialize | Conversation_Deserialize;
+
+/**  One row of the conversation switcher. */
+export type ConversationSummary = {
+  id: string;
+  /**  `None` for a question asked with nothing open. */
+  bookId: string | null;
+  /**  The book's title, for a list that spans books. `None` when `book_id` is. */
+  bookTitle: string | null;
+  title: string;
+  messageCount: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+/**  A conversation and everything in it. */
+export type Conversation_Deserialize = {
+  summary: ConversationSummary;
+  messages: StoredMessage_Deserialize[];
+};
+
+/**  A conversation and everything in it. */
+export type Conversation_Serialize = {
+  summary: ConversationSummary;
+  messages: StoredMessage_Serialize[];
 };
 
 /**  Reading time for one calendar day. */
@@ -1107,6 +1374,21 @@ export type LibraryStats = {
   finished: number;
 };
 
+/**  A local runtime that answered, and the models worth pointing embeddings at. */
+export type LocalEmbeddingEndpoint = {
+  /**  What to put in 向量接口地址. */
+  baseUrl: string;
+  /**  "Ollama" / "LM Studio", for the button's label. */
+  name: string;
+  /**
+   *  Embedding-shaped model ids. When none matched, this is the whole list —
+   *  a reader who named their model something unexpected can still pick it.
+   */
+  models: string[];
+  /**  `true` when nothing matched and `models` is unfiltered. */
+  fallback: boolean;
+};
+
 /**  What a lookup turned up. */
 export type Lookup =
   /**
@@ -1272,7 +1554,7 @@ export type ReadingStats = {
   topBooks: TopBook[];
 };
 
-export type Role = "system" | "user" | "assistant";
+export type Role = "system" | "user" | "assistant" | "tool";
 
 /**  One place where the needle occurs. */
 export type SearchHit = {
@@ -1355,6 +1637,37 @@ export type SourceProgress = {
   chapter: string;
 };
 
+/**  One stored turn. */
+export type StoredMessage = StoredMessage_Serialize | StoredMessage_Deserialize;
+
+/**  One stored turn. */
+export type StoredMessage_Deserialize = {
+  id: number;
+  /**  `"user"` or `"assistant"` — the CHECK constraint holds the same two. */
+  role: string;
+  content: string;
+  reasoning: string | null;
+  citations: RagHit[];
+  usage: TokenUsage | null;
+  /**  What the assistant looked up or drew while answering. */
+  tools: ToolCallView_Deserialize[];
+  createdAt: number;
+};
+
+/**  One stored turn. */
+export type StoredMessage_Serialize = {
+  id: number;
+  /**  `"user"` or `"assistant"` — the CHECK constraint holds the same two. */
+  role: string;
+  content: string;
+  reasoning: string | null;
+  citations: RagHit[];
+  usage: TokenUsage | null;
+  /**  What the assistant looked up or drew while answering. */
+  tools: ToolCallView_Serialize[];
+  createdAt: number;
+};
+
 /**  Where the state document lives and how to sign in. */
 export type SyncConfig = {
   /**  WebDAV collection, e.g. `https://dav.example.com/dav/方册`. */
@@ -1404,6 +1717,83 @@ export type Tally = {
 };
 
 /**
+ *  What a million tokens cost, in yuan. All three zero means "not set", and the
+ *  usage bar then shows tokens without a price.
+ */
+export type TokenPrice = {
+  /**  Input tokens served from the provider's prompt cache. */
+  inputCached?: number | null;
+  /**  Input tokens that missed the cache — the ordinary input price. */
+  inputMiss?: number | null;
+  output?: number | null;
+};
+
+/**
+ *  What one answer consumed. `cached` is a subset of `input`, not an addition
+ *  to it: the cache-hit price is cheaper, not extra.
+ */
+export type TokenUsage = {
+  input: number;
+  cached: number;
+  output: number;
+};
+
+/**  One call the model asked for, as it will be echoed back in the next request. */
+export type ToolCall = {
+  id: string;
+  name: string;
+  /**
+   *  The raw JSON the model produced. Kept as text: re-serialising a parsed
+   *  value would silently drop whatever the tool's schema did not expect, and
+   *  the tool itself is the thing that should decide that.
+   */
+  arguments: string;
+};
+
+/**  One tool call as the panel draws it. */
+export type ToolCallView = ToolCallView_Serialize | ToolCallView_Deserialize;
+
+/**  One tool call as the panel draws it. */
+export type ToolCallView_Deserialize = {
+  /**  The function name, e.g. `search_book`. */
+  name: string;
+  /**  One line naming what was asked, e.g. `检索「主角是谁」`. */
+  label: string;
+  /**  What came back, in a handful of characters. */
+  detail: string;
+  ok: boolean;
+  /**
+   *  Passages this call retrieved, so the reader can jump to them. Empty for
+   *  the tools that return no text.
+   */
+  sources?: RagHit[];
+  /**  Present when this call produced a mind map; Markdown for `markmap`. */
+  mindmap?: string | null;
+  /**  Present when this call produced a word cloud. */
+  wordcloud?: WordCount[] | null;
+};
+
+/**  One tool call as the panel draws it. */
+export type ToolCallView_Serialize = {
+  /**  The function name, e.g. `search_book`. */
+  name: string;
+  /**  One line naming what was asked, e.g. `检索「主角是谁」`. */
+  label: string;
+  /**  What came back, in a handful of characters. */
+  detail: string;
+  ok: boolean;
+  /**
+   *  Passages this call retrieved, so the reader can jump to them. Empty for
+   *  the tools that return no text.
+   */
+  sources?: RagHit[];
+  /**  Present when this call produced a mind map; Markdown for `markmap`. */
+  mindmap?: string | null;
+  /**  Present when this call produced a word cloud. */
+  wordcloud?: WordCount[] | null;
+};
+
+/**
  *  One book's reading time inside a recent window, for the "recently reading"
  *  ranking. The shelf already knows covers and authors; the page only needs
  *  the name and the number to rank by.
@@ -1442,4 +1832,10 @@ export type WikiSummary = {
   thumbnail: string | null;
   pageUrl: string;
   lang: string;
+};
+
+/**  One word and how often it appears. */
+export type WordCount = {
+  word: string;
+  count: number;
 };

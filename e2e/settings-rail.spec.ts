@@ -64,10 +64,15 @@ test("each rail entry shows the group it names, and stays lit on it", async ({ p
     // pane's top — the jump aims at `offsetTop - 16` — except for the last
     // two, which the pane runs out of scroll for and stops at the bottom with.
     expect(off, `${label} → ${id}: top at ${Math.round(off)}px`).toBeGreaterThan(-8);
-    expect(
-      off + group.height,
-      `${label} → ${id}: bottom at ${Math.round(off + group.height)}px of ${Math.round(pane.height)}`,
-    ).toBeLessThan(pane.height + 8);
+    // A group taller than the pane cannot be fully in view — the AI section's
+    // first card is — and for those the guarantee is only that the top landed
+    // at the pane's top, which is what the jump aims at.
+    if (group.height <= pane.height - 16) {
+      expect(
+        off + group.height,
+        `${label} → ${id}: bottom at ${Math.round(off + group.height)}px of ${Math.round(pane.height)}`,
+      ).toBeLessThan(pane.height + 8);
+    }
 
     // And the rail still says it is there. This is the bug: a jump used to end
     // with the highlight on the *last* group while the pane showed the one
@@ -184,4 +189,37 @@ test("去设置 lands on the AI group, not the top of the page", async ({ page }
   await expect(page.locator('nav[aria-label="设置分类"] [aria-current="true"]')).toHaveText(
     "AI 助手",
   );
+});
+
+/**
+ * The AI section is several groups behind one rail entry.
+ *
+ * It was one, and it grew past the point where one card was readable: connecting,
+ * tuning and checking the cost are three different jobs. The rail still has a
+ * single "AI 助手" row — the groups share the section id and carry their own
+ * anchors — so the two things this pins are that all three actually render, and
+ * that the rail's jump lands on the *first* of them rather than on whichever
+ * one happens to be nearest the scroll position.
+ */
+test("the AI settings are several groups behind one rail entry", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openSettings(page);
+
+  for (const name of ["AI 阅读助手", "AI 提示词", "AI 生成参数", "AI 检索与用量"]) {
+    await expect(page.getByRole("heading", { name, level: 2 }), name).toBeVisible();
+  }
+
+  const rail = page.locator('nav[aria-label="设置分类"]');
+  await expect(rail.getByRole("button", { name: "AI 助手", exact: true })).toHaveCount(1);
+
+  // Jump away and back: the landing is the first group, near the pane's top.
+  await page.getByRole("button", { name: "关于", exact: true }).click();
+  await page.waitForTimeout(900);
+  await page.getByRole("button", { name: "AI 助手", exact: true }).click();
+  await page.waitForTimeout(900);
+
+  const pane = (await page.locator(SCROLLER).boundingBox())!;
+  const group = (await page.locator('[data-section="ai"]').boundingBox())!;
+  expect(Math.round(group.y - pane.y), "AI 助手 lands at the top").toBeLessThan(60);
+  await expect(rail.locator('[aria-current="true"]')).toHaveText("AI 助手");
 });

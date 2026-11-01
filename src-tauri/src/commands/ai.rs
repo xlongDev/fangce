@@ -11,8 +11,9 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::ai::chat::{self, ChatMessage, Role, StreamEvent};
+use crate::ai::chat::{self, ChatMessage, Role};
 use crate::ai::{AiConfig, is_ready};
+use crate::db::Library;
 use crate::error::{AppError, AppResult};
 use crate::library::guide;
 use crate::state::AppState;
@@ -39,6 +40,9 @@ pub struct AiDelta {
     pub request_id: String,
     /// Present on incremental text.
     pub text: Option<String>,
+    /// Present on incremental reasoning, for models that stream it separately.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reasoning: Option<String>,
     /// Set on the final event; `null` while streaming.
     pub done: bool,
     /// Provider's stop reason when it reports one.
@@ -48,6 +52,13 @@ pub struct AiDelta {
     /// RAG sources, present on the final event of a retrieval-backed answer.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub citations: Vec<crate::library::rag::RagHit>,
+    /// Token counts, present on the final event when the provider reports them.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub usage: Option<crate::ai::usage::TokenUsage>,
+    /// One finished tool call, so the panel can draw a row for it while the
+    /// answer is still being written.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tool: Option<crate::ai::tools::ToolCallView>,
 }
 
 /// `ai.getConfig`
@@ -61,10 +72,17 @@ pub fn ai_get_config(state: State<'_, AppState>) -> AppResult<AiConfig> {
 #[tauri::command]
 #[specta::specta]
 pub fn ai_set_config(state: State<'_, AppState>, config: AiConfig) -> AppResult<AiConfig> {
-    crate::ai::set_config(&state.library, &config)?;
-    // Return the stored form: the caller trimmed and normalized it, and the UI
+    // Returns the stored form: it is trimmed, clamped and normalized, and the UI
     // should show what is actually persisted rather than what it typed.
-    crate::ai::config(&state.library)
+    crate::ai::set_config(&state.library, &config)
+}
+
+/// `ai.defaults` — a fully populated default config, so the settings page can
+/// offer "恢复默认" without keeping a second copy of the numbers that drifts.
+#[tauri::command]
+#[specta::specta]
+pub fn ai_defaults() -> AiConfig {
+    AiConfig::default()
 }
 
 /// `ai.defaultSystemPrompt` — the built-in prompt, so the settings page can
@@ -73,6 +91,16 @@ pub fn ai_set_config(state: State<'_, AppState>, config: AiConfig) -> AppResult<
 #[specta::specta]
 pub fn ai_default_system_prompt() -> String {
     crate::ai::DEFAULT_SYSTEM_PROMPT.to_string()
+}
+
+/// `ai.listModels` — `GET {baseUrl}/models`, for the model picker.
+///
+/// Deliberately does not save: listing models must not persist a half-typed key.
+#[tauri::command]
+#[specta::specta]
+pub async fn ai_list_models(config: AiConfig) -> AppResult<Vec<String>> {
+    let base_url = crate::net::secure_base_url(&config.base_url, "接口地址")?;
+    chat::list_models(&client()?, &base_url, config.api_key.trim()).await
 }
 
 /// `ai.test` — proves endpoint, key and model name work *together*.
@@ -86,21 +114,115 @@ pub async fn ai_test(config: AiConfig) -> AppResult<()> {
         return Err(AppError::InvalidArgument("先填写接口地址与模型名称".into()));
     }
     // Validate the shape locally first: a malformed URL should not need a round
-    // trip to be reported.
-    let checked = AiConfig {
-        base_url: crate::net::secure_base_url(&config.base_url, "接口地址")?,
-        model: config.model.trim().to_string(),
-        api_key: config.api_key.trim().to_string(),
-        imported_models: config.imported_models.clone(),
-        system_prompt: config.system_prompt,
-        embedding_model: config.embedding_model,
-        rerank_model: config.rerank_model,
-        deepl_key: config.deepl_key,
-    };
+    // trip to be reported. Built by cloning so a new field never has to be added
+    // here as well — that omission is how a key ends up unnormalized.
+    let mut checked = config.clone();
+    checked.base_url = crate::net::secure_base_url(&config.base_url, "接口地址")?;
+    checked.model = config.model.trim().to_string();
+    checked.api_key = config.api_key.trim().to_string();
     if checked.model.is_empty() {
         return Err(AppError::InvalidArgument("模型名称不能为空".into()));
     }
     chat::probe(&client()?, &checked).await
+}
+
+/// A local runtime that answered, and the models worth pointing embeddings at.
+#[derive(specta::Type, Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalEmbeddingEndpoint {
+    /// What to put in 向量接口地址.
+    pub base_url: String,
+    /// "Ollama" / "LM Studio", for the button's label.
+    pub name: String,
+    /// Embedding-shaped model ids. When none matched, this is the whole list —
+    /// a reader who named their model something unexpected can still pick it.
+    pub models: Vec<String>,
+    /// `true` when nothing matched and `models` is unfiltered.
+    pub fallback: bool,
+}
+
+/// The local runtimes worth asking, and the port each listens on.
+///
+/// Both speak the OpenAI-compatible `/v1/models`, which is why this is two
+/// addresses rather than two adapters.
+const LOCAL_RUNTIMES: [(&str, &str); 2] =
+    [("Ollama", "http://127.0.0.1:11434/v1"), ("LM Studio", "http://127.0.0.1:1234/v1")];
+
+/// `true` for ids that look like embedding models.
+///
+/// A heuristic, and deliberately a generous one: the cost of a false positive is
+/// one failed index build the reader can fix by typing a different name, and the
+/// cost of a false negative is a list where the right model is buried among
+/// chat models. `bge`, `gte`, `e5`, `m3` and `minilm` cover every family the
+/// local runtimes ship as of this writing.
+fn looks_like_embedding(id: &str) -> bool {
+    let lower = id.to_ascii_lowercase();
+    ["embed", "bge", "gte-", "e5-", "e5_", "m3", "minilm", "jina"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+}
+
+/// `ai.probeLocalEmbeddings` — finds a local runtime and its embedding models.
+///
+/// This is the cheap answer to "I want embeddings to run locally": the reader
+/// already has, or can install in one download, a runtime that embeds better
+/// than anything this app could bundle — and shipping a 47 MB model plus an
+/// ONNX runtime to duplicate that is a trade this app does not need to make.
+/// Probing the two default ports is what turns "configure it yourself" into one
+/// button.
+///
+/// Returns every runtime that answered; an empty list means none did, which is
+/// not an error — most readers have none installed.
+#[tauri::command]
+#[specta::specta]
+pub async fn ai_probe_local_embeddings() -> AppResult<Vec<LocalEmbeddingEndpoint>> {
+    let client = client()?;
+    let mut found = Vec::new();
+
+    for (name, base_url) in LOCAL_RUNTIMES {
+        // Short: a refused connection is known in milliseconds, and a runtime
+        // that is loading its weights should not hold the button for ten
+        // seconds.
+        let response = client
+            .get(format!("{base_url}/models"))
+            .timeout(Duration::from_millis(1500))
+            .send()
+            .await;
+        let Ok(response) = response else { continue };
+        if !response.status().is_success() {
+            continue;
+        }
+        let Ok(body) = response.json::<Value>().await else { continue };
+        let mut models: Vec<String> = body
+            .get("data")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if models.is_empty() {
+            continue;
+        }
+
+        let matching: Vec<String> =
+            models.iter().filter(|id| looks_like_embedding(id)).cloned().collect();
+        let fallback = matching.is_empty();
+        if fallback {
+            // Sorted so the picker is stable between presses.
+            models.sort();
+        }
+        found.push(LocalEmbeddingEndpoint {
+            base_url: base_url.to_string(),
+            name: name.to_string(),
+            models: if fallback { models } else { matching },
+            fallback,
+        });
+    }
+
+    Ok(found)
 }
 
 /// What a running OC Ferry exposes for the reader to adopt.
@@ -114,6 +236,18 @@ pub struct OcFerryDiscovery {
     /// Vetted model ids, e.g. `"OC · <name>"`. The reader adopts the first; the
     /// user can type any other id into the model field.
     pub models: Vec<String>,
+}
+
+/// `ai.cancel` — asks the turn with this request id to stop.
+///
+/// Fire and forget: the answer that already arrived stays on screen, and the
+/// stream's own `done` event is what tells the panel it is over. Returns nothing
+/// because there is nothing to report — an id that is already finished is not
+/// an error, it is the reader pressing stop a moment too late.
+#[tauri::command]
+#[specta::specta]
+pub fn ai_cancel(state: State<'_, AppState>, request_id: String) {
+    state.ai_runs.cancel(&request_id);
 }
 
 /// `ai.detectOcFerry` — points the reader's single AI slot at a running OC Ferry.
@@ -231,95 +365,195 @@ pub async fn ai_chat(
         return Err(AppError::InvalidArgument("没有要发送的内容".into()));
     }
 
-    let result = run_stream(&app, &request_id, &config, messages, Vec::new()).await;
+    let result = run_stream(
+        &app,
+        &state,
+        StreamArgs {
+            request_id: &request_id,
+            config: &config,
+            messages,
+            citations: Vec::new(),
+            tools: None,
+            book_id: None,
+            max_chapter: None,
+            context: None,
+        },
+    )
+    .await;
     if let Err(err) = result {
-        emit(
-            &app,
-            AiDelta {
-                request_id: request_id.clone(),
-                text: None,
-                done: true,
-                finish_reason: None,
-                error: Some(err.to_string()),
-                citations: Vec::new(),
-            },
-        );
+        let mut delta = blank(&request_id);
+        delta.done = true;
+        delta.error = Some(err.to_string());
+        emit(&app, delta);
         return Err(err);
     }
     Ok(())
 }
 
-/// Streams one answer to [`AI_STREAM_EVENT`], attaching `citations` to the
-/// final event. Shared by plain chat, RAG-backed chat and the reading guide.
+/// `ai.agentChat` — the reading assistant with tools: the model decides what to
+/// look up instead of being handed six chunks up front.
 ///
-/// Returns the assembled answer: callers that cache it (the guide) need the
-/// whole text, and the one that streams it to a reader ignores the value.
+/// This is what the panel's 检索全书库 toggle uses. The tools are offered on
+/// every round, and a model that cannot call them simply answers — which is why
+/// there is no separate "no tool support" switch to maintain.
+///
+/// `history` is the conversation so far, already trimmed by the renderer.
+/// `max_chapter` keeps a spoiler-safe search inside the reader's position.
+#[tauri::command]
+#[specta::specta]
+pub async fn ai_agent_chat(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request_id: String,
+    question: String,
+    book_id: Option<String>,
+    history: Vec<ChatMessage>,
+    max_chapter: Option<usize>,
+) -> AppResult<()> {
+    let question = question.trim().to_string();
+    if question.is_empty() {
+        return Err(AppError::InvalidArgument("没有要发送的内容".into()));
+    }
+    let config = crate::ai::config(&state.library)?;
+    if !is_ready(&config) {
+        return Err(AppError::InvalidArgument(NOT_CONFIGURED.into()));
+    }
+
+    // The contents travel with the request. Read off the async runtime: for a
+    // PDF the first `ensure` decodes the whole document, and that is not work to
+    // do on a thread other commands are waiting on.
+    let context = match book_id.clone() {
+        Some(id) => {
+            let library = state.library.clone();
+            tauri::async_runtime::spawn_blocking(move || book_context_for(&library, &id))
+                .await
+                .ok()
+                .flatten()
+        }
+        None => None,
+    };
+
+    let mut messages = history;
+    messages.push(ChatMessage::new(Role::User, question));
+
+    let result = run_stream(
+        &app,
+        &state,
+        StreamArgs {
+            request_id: &request_id,
+            config: &config,
+            messages,
+            citations: Vec::new(),
+            tools: Some(crate::ai::tools::definitions()),
+            book_id: book_id.as_deref(),
+            max_chapter,
+            context: context.as_deref(),
+        },
+    )
+    .await;
+
+    if let Err(err) = result {
+        let mut delta = blank(&request_id);
+        delta.done = true;
+        delta.error = Some(err.to_string());
+        emit(&app, delta);
+        return Err(err);
+    }
+    Ok(())
+}
+
+/// Everything one streamed turn needs.
+pub(crate) struct StreamArgs<'a> {
+    pub request_id: &'a str,
+    pub config: &'a AiConfig,
+    pub messages: Vec<ChatMessage>,
+    pub citations: Vec<crate::library::rag::RagHit>,
+    /// Offered to the model. `None` for the surfaces that ask exactly one thing
+    /// and cannot act on a tool call anyway.
+    pub tools: Option<Vec<chat::ToolDef>>,
+    /// The book being read, for the tools that look inside it.
+    pub book_id: Option<&'a str>,
+    /// The reader's position, for a spoiler-safe search.
+    pub max_chapter: Option<usize>,
+    /// Appended to the system message — the book in hand, for the agent.
+    pub context: Option<&'a str>,
+}
+
+/// A delta with every optional field empty, so each event only fills the one it
+/// carries. Written once because nine literals drifting apart is how a field
+/// gets forgotten on one path.
+fn blank(request_id: &str) -> AiDelta {
+    AiDelta {
+        request_id: request_id.to_string(),
+        text: None,
+        reasoning: None,
+        done: false,
+        finish_reason: None,
+        error: None,
+        citations: Vec::new(),
+        usage: None,
+        tool: None,
+    }
+}
+
+/// Streams one answer to [`AI_STREAM_EVENT`], running whatever tools the model
+/// asks for, and returns what the turn produced.
+///
+/// The turn ends with exactly one `done` event carrying the citations and the
+/// total usage — including the rounds spent on tools, which is the number a
+/// reader on a paid endpoint actually cares about.
 pub(crate) async fn run_stream(
     app: &AppHandle,
-    request_id: &str,
-    config: &AiConfig,
-    messages: Vec<ChatMessage>,
-    citations: Vec<crate::library::rag::RagHit>,
-) -> AppResult<String> {
+    state: &crate::state::AppState,
+    args: StreamArgs<'_>,
+) -> AppResult<crate::ai::agent::AgentOutcome> {
+    let library = &state.library;
     let client = client()?;
-    let mut full = String::new();
-    let mut finished = false;
+    let ctx = crate::ai::tools::ToolContext {
+        library,
+        client: &client,
+        config: args.config,
+        book_id: args.book_id,
+        max_chapter: args.max_chapter,
+    };
 
-    chat::stream_chat(&client, config, with_system(config, messages), &mut |event| {
-        if matches!(event, StreamEvent::Done) {
-            finished = true;
+    let request_id = args.request_id.to_string();
+    let mut sink = |event: crate::ai::agent::AgentEvent| {
+        use crate::ai::agent::AgentEvent;
+        let mut delta = blank(&request_id);
+        match event {
+            AgentEvent::Text(text) => delta.text = Some(text),
+            AgentEvent::Reasoning(reasoning) => delta.reasoning = Some(reasoning),
+            AgentEvent::Tool(view) => delta.tool = Some(view),
         }
-        let delta = match event {
-            StreamEvent::Delta(text) => {
-                full.push_str(&text);
-                AiDelta {
-                    request_id: request_id.to_string(),
-                    text: Some(text),
-                    done: false,
-                    finish_reason: None,
-                    error: None,
-                    citations: Vec::new(),
-                }
-            }
-            StreamEvent::Finish(reason) => AiDelta {
-                request_id: request_id.to_string(),
-                text: None,
-                done: false,
-                finish_reason: reason,
-                error: None,
-                citations: Vec::new(),
-            },
-            StreamEvent::Done => AiDelta {
-                request_id: request_id.to_string(),
-                text: None,
-                done: true,
-                finish_reason: None,
-                error: None,
-                citations: citations.clone(),
-            },
-        };
         emit(app, delta);
-    })
-    .await?;
+    };
 
-    // Some providers close the socket without a `[DONE]` frame once they have
-    // sent a finish reason. The stream is over either way, so say so exactly
-    // once.
-    if !finished {
-        emit(
-            app,
-            AiDelta {
-                request_id: request_id.to_string(),
-                text: None,
-                done: true,
-                finish_reason: None,
-                error: None,
-                citations,
-            },
-        );
-    }
-    tracing::info!(request_id, chars = full.chars().count(), "AI 回答完成");
-    Ok(full)
+    let messages = with_system_extra(args.config, args.messages, args.context);
+    let cancel = state.ai_runs.begin(&request_id);
+    let result =
+        crate::ai::agent::run(&client, args.config, messages, args.tools, &ctx, &mut sink, &|| {
+            cancel.load(std::sync::atomic::Ordering::Relaxed)
+        })
+        .await;
+    // Dropped before the `?`: a turn that failed must not leave its flag behind
+    // for the next request that happens to reuse the id.
+    state.ai_runs.end(&request_id);
+    let outcome = result?;
+
+    let mut done = blank(&request_id);
+    done.done = true;
+    done.citations = args.citations;
+    done.usage = outcome.usage;
+    emit(app, done);
+
+    tracing::info!(
+        request_id = %request_id,
+        chars = outcome.text.chars().count(),
+        tools = outcome.tool_calls,
+        "AI 回答完成"
+    );
+    Ok(outcome)
 }
 
 /// `ai.digest` — streams a reading guide for one book.
@@ -350,18 +584,34 @@ pub async fn ai_digest(
     }
 
     let material = state.library.with(|conn| guide::material(conn, &book_id))?;
-    // The guide carries its own instructions, and `with_system` leaves a
+    // The guide carries its own instructions, and `with_system_extra` leaves a
     // conversation alone when it already opens with one: the reader's general
     // assistant prompt must not reshape this.
     let messages = vec![
-        ChatMessage { role: Role::System, content: guide::PROMPT.to_string() },
-        ChatMessage { role: Role::User, content: material },
+        ChatMessage::new(Role::System, guide::PROMPT.to_string()),
+        ChatMessage::new(Role::User, material),
     ];
 
-    match run_stream(&app, &request_id, &config, messages, Vec::new()).await {
-        Ok(text) => {
+    let result = run_stream(
+        &app,
+        &state,
+        StreamArgs {
+            request_id: &request_id,
+            config: &config,
+            messages,
+            citations: Vec::new(),
+            tools: None,
+            book_id: Some(&book_id),
+            max_chapter: None,
+            context: None,
+        },
+    )
+    .await;
+
+    match result {
+        Ok(outcome) => {
             // Not `guide`: that name is the module this writes through.
-            let written = text.trim();
+            let written = outcome.text.trim();
             if written.is_empty() {
                 return Err(AppError::Message("模型没有返回内容".into()));
             }
@@ -369,17 +619,10 @@ pub async fn ai_digest(
             Ok(())
         }
         Err(err) => {
-            emit(
-                &app,
-                AiDelta {
-                    request_id,
-                    text: None,
-                    done: true,
-                    finish_reason: None,
-                    error: Some(err.to_string()),
-                    citations: Vec::new(),
-                },
-            );
+            let mut delta = blank(&request_id);
+            delta.done = true;
+            delta.error = Some(err.to_string());
+            emit(&app, delta);
             Err(err)
         }
     }
@@ -388,41 +631,53 @@ pub async fn ai_digest(
 /// Emits a stored answer as "one delta, then done", which is what a stream that
 /// arrived instantly looks like.
 fn replay(app: &AppHandle, request_id: &str, text: String) {
-    emit(
-        app,
-        AiDelta {
-            request_id: request_id.to_string(),
-            text: Some(text),
-            done: false,
-            finish_reason: None,
-            error: None,
-            citations: Vec::new(),
-        },
-    );
-    emit(
-        app,
-        AiDelta {
-            request_id: request_id.to_string(),
-            text: None,
-            done: true,
-            finish_reason: None,
-            error: None,
-            citations: Vec::new(),
-        },
-    );
+    let mut first = blank(request_id);
+    first.text = Some(text);
+    emit(app, first);
+
+    let mut done = blank(request_id);
+    done.done = true;
+    emit(app, done);
 }
 
-/// Prepends the configured system prompt, unless the caller already sent one.
-pub(crate) fn with_system(config: &AiConfig, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
-    if config.system_prompt.trim().is_empty()
-        || messages.first().is_some_and(|first| first.role == Role::System)
-    {
+/// Prepends the configured system prompt, unless the caller already sent one,
+/// and appends `extra` to it.
+///
+/// Separate from [`crate::ai::system_message`] because that one is the reader's
+/// own prompt: the library detail the agent needs must not appear in the
+/// settings page as if the reader had written it, and must not be saved.
+pub(crate) fn with_system_extra(
+    config: &AiConfig,
+    messages: Vec<ChatMessage>,
+    extra: Option<&str>,
+) -> Vec<ChatMessage> {
+    let mut system = crate::ai::system_message(config);
+    if let Some(extra) = extra.filter(|text| !text.is_empty()) {
+        system = if system.is_empty() { extra.to_string() } else { format!("{system}\n\n{extra}") };
+    }
+    if system.is_empty() || messages.first().is_some_and(|first| first.role == Role::System) {
         return messages;
     }
     let mut all = Vec::with_capacity(messages.len() + 1);
-    all.push(ChatMessage { role: Role::System, content: config.system_prompt.clone() });
+    all.push(ChatMessage::new(Role::System, system));
     all.extend(messages);
     all
+}
+
+/// The title and contents of the book the reader has open.
+///
+/// `None` rather than an error: a missing contents list costs the model a little
+/// context, and the reader still gets an answer about the chapter in hand.
+fn book_context_for(library: &Library, book_id: &str) -> Option<String> {
+    let title = library
+        .with(|conn| crate::library::repository::get(conn, book_id))
+        .ok()
+        .flatten()
+        .map(|book| book.title)
+        .unwrap_or_else(|| "当前这本书".to_string());
+    let chapters = crate::library::chapters::ensure(library, book_id).ok()?;
+    let titles: Vec<String> = chapters.into_iter().map(|chapter| chapter.title).collect();
+    Some(crate::ai::book_context(&title, &titles))
 }
 
 pub(crate) fn client() -> AppResult<reqwest::Client> {
@@ -450,39 +705,122 @@ mod tests {
     #[test]
     fn a_system_prompt_is_prepended_exactly_once() {
         let config = AiConfig { system_prompt: "S".into(), ..AiConfig::default() };
-        let messages = vec![ChatMessage { role: Role::User, content: "Q".into() }];
+        let messages = vec![ChatMessage::new(Role::User, "Q")];
 
-        let with = with_system(&config, messages.clone());
+        let with = with_system_extra(&config, messages.clone(), None);
         assert_eq!(with.len(), 2);
         assert_eq!(with[0].content, "S");
 
         // Already carrying one: leave it alone rather than doubling up.
-        let mut already = vec![ChatMessage { role: Role::System, content: "mine".into() }];
+        let mut already = vec![ChatMessage::new(Role::System, "mine")];
         already.extend(messages);
-        assert_eq!(with_system(&config, already).len(), 2);
+        assert_eq!(with_system_extra(&config, already, None).len(), 2);
     }
 
     #[test]
     fn an_empty_system_prompt_adds_nothing() {
         let config = AiConfig { system_prompt: "  ".into(), ..AiConfig::default() };
-        let messages = vec![ChatMessage { role: Role::User, content: "Q".into() }];
-        assert_eq!(with_system(&config, messages).len(), 1);
+        let messages = vec![ChatMessage::new(Role::User, "Q")];
+        assert_eq!(with_system_extra(&config, messages, None).len(), 1);
+    }
+
+    #[test]
+    fn the_appended_prompt_rides_along_as_one_system_message() {
+        let config = AiConfig {
+            system_prompt: "主".into(),
+            system_prompt_extra: "附".into(),
+            ..AiConfig::default()
+        };
+        let messages = vec![ChatMessage::new(Role::User, "Q")];
+        let with = with_system_extra(&config, messages, None);
+        assert_eq!(with.len(), 2, "两段提示词合成一条，不是两条");
+        assert_eq!(with[0].content, "主\n\n附");
+    }
+
+    #[test]
+    fn the_book_context_joins_the_reader_s_own_prompt() {
+        // The agent needs the contents, and the reader's prompt must survive
+        // alongside them. It used to be applied per caller, and the two paths
+        // that were not the agent quietly stopped sending it.
+        let config = AiConfig { system_prompt: "主".into(), ..AiConfig::default() };
+        let messages = vec![ChatMessage::new(Role::User, "Q")];
+        let with = with_system_extra(&config, messages, Some("目录：1. 开端"));
+
+        assert_eq!(with.len(), 2, "系统消息仍是一条");
+        assert_eq!(with[0].content, "主\n\n目录：1. 开端");
+    }
+
+    #[test]
+    fn an_empty_book_context_leaves_the_prompt_as_it_was() {
+        let config = AiConfig { system_prompt: "主".into(), ..AiConfig::default() };
+        let messages = vec![ChatMessage::new(Role::User, "Q")];
+        let with = with_system_extra(&config, messages, Some(""));
+
+        assert_eq!(with[0].content, "主", "空串不该留下一个多余的空行");
     }
 
     #[test]
     fn deltas_serialize_in_camel_case() {
-        let value = serde_json::to_value(AiDelta {
-            request_id: "r1".into(),
-            text: Some("hi".into()),
-            done: false,
-            finish_reason: None,
-            error: None,
-            citations: Vec::new(),
-        })
-        .expect("serialize");
+        let mut delta = blank("r1");
+        delta.text = Some("hi".into());
+        let value = serde_json::to_value(delta).expect("serialize");
+
         assert_eq!(value["requestId"], "r1");
         assert_eq!(value["text"], "hi");
         assert_eq!(value["done"], serde_json::json!(false));
         assert!(value.get("citations").is_none(), "空引用不序列化");
+        assert!(value.get("usage").is_none(), "没有用量就不该出现这个字段");
+        assert!(value.get("reasoning").is_none(), "没有思考过程就不该出现这个字段");
+        assert!(value.get("tool").is_none(), "没有工具调用就不该出现这个字段");
+    }
+
+    #[test]
+    fn a_final_delta_carries_the_usage_it_was_given() {
+        let mut delta = blank("r1");
+        delta.done = true;
+        delta.usage = Some(crate::ai::usage::TokenUsage { input: 10, cached: 4, output: 2 });
+        let value = serde_json::to_value(delta).expect("serialize");
+
+        assert_eq!(value["usage"]["input"], serde_json::json!(10));
+        assert_eq!(value["usage"]["cached"], serde_json::json!(4));
+        assert_eq!(value["usage"]["output"], serde_json::json!(2));
+    }
+
+    #[test]
+    fn embedding_models_are_recognised_by_name() {
+        for id in [
+            "nomic-embed-text:latest",
+            "bge-m3:latest",
+            "bge-large-zh-v1.5",
+            "gte-large",
+            "e5-small",
+            "text-embedding-3-small",
+            "all-MiniLM-L6-v2",
+            "jina-embeddings-v3",
+        ] {
+            assert!(looks_like_embedding(id), "{id} 应当被认成嵌入模型");
+        }
+        for id in ["qwen2.5:7b", "llama3.2:latest", "deepseek-r1:14b", "gpt-4o-mini"] {
+            assert!(!looks_like_embedding(id), "{id} 不是嵌入模型");
+        }
+    }
+
+    #[test]
+    fn a_tool_row_travels_on_its_own_event() {
+        let mut delta = blank("r1");
+        delta.tool = Some(crate::ai::tools::ToolCallView {
+            name: "search_book".into(),
+            label: "检索「主角」".into(),
+            detail: "3 段".into(),
+            ok: true,
+            sources: Vec::new(),
+            mindmap: None,
+            wordcloud: None,
+        });
+        let value = serde_json::to_value(delta).expect("serialize");
+
+        assert_eq!(value["tool"]["name"], "search_book");
+        assert_eq!(value["tool"]["label"], "检索「主角」");
+        assert_eq!(value["done"], serde_json::json!(false), "工具行不是结束事件");
     }
 }

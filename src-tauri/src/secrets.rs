@@ -61,8 +61,13 @@ const SERVICE: &str = "dev.xlong.fangce";
 /// The WebDAV username is on the list although it is not itself a secret: half
 /// a credential pair is useless for signing in and still names the account, so
 /// it travels with the password everywhere the password goes.
-pub const SECRET_FIELDS: [(&str, &[&str]); 2] =
-    [("ai.config", &["apiKey", "deeplKey"]), ("sync.webdav", &["username", "password"])];
+pub const SECRET_FIELDS: [(&str, &[&str]); 2] = [
+    // `profileKeys.*` is the one entry that is not a plain field: it names an
+    // object whose *values* are all credentials (one API key per saved AI
+    // profile). See [`for_each_secret`].
+    ("ai.config", &["apiKey", "deeplKey", "embeddingApiKey", "profileKeys.*"]),
+    ("sync.webdav", &["username", "password"]),
+];
 
 /// Marks a sealed value. Versioned so a future format can be told apart from
 /// this one instead of being mistaken for a plaintext credential.
@@ -222,6 +227,52 @@ fn open(aad: &str, sealed: &str, key: &[u8; KEY_BYTES]) -> AppResult<String> {
     String::from_utf8(plain).map_err(|_| AppError::Secrets("凭据已损坏".into()))
 }
 
+/// Visits every credential slot of `row`, in place.
+///
+/// Two shapes of slot exist, and this is the only place that knows it:
+///
+/// - `"apiKey"` — a top-level string field.
+/// - `"profileKeys.*"` — an object whose every value is a credential, so one
+///   saved endpoint per id does not need a row of its own. The `*` is the
+///   signal, not a wildcard to be resolved elsewhere.
+///
+/// `f` receives the *field path* the slot is addressed by (`"profileKeys.abc"`),
+/// which is what travels as GCM additional data: a blob sealed for one profile
+/// will not open for another, exactly as a blob sealed for `apiKey` will not
+/// open for `deeplKey`.
+///
+/// A slot whose value is not a string is skipped rather than coerced — a
+/// hand-edited row should not turn into an encryption failure on launch.
+fn for_each_secret<F>(row: &str, value: &mut Value, mut f: F) -> AppResult<()>
+where
+    F: FnMut(&str, &mut Value) -> AppResult<()>,
+{
+    let Some(fields) = fields_of(row) else { return Ok(()) };
+    let Some(object) = value.as_object_mut() else { return Ok(()) };
+
+    for field in fields {
+        match field.strip_suffix(".*") {
+            Some(name) => {
+                let Some(Value::Object(map)) = object.get_mut(name) else { continue };
+                // Collected first: sealing mutates the values it is walking, and
+                // the key is needed to address each slot.
+                let keys: Vec<String> = map.keys().cloned().collect();
+                for key in keys {
+                    if let Some(slot) = map.get_mut(&key) {
+                        f(&format!("{name}.{key}"), slot)?;
+                    }
+                }
+            }
+            None => {
+                if let Some(slot) = object.get_mut(*field) {
+                    f(field, slot)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Seals every credential field of `row`, leaving everything else alone.
 ///
 /// An empty value is left as it is: it means "no credential configured", and
@@ -229,41 +280,46 @@ fn open(aad: &str, sealed: &str, key: &[u8; KEY_BYTES]) -> AppResult<String> {
 /// cleared key indistinguishable from a set one when reading the file by eye.
 fn seal_fields(row: &str, value: &Value, key: &[u8; KEY_BYTES]) -> AppResult<Value> {
     let mut out = value.clone();
-    let Some(fields) = fields_of(row) else { return Ok(out) };
-    let Some(object) = out.as_object_mut() else { return Ok(out) };
-
-    for field in fields {
-        let Some(slot) = object.get_mut(*field) else { continue };
-        let Some(text) = slot.as_str() else { continue };
+    for_each_secret(row, &mut out, |path, slot| {
+        let Some(text) = slot.as_str() else { return Ok(()) };
         if text.is_empty() || is_sealed(text) {
-            continue;
+            return Ok(());
         }
-        *slot = Value::String(seal(&aad(row, field), text, key)?);
-    }
+        *slot = Value::String(seal(&aad(row, path), text, key)?);
+        Ok(())
+    })?;
     Ok(out)
 }
 
 /// Opens every sealed field of `row`.
 fn open_fields(row: &str, value: &Value, key: &[u8; KEY_BYTES]) -> AppResult<Value> {
     let mut out = value.clone();
-    let Some(fields) = fields_of(row) else { return Ok(out) };
-    let Some(object) = out.as_object_mut() else { return Ok(out) };
-
-    for field in fields {
-        let Some(slot) = object.get_mut(*field) else { continue };
-        let Some(text) = slot.as_str() else { continue };
+    for_each_secret(row, &mut out, |path, slot| {
+        let Some(text) = slot.as_str() else { return Ok(()) };
         if !is_sealed(text) {
-            continue;
+            return Ok(());
         }
-        *slot = Value::String(open(&aad(row, field), text, key)?);
-    }
+        *slot = Value::String(open(&aad(row, path), text, key)?);
+        Ok(())
+    })?;
     Ok(out)
 }
 
 /// `true` when any credential field of `row` is sealed.
+///
+/// Walks a copy: the traversal is the mutable one, and a read-only twin would be
+/// the same twenty lines twice — the thing this module exists to avoid. A config
+/// row is a couple of kilobytes and this runs a handful of times per session.
 fn has_sealed(row: &str, value: &Value) -> bool {
-    let Some(fields) = fields_of(row) else { return false };
-    fields.iter().filter_map(|field| value.get(*field).and_then(Value::as_str)).any(is_sealed)
+    let mut copy = value.clone();
+    let mut found = false;
+    let _ = for_each_secret(row, &mut copy, |_, slot| {
+        if slot.as_str().is_some_and(is_sealed) {
+            found = true;
+        }
+        Ok(())
+    });
+    found
 }
 
 /// `true` when `row` still holds a credential in the clear.
@@ -272,13 +328,28 @@ fn has_sealed(row: &str, value: &Value) -> bool {
 /// master key: saving an AI config for a local model that needs no key, or one
 /// whose key is already sealed, must not mint a credential-store entry.
 fn needs_sealing(row: &str, value: &Value) -> bool {
-    let Some(fields) = fields_of(row) else { return false };
-    fields.iter().any(|field| {
-        value
-            .get(*field)
-            .and_then(Value::as_str)
-            .is_some_and(|text| !text.is_empty() && !is_sealed(text))
-    })
+    let mut copy = value.clone();
+    let mut found = false;
+    let _ = for_each_secret(row, &mut copy, |_, slot| {
+        if slot.as_str().is_some_and(|text| !text.is_empty() && !is_sealed(text)) {
+            found = true;
+        }
+        Ok(())
+    });
+    found
+}
+
+/// Blanks every credential in `value`, for a backup's copy of the database.
+///
+/// Exported so `library::transfer::backup` blanks exactly what this module
+/// seals. It used to keep its own loop over [`SECRET_FIELDS`], which is how the
+/// `profileKeys.*` shape would have shipped as plaintext in an archive: it wrote
+/// a literal `"profileKeys.*"` key and left the real map alone.
+pub fn blank_secrets(row: &str, value: &mut Value) {
+    let _ = for_each_secret(row, value, |_, slot| {
+        *slot = Value::String(String::new());
+        Ok(())
+    });
 }
 
 /// The raw `settings` row, exactly as stored — credentials still sealed.
@@ -524,14 +595,66 @@ mod tests {
         for (row, fields) in SECRET_FIELDS {
             assert!(!fields.is_empty(), "{row} 没有任何凭据字段");
             for field in fields {
-                let value = json!({ *field: "secret" });
+                // A `.*` field is an object of credentials; anything else is one
+                // string. Both shapes must come back sealed, and the `.*` shape
+                // is exactly what a blind `json!({field: "secret"})` would miss.
+                let value = match field.strip_suffix(".*") {
+                    Some(name) => json!({ name: { "one": "secret", "two": "secret" } }),
+                    None => json!({ *field: "secret" }),
+                };
                 let sealed = seal_fields(row, &value, &key()).expect("seal");
+                match field.strip_suffix(".*") {
+                    Some(name) => {
+                        for entry in sealed[name].as_object().expect("object").values() {
+                            assert!(
+                                is_sealed(entry.as_str().expect("string")),
+                                "{row}.{name}.* 没有被封装"
+                            );
+                        }
+                    }
+                    None => assert!(
+                        is_sealed(sealed[*field].as_str().expect("string")),
+                        "{row}.{field} 没有被封装"
+                    ),
+                }
+                // And the same list blanks it out of a backup.
+                let mut blanked = value.clone();
+                blank_secrets(row, &mut blanked);
                 assert!(
-                    is_sealed(sealed[*field].as_str().expect("string")),
-                    "{row}.{field} 没有被封装"
+                    !serde_json::to_string(&blanked).expect("json").contains("secret"),
+                    "{row}.{field} 没有被备份脱敏"
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_map_of_credentials_seals_and_opens_per_key() {
+        let row = json!({
+            "baseUrl": "https://api.example.com/v1",
+            "apiKey": "sk-active",
+            "profileKeys": { "a": "sk-a", "b": "sk-b" },
+        });
+        let sealed = seal_fields("ai.config", &row, &key()).expect("seal");
+
+        assert_eq!(sealed["baseUrl"], row["baseUrl"], "非凭据字段不该被藏起来");
+        for id in ["a", "b"] {
+            let text = sealed["profileKeys"][id].as_str().expect("string");
+            assert!(is_sealed(text), "profileKeys.{id} 必须被封装");
+            assert!(!text.contains("sk-"), "profileKeys.{id} 漏了明文");
+        }
+        assert_eq!(open_fields("ai.config", &sealed, &key()).expect("open"), row);
+    }
+
+    #[test]
+    fn one_profiles_blob_does_not_open_as_another() {
+        // The same reason the row/field halves exist: swapping two keys inside
+        // the database file must be an authentication failure, not a silent
+        // exchange of credentials.
+        let sealed = seal("ai.config:profileKeys.a", "sk-a", &key()).expect("seal");
+        assert!(open("ai.config:profileKeys.b", &sealed, &key()).is_err());
+        assert!(open("ai.config:apiKey", &sealed, &key()).is_err());
+        assert_eq!(open("ai.config:profileKeys.a", &sealed, &key()).expect("open"), "sk-a");
     }
 
     #[test]

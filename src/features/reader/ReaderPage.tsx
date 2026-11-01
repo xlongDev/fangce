@@ -2670,6 +2670,7 @@ export function ReaderView({
             context: aiContext,
             onClearContext: () => setAiContext(null),
             chapterTitle: chapterTitle || `第 ${chapterIdx + 1} 章`,
+            chapterIdx,
             paragraphs: displayChapterData?.paragraphs ?? [],
             onJumpCitation: jumpToCitation,
           }}

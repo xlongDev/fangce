@@ -9,6 +9,7 @@ pub mod backup;
 pub mod book;
 pub mod bookmark;
 pub mod clippings;
+pub mod conversation;
 pub mod dictionary;
 pub mod export;
 pub mod font;

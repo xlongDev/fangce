@@ -147,11 +147,15 @@ async fn extract_chapter(
     chat::stream_chat(
         client,
         config,
-        vec![ChatMessage { role: Role::User, content: build_prompt(content) }],
+        vec![ChatMessage::new(Role::User, build_prompt(content))],
+        None,
         &mut |event| {
             if let StreamEvent::Delta(delta) = event {
                 reply.push_str(&delta);
             }
+            // Not interruptible: this is a one-shot extraction behind a
+            // "generate the graph" button, and half a JSON document is useless.
+            true
         },
     )
     .await?;

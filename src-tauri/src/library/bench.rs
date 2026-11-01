@@ -263,7 +263,7 @@ fn rag_search_bench() -> Result<(), Box<dyn std::error::Error>> {
         .map(|_| {
             let started = Instant::now();
             let hits = library
-                .with(|conn| rag::search(conn, "bench", &query, None, 6))
+                .with(|conn| rag::search(conn, "bench", &query, None, None, 6))
                 .expect("rag search");
             assert_eq!(hits.len(), 6);
             ms(started.elapsed())

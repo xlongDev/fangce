@@ -7,19 +7,50 @@
 //!
 //! SSE parsing is a pure function over bytes so it can be tested without a
 //! socket, which is the only part with real branching.
+//!
+//! Three things are less universal than the format suggests, and each is handled
+//! by being *optional* rather than by being assumed:
+//!
+//! - `stream_options.include_usage` — most providers honour it, a few strict
+//!   gateways reject the field outright.
+//! - `temperature` — reasoning models refuse anything but 1.
+//! - the parameter that turns on a reasoning stream — every vendor named it
+//!   differently.
+//!
+//! So a 400 whose body names one of the fields *we* added is retried once
+//! without it ([`retry_without_rejected_field`]). Losing token counts is worth
+//! far less than losing the answer.
 
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
 
 use crate::error::{AppError, AppResult};
 
+use super::usage::TokenUsage;
+
 /// One turn in a conversation. `system` arrives separately, not as a message.
+///
+/// The two tool fields are what makes a multi-round exchange expressible: an
+/// assistant turn that decided to call tools carries them, and each answer to
+/// one comes back as a `tool` turn naming the call it answers. Both are skipped
+/// when empty, so an ordinary conversation serialises exactly as it used to.
 #[derive(specta::Type, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
     pub role: Role,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+impl ChatMessage {
+    pub fn new(role: Role, content: impl Into<String>) -> Self {
+        Self { role, content: content.into(), tool_calls: Vec::new(), tool_call_id: None }
+    }
 }
 
 #[derive(specta::Type, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -28,6 +59,34 @@ pub enum Role {
     System,
     User,
     Assistant,
+    Tool,
+}
+
+/// One call the model asked for, as it will be echoed back in the next request.
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    /// The raw JSON the model produced. Kept as text: re-serialising a parsed
+    /// value would silently drop whatever the tool's schema did not expect, and
+    /// the tool itself is the thing that should decide that.
+    pub arguments: String,
+}
+
+/// One tool the model may call.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolDef {
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    pub function: FunctionDef,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FunctionDef {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub parameters: serde_json::Value,
 }
 
 /// A piece of a streamed answer.
@@ -35,10 +94,65 @@ pub enum Role {
 pub enum StreamEvent {
     /// Incremental text, already decoded.
     Delta(String),
+    /// Incremental reasoning, for the models that stream it separately.
+    Reasoning(String),
+    /// Token counts, sent by providers that honour `include_usage` — usually on
+    /// the last frame, with an empty `choices` array.
+    Usage(TokenUsage),
+    /// A piece of a tool call. Arguments arrive split across frames and have to
+    /// be accumulated before the call can be made (see [`absorb_tool_call`]).
+    ToolCall(ToolCallDelta),
     /// The stream ended normally.
     Done,
-    /// Provider reported a reason, e.g. `length` when it hit the token cap.
+    /// Provider reported a reason, e.g. `length` when it hit the token cap, or
+    /// `tool_calls` when it is waiting for a tool's answer.
     Finish(Option<String>),
+}
+
+/// One frame's worth of a tool call.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ToolCallDelta {
+    /// Which call this fragment belongs to. Models emit several in one turn.
+    #[serde(default)]
+    pub index: usize,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub function: Option<FunctionDelta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct FunctionDelta {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub arguments: Option<String>,
+}
+
+/// Folds one fragment into the call it belongs to, growing the list as needed.
+///
+/// Every field arrives in pieces — the name is usually whole on the first frame,
+/// the arguments never are — so each is appended rather than replaced. A call
+/// whose index is new starts empty, which is what makes parallel calls work: the
+/// model sends `index: 0`, `index: 1`, then interleaves the rest.
+pub fn absorb_tool_call(calls: &mut Vec<ToolCall>, delta: &ToolCallDelta) {
+    while calls.len() <= delta.index {
+        calls.push(ToolCall { id: String::new(), name: String::new(), arguments: String::new() });
+    }
+    let Some(call) = calls.get_mut(delta.index) else { return };
+    if let Some(id) = delta.id.as_deref()
+        && !id.is_empty()
+    {
+        call.id = id.to_string();
+    }
+    let Some(function) = &delta.function else { return };
+    if let Some(name) = function.name.as_deref() {
+        call.name.push_str(name);
+    }
+    if let Some(arguments) = function.arguments.as_deref() {
+        call.arguments.push_str(arguments);
+    }
 }
 
 /// One SSE line, decoded.
@@ -98,18 +212,35 @@ fn decode_data(payload: &str) -> Vec<StreamEvent> {
         return Vec::new();
     };
 
-    let Chunk { choices } = frame;
+    let Chunk { choices, usage } = frame;
 
     let mut events = Vec::new();
+    // Reasoning first: it is what the model thought *before* the words it is
+    // saying, and the UI renders the two in that order.
+    for choice in &choices {
+        if let Some(text) = choice.delta.reasoning_content.as_deref()
+            && !text.is_empty()
+        {
+            events.push(StreamEvent::Reasoning(text.to_string()));
+        }
+    }
     for choice in choices {
         if let Some(text) = choice.delta.content
             && !text.is_empty()
         {
             events.push(StreamEvent::Delta(text));
         }
+        for call in choice.delta.tool_calls {
+            events.push(StreamEvent::ToolCall(call));
+        }
         if let Some(reason) = choice.finish_reason {
             events.push(StreamEvent::Finish(Some(reason)));
         }
+    }
+    // The usage frame usually carries an empty `choices` array, so this cannot
+    // live inside the loop above.
+    if let Some(usage) = usage.as_ref().and_then(TokenUsage::from_value) {
+        events.push(StreamEvent::Usage(usage));
     }
     events
 }
@@ -120,6 +251,8 @@ fn decode_data(payload: &str) -> Vec<StreamEvent> {
 struct Chunk {
     #[serde(default)]
     choices: Vec<Choice>,
+    #[serde(default)]
+    usage: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,19 +267,33 @@ struct Choice {
 struct Delta {
     #[serde(default)]
     content: Option<String>,
+    /// DeepSeek, Qwen, GLM, MiniMax and OpenRouter all stream thinking under one
+    /// of these names; `content` is null while it does.
+    #[serde(default, alias = "reasoning", alias = "thinking", alias = "thought")]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<ToolCallDelta>,
 }
 
-/// Request body. Kept minimal: temperature and max tokens are the two knobs a
-/// reader actually wants, everything else stays at the provider's default.
+/// Request body. `thinking` is flattened so the vendor's own parameter lands at
+/// the top level without this struct knowing its name.
 #[derive(Debug, Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
     messages: Vec<ChatMessage>,
     stream: bool,
+    temperature: f64,
+    max_tokens: u32,
+    stream_options: StreamOptions,
     #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_tokens: Option<u32>,
+    tools: Option<Vec<ToolDef>>,
+    #[serde(flatten)]
+    thinking: Map<String, Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamOptions {
+    include_usage: bool,
 }
 
 /// Non-streaming probe used by the settings page: one token, cheap, and enough
@@ -158,6 +305,101 @@ struct ProbeRequest<'a> {
     max_tokens: u32,
 }
 
+/// Fields this client adds that a provider is allowed to refuse. Named in the
+/// order they are dropped: token counts are the least important, and the
+/// reasoning parameter is the most vendor-specific. `tools` is first because a
+/// model that cannot call tools should still answer without them.
+const OPTIONAL_FIELDS: [&str; 7] = [
+    "tools",
+    "stream_options",
+    "max_tokens",
+    "temperature",
+    "thinking",
+    "enable_thinking",
+    "reasoning_effort",
+];
+
+/// What turns on a reasoning stream, per vendor — `None` when the endpoint
+/// cannot be identified, because a guessed parameter is a 400 on some gateways
+/// and a silently ignored field on others.
+///
+/// The returned name is the key that [`retry_without_rejected_field`] removes if
+/// the provider rejects it.
+pub fn thinking_params(base_url: &str) -> Option<(&'static str, Value)> {
+    let host = base_url.to_ascii_lowercase();
+    if host.contains("openai.com")
+        || host.contains("openrouter.ai")
+        || host.contains("googleapis.com")
+    {
+        return Some(("reasoning_effort", json!("high")));
+    }
+    if host.contains("dashscope")
+        || host.contains("moonshot")
+        || host.contains("siliconflow")
+        || host.contains("bigmodel")
+    {
+        return Some(("enable_thinking", json!(true)));
+    }
+    if host.contains("deepseek")
+        || host.contains("minimax")
+        || host.contains("xiaomimimo")
+        || host.contains("volces")
+    {
+        return Some(("thinking", json!({ "type": "enabled" })));
+    }
+    None
+}
+
+/// 小米 MiMo signs with `api-key` instead of `Authorization: Bearer`. One rule,
+/// because one provider is enough of an exception to name.
+fn uses_api_key_header(base_url: &str) -> bool {
+    base_url.to_ascii_lowercase().contains("xiaomimimo")
+}
+
+/// Builds the request body. Split out so the optional-field retry can operate on
+/// a plain `Value` without a second schema.
+fn request_body(
+    config: &super::AiConfig,
+    messages: Vec<ChatMessage>,
+    tools: Option<Vec<ToolDef>>,
+) -> Value {
+    // A reasoning model refuses any temperature but 1, and the thinking stream
+    // is where its answer comes from — so the knob follows the switch.
+    let temperature = if config.deep_thinking { 1.0 } else { config.temperature };
+    let thinking = match config.deep_thinking.then(|| thinking_params(&config.base_url)).flatten() {
+        Some((name, value)) => {
+            let mut map = Map::new();
+            map.insert(name.to_string(), value);
+            map
+        }
+        None => Map::new(),
+    };
+
+    serde_json::to_value(ChatRequest {
+        model: &config.model,
+        messages,
+        stream: true,
+        temperature,
+        max_tokens: config.max_tokens,
+        stream_options: StreamOptions { include_usage: true },
+        tools,
+        thinking,
+    })
+    .unwrap_or(Value::Null)
+}
+
+/// If the provider's rejection names one of the fields this client added, that
+/// field is the problem and can go. Returns it, preferring the last named one
+/// (the vendor-specific parameter is the most likely culprit).
+fn rejected_optional_field(body: &Value, error_text: &str) -> Option<&'static str> {
+    let haystack = error_text.to_ascii_lowercase();
+    OPTIONAL_FIELDS
+        .iter()
+        .rev()
+        .find(|field| body.get(**field).is_some() && haystack.contains(*field))
+        .copied()
+}
+
 /// Sends one request and streams the answer, invoking `on_event` per frame.
 ///
 /// Errors are mapped to sentences a user can act on. The provider's own message
@@ -167,30 +409,18 @@ pub async fn stream_chat<F>(
     client: &reqwest::Client,
     config: &super::AiConfig,
     messages: Vec<ChatMessage>,
+    tools: Option<Vec<ToolDef>>,
     mut on_event: F,
 ) -> AppResult<()>
 where
-    F: FnMut(StreamEvent),
+    // `false` means "stop": the reader pressed 停止, and returning here drops
+    // the response, which is what closes the connection.
+    F: FnMut(StreamEvent) -> bool,
 {
     let url = super::completions_url(&config.base_url);
-    let body = ChatRequest {
-        model: &config.model,
-        messages,
-        stream: true,
-        temperature: None,
-        max_tokens: None,
-    };
+    let mut body = request_body(config, messages, tools);
 
-    let mut request = client.post(&url).json(&body);
-    if !config.api_key.is_empty() {
-        request = request.bearer_auth(&config.api_key);
-    }
-
-    let response = request.send().await.map_err(http_error)?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(provider_error(status.as_u16(), &response.text().await.unwrap_or_default()));
-    }
+    let response = retry_without_rejected_field(client, &url, config, &mut body).await?;
 
     let mut buffer = String::new();
     let mut stream = response.bytes_stream();
@@ -200,13 +430,64 @@ where
         let text = String::from_utf8_lossy(&chunk);
         for event in feed(&mut buffer, &text) {
             let done = matches!(event, StreamEvent::Done);
-            on_event(event);
-            if done {
+            let keep_going = on_event(event);
+            if done || !keep_going {
                 return Ok(());
             }
         }
     }
     Ok(())
+}
+
+/// POSTs `body`, dropping one rejected optional field and trying again.
+///
+/// Exactly one retry: a provider that refuses two different fields is a
+/// configuration problem worth reporting, not something to negotiate with.
+async fn retry_without_rejected_field(
+    client: &reqwest::Client,
+    url: &str,
+    config: &super::AiConfig,
+    body: &mut Value,
+) -> AppResult<reqwest::Response> {
+    let mut retried = false;
+    loop {
+        let mut request = client.post(url).json(&*body);
+        request = sign(request, &config.base_url, &config.api_key);
+
+        let response = request.send().await.map_err(http_error)?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response);
+        }
+
+        let text = response.text().await.unwrap_or_default();
+        if status.as_u16() == 400
+            && !retried
+            && let Some(field) = rejected_optional_field(body, &text)
+            && let Some(object) = body.as_object_mut()
+        {
+            tracing::info!(field, "接口拒绝了可选参数，去掉后重试");
+            object.remove(field);
+            retried = true;
+            continue;
+        }
+        return Err(provider_error(status.as_u16(), &text));
+    }
+}
+
+/// Applies the auth header this endpoint expects.
+fn sign(
+    request: reqwest::RequestBuilder,
+    base_url: &str,
+    api_key: &str,
+) -> reqwest::RequestBuilder {
+    if api_key.is_empty() {
+        return request;
+    }
+    if uses_api_key_header(base_url) {
+        return request.header("api-key", api_key);
+    }
+    request.bearer_auth(api_key)
 }
 
 /// How long to wait before retrying a probe that met a 429.
@@ -224,16 +505,13 @@ pub async fn probe(client: &reqwest::Client, config: &super::AiConfig) -> AppRes
     let url = super::completions_url(&config.base_url);
     let body = ProbeRequest {
         model: &config.model,
-        messages: vec![ChatMessage { role: Role::User, content: "hi".to_string() }],
+        messages: vec![ChatMessage::new(Role::User, "hi".to_string())],
         max_tokens: 1,
     };
 
     let mut retried = false;
     loop {
-        let mut request = client.post(&url).json(&body);
-        if !config.api_key.is_empty() {
-            request = request.bearer_auth(&config.api_key);
-        }
+        let request = sign(client.post(&url).json(&body), &config.base_url, &config.api_key);
         let response = request.send().await.map_err(http_error)?;
         let status = response.status();
         if status.is_success() {
@@ -249,6 +527,48 @@ pub async fn probe(client: &reqwest::Client, config: &super::AiConfig) -> AppRes
         }
         return Err(provider_error(status.as_u16(), &text));
     }
+}
+
+/// The model ids an endpoint offers, from `GET {base_url}/models`.
+///
+/// Read-only and cheap, so the settings form can fill a picker instead of asking
+/// the reader to remember an id. Order is the provider's own — some sort by
+/// release date and some alphabetically, and neither is wrong.
+pub async fn list_models(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+) -> AppResult<Vec<String>> {
+    let url = format!("{base_url}/models");
+    let request = sign(client.get(&url), base_url, api_key);
+    let response = request.send().await.map_err(http_error)?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(provider_error(status.as_u16(), &response.text().await.unwrap_or_default()));
+    }
+
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|err| AppError::Message(format!("模型列表的响应无法解析：{err}")))?;
+    let mut models: Vec<String> = body
+        .get("data")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    models.dedup();
+    if models.is_empty() {
+        return Err(AppError::Message(
+            "接口没有返回任何模型，确认地址与 Key 后重试，或直接手填模型 ID".into(),
+        ));
+    }
+    Ok(models)
 }
 
 fn http_error(err: reqwest::Error) -> AppError {
@@ -267,11 +587,17 @@ fn http_error(err: reqwest::Error) -> AppError {
 pub(crate) fn provider_error(status: u16, body: &str) -> AppError {
     let message = match status {
         401 | 403 => "API Key 被拒绝，检查 Key 是否正确或已过期",
+        402 => "账户余额不足，无法发起对话",
         404 => "接口地址或模型名称不存在",
         429 => "触发了速率限制，稍后再试",
         status if status >= 500 => "服务端出错，稍后再试或换个模型",
         _ => "请求被拒绝",
     };
+    // A provider that says the balance is out is worth passing on verbatim: the
+    // status alone (400 or 403, depending on the vendor) does not.
+    if body.to_ascii_lowercase().contains("insufficient_balance") {
+        return AppError::Message("账户余额不足，无法发起对话。".into());
+    }
     // The provider's message usually names the real problem ("model not found"),
     // so it is worth showing when it is short. A multi-kilobyte HTML error page
     // is not worth showing, so long ones are dropped.
@@ -293,6 +619,7 @@ fn extract_error_message(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::AiConfig;
 
     fn collect(chunks: &[&str]) -> (Vec<StreamEvent>, String) {
         let mut buffer = String::new();
@@ -370,6 +697,29 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_arrives_before_the_answer_and_under_any_of_its_names() {
+        for field in ["reasoning_content", "reasoning", "thinking", "thought"] {
+            let payload = format!(r#"{{"choices":[{{"delta":{{"{field}":"想一想"}}}}]}}"#);
+            let (events, _) = collect(&[&format!("data: {payload}\n\n")]);
+            assert_eq!(events, [StreamEvent::Reasoning("想一想".into())], "{field}");
+        }
+
+        // And the order matters: the thought precedes the words it produced.
+        let (events, _) = collect(&[
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"想\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"答\"}}]}\n\n",
+        ]);
+        assert_eq!(events, [StreamEvent::Reasoning("想".into()), StreamEvent::Delta("答".into())]);
+    }
+
+    #[test]
+    fn a_usage_only_frame_is_read_even_though_it_has_no_choices() {
+        let payload = r#"{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}"#;
+        let (events, _) = collect(&[&format!("data: {payload}\n\n")]);
+        assert_eq!(events, [StreamEvent::Usage(TokenUsage { input: 10, cached: 0, output: 2 })]);
+    }
+
+    #[test]
     fn status_codes_map_to_actionable_sentences() {
         let unauthorized = provider_error(401, r#"{"error":{"message":"Incorrect API key"}}"#);
         assert!(unauthorized.to_string().contains("API Key"), "{unauthorized}");
@@ -383,6 +733,9 @@ mod tests {
 
         let down = provider_error(503, "");
         assert!(down.to_string().contains("服务端"), "{down}");
+
+        let broke = provider_error(400, r#"{"error":{"message":"insufficient_balance"}}"#);
+        assert!(broke.to_string().contains("余额不足"), "{broke}");
     }
 
     #[test]
@@ -394,17 +747,222 @@ mod tests {
     }
 
     #[test]
-    fn the_request_body_omits_optional_knobs() {
-        let body = ChatRequest {
-            model: "m",
-            messages: vec![ChatMessage { role: Role::User, content: "hi".into() }],
-            stream: true,
-            temperature: None,
-            max_tokens: None,
+    fn the_request_body_carries_the_configured_numbers() {
+        let config = AiConfig { temperature: 0.4, max_tokens: 2048, ..AiConfig::default() };
+        let body = request_body(&config, vec![ChatMessage::new(Role::User, "hi")], None);
+
+        assert_eq!(body["temperature"], json!(0.4));
+        assert_eq!(body["max_tokens"], json!(2048));
+        assert_eq!(body["stream_options"]["include_usage"], json!(true));
+        assert_eq!(body["stream"], json!(true));
+        assert_eq!(body["messages"][0]["role"], json!("user"));
+        assert!(body.get("thinking").is_none(), "没开深度思考就不该注入厂商参数");
+    }
+
+    #[test]
+    fn deep_thinking_pins_the_temperature_and_injects_one_vendor_parameter() {
+        let config = AiConfig {
+            deep_thinking: true,
+            temperature: 0.2,
+            base_url: "https://api.deepseek.com/v1".into(),
+            ..AiConfig::default()
         };
-        let json = serde_json::to_value(&body).expect("serialize");
-        assert!(json.get("temperature").is_none(), "未设置的旋钮不该出现在请求里");
-        assert_eq!(json["stream"], serde_json::json!(true));
-        assert_eq!(json["messages"][0]["role"], serde_json::json!("user"));
+        let body = request_body(&config, vec![ChatMessage::new(Role::User, "hi")], None);
+        assert_eq!(body["temperature"], json!(1.0), "推理模型只接受温度 1");
+        assert_eq!(body["thinking"]["type"], json!("enabled"));
+    }
+
+    #[test]
+    fn an_unidentified_endpoint_gets_no_thinking_parameter() {
+        let config = AiConfig {
+            deep_thinking: true,
+            base_url: "http://127.0.0.1:1234/v1".into(),
+            ..AiConfig::default()
+        };
+        let body = request_body(&config, vec![ChatMessage::new(Role::User, "hi")], None);
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("enable_thinking").is_none());
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn each_vendor_gets_its_own_reasoning_switch() {
+        let cases = [
+            ("https://api.openai.com/v1", "reasoning_effort"),
+            ("https://openrouter.ai/api/v1", "reasoning_effort"),
+            ("https://generativelanguage.googleapis.com/v1beta/openai", "reasoning_effort"),
+            ("https://dashscope.aliyuncs.com/compatible-mode/v1", "enable_thinking"),
+            ("https://api.moonshot.cn/v1", "enable_thinking"),
+            ("https://api.siliconflow.cn/v1", "enable_thinking"),
+            ("https://open.bigmodel.cn/api/paas/v4", "enable_thinking"),
+            ("https://api.deepseek.com/v1", "thinking"),
+            ("https://api.minimaxi.com/v1", "thinking"),
+            ("https://api.xiaomimimo.com/v1", "thinking"),
+        ];
+        for (url, expected) in cases {
+            assert_eq!(thinking_params(url).map(|(name, _)| name), Some(expected), "{url}");
+        }
+        assert!(thinking_params("http://127.0.0.1:1234/v1").is_none());
+    }
+
+    #[test]
+    fn a_rejection_names_the_field_to_drop() {
+        let body = json!({
+            "temperature": 0.7,
+            "max_tokens": 100,
+            "stream_options": { "include_usage": true },
+            "thinking": { "type": "enabled" },
+        });
+
+        assert_eq!(
+            rejected_optional_field(
+                &body,
+                r#"{"error":{"message":"Unrecognized request argument: stream_options"}}"#
+            ),
+            Some("stream_options")
+        );
+        assert_eq!(
+            rejected_optional_field(
+                &body,
+                r#"{"error":{"message":"Unsupported value: 'temperature'"}}"#
+            ),
+            Some("temperature")
+        );
+        assert_eq!(
+            rejected_optional_field(&body, r#"{"error":{"message":"thinking is not supported"}}"#),
+            Some("thinking")
+        );
+    }
+
+    #[test]
+    fn a_rejection_about_something_else_drops_nothing() {
+        let body = json!({ "temperature": 0.7, "stream_options": { "include_usage": true } });
+        // The model name is not one of ours to drop, and 404 is not a 400.
+        assert_eq!(
+            rejected_optional_field(&body, r#"{"error":{"message":"model not found"}}"#),
+            None
+        );
+        // A field named in the error but absent from the body is nothing to do.
+        assert_eq!(rejected_optional_field(&json!({}), "thinking is not supported"), None);
+    }
+
+    #[test]
+    fn the_mimo_endpoint_signs_with_api_key_instead_of_bearer() {
+        assert!(uses_api_key_header("https://api.xiaomimimo.com/v1"));
+        assert!(!uses_api_key_header("https://api.deepseek.com/v1"));
+    }
+
+    #[test]
+    fn a_tool_call_is_assembled_from_its_fragments() {
+        let mut calls = Vec::new();
+        // What a provider actually sends: the id and name once, the arguments in
+        // pieces that only make sense once concatenated.
+        for (index, arguments) in [(0, r#"{"query":"#), (0, r#""主角是谁"}"#)] {
+            absorb_tool_call(
+                &mut calls,
+                &ToolCallDelta {
+                    index,
+                    id: Some("call-1".into()),
+                    function: Some(FunctionDelta {
+                        name: Some(
+                            if arguments.starts_with('{') { "search_book" } else { "" }.into(),
+                        ),
+                        arguments: Some(arguments.into()),
+                    }),
+                },
+            );
+        }
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call-1");
+        assert_eq!(calls[0].name, "search_book");
+        assert_eq!(calls[0].arguments, r#"{"query":"主角是谁"}"#);
+    }
+
+    #[test]
+    fn two_calls_in_one_turn_keep_their_own_arguments() {
+        let mut calls = Vec::new();
+        for delta in [
+            ToolCallDelta {
+                index: 0,
+                id: Some("a".into()),
+                function: Some(FunctionDelta {
+                    name: Some("search_book".into()),
+                    arguments: Some(r#"{"query":"甲"}"#.into()),
+                }),
+            },
+            ToolCallDelta {
+                index: 1,
+                id: Some("b".into()),
+                function: Some(FunctionDelta {
+                    name: Some("read_chapter".into()),
+                    arguments: Some(r#"{"chapter":3}"#.into()),
+                }),
+            },
+        ] {
+            absorb_tool_call(&mut calls, &delta);
+        }
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1].name, "read_chapter");
+        assert_eq!(calls[1].arguments, r#"{"chapter":3}"#);
+    }
+
+    #[test]
+    fn a_tool_call_frame_reaches_the_caller() {
+        let payload = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"search_book","arguments":"{\"query\":\"甲\"}"}}]},"finish_reason":"tool_calls"}]}"#;
+        let (events, _) = collect(&[&format!("data: {payload}\n\n")]);
+
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            StreamEvent::ToolCall(call) => {
+                assert_eq!(call.index, 0);
+                assert_eq!(call.id.as_deref(), Some("c1"));
+                assert_eq!(
+                    call.function.as_ref().and_then(|f| f.name.as_deref()),
+                    Some("search_book")
+                );
+            }
+            other => panic!("期望 ToolCall，得到 {other:?}"),
+        }
+        assert_eq!(events[1], StreamEvent::Finish(Some("tool_calls".into())));
+    }
+
+    #[test]
+    fn tools_travel_only_when_they_are_offered() {
+        let config = AiConfig::default();
+        let plain = request_body(&config, vec![ChatMessage::new(Role::User, "hi")], None);
+        assert!(plain.get("tools").is_none(), "没有工具就不该出现这个字段");
+
+        let with = request_body(
+            &config,
+            vec![ChatMessage::new(Role::User, "hi")],
+            Some(vec![ToolDef {
+                kind: "function",
+                function: FunctionDef {
+                    name: "search_book",
+                    description: "检索",
+                    parameters: json!({ "type": "object" }),
+                },
+            }]),
+        );
+        assert_eq!(with["tools"][0]["type"], json!("function"));
+        assert_eq!(with["tools"][0]["function"]["name"], json!("search_book"));
+    }
+
+    #[test]
+    fn a_tool_answer_carries_the_call_it_answers_and_nothing_else() {
+        let message = ChatMessage {
+            role: Role::Tool,
+            content: "片段".into(),
+            tool_calls: Vec::new(),
+            tool_call_id: Some("c1".into()),
+        };
+        let value = serde_json::to_value(&message).expect("serialize");
+        assert_eq!(value["role"], json!("tool"));
+        assert_eq!(value["toolCallId"], json!("c1"));
+        assert!(value.get("toolCalls").is_none(), "空的工具调用不序列化");
+
+        // And an ordinary turn still serialises as the two fields it always had.
+        let plain = serde_json::to_value(ChatMessage::new(Role::User, "hi")).expect("serialize");
+        assert_eq!(plain, json!({ "role": "user", "content": "hi" }));
     }
 }

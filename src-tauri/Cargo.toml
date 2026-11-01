@@ -40,6 +40,11 @@ zip = "9"
 quick-xml = "0.42"
 sha2 = "0.11.0"
 uuid = { version = "1", features = ["v4"] }
+# Chinese word segmentation for the word-cloud tool. Pure Rust with the
+# dictionary embedded, so the binary grows and nothing has to be shipped beside
+# it — the alternative (a JS segmenter) would put a megabyte of dictionary in the
+# renderer, which is the one place this app keeps lean.
+jieba-rs = "0.8"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 # `.ctzx` encryption. Both are RustCrypto crates; nothing here invents a cipher

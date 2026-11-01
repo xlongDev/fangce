@@ -146,20 +146,18 @@ fn redacted_db(library: &Library) -> AppResult<PathBuf> {
     // Back to a rollback journal so the writes below land in this one file and
     // the archive never has to ship a sidecar to go with it.
     conn.pragma_update(None, "journal_mode", "DELETE")?;
-    for (key, fields) in SECRET_FIELDS {
+    for (key, _) in SECRET_FIELDS {
         let stored: Option<String> = conn
             .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| row.get(0))
             .optional()?;
         let Some(raw) = stored else { continue };
         let mut value: serde_json::Value = serde_json::from_str(&raw)
             .map_err(|err| AppError::Message(format!("设置「{key}」已损坏，未能脱敏：{err}")))?;
-        if let Some(row) = value.as_object_mut() {
-            for field in fields {
-                if let Some(slot) = row.get_mut(*field) {
-                    *slot = serde_json::Value::String(String::new());
-                }
-            }
-        }
+        // The walk lives in `secrets` so "what is encrypted" and "what a backup
+        // blanks" cannot drift — including the `profileKeys.*` shape, which a
+        // loop of its own here used to write out as a literal `"profileKeys.*"`
+        // key while leaving the real map in the archive.
+        crate::secrets::blank_secrets(key, &mut value);
         conn.execute(
             "UPDATE settings SET value = ?2 WHERE key = ?1",
             rusqlite::params![key, serde_json::to_string(&value)?],

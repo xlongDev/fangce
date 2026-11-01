@@ -47,13 +47,21 @@ export type SectionId = (typeof SECTIONS)[number]["id"];
  */
 export function SettingsGroup({
   id,
+  anchor,
   icon: Icon,
   title,
   description,
   badge,
   children,
 }: {
+  /** The rail entry this group belongs to. Several groups may share one — the
+   *  AI section is three, and the rail still has a single "AI 助手" row. */
   id: SectionId;
+  /** DOM id and `data-section` value. Defaults to `id`; a second group under the
+   *  same rail entry needs its own so the ids stay unique. The rail always finds
+   *  the *first* element carrying the section id, which is the group a jump
+   *  should land on. */
+  anchor?: string;
   icon: Icon;
   title: string;
   description?: string;
@@ -61,13 +69,14 @@ export function SettingsGroup({
   children: ReactNode;
 }) {
   const m = useMotion();
+  const key = anchor ?? id;
   return (
     // The groups rise together rather than in sequence: the route cross-fade
     // already owns the page's arrival, and a staggered form is decoration —
     // the stagger earns its keep on the shelf grid, where it follows content.
     <motion.section
-      id={`settings-${id}`}
-      data-section={id}
+      id={`settings-${key}`}
+      data-section={key}
       initial={{ opacity: 0, y: m.rise }}
       animate={{ opacity: 1, y: 0 }}
       transition={m.enter}
@@ -135,5 +144,15 @@ export function Feedback({ status }: { status: { tone: "ok" | "bad"; text: strin
     >
       {status.text}
     </output>
+  );
+}
+
+/** The "there are changes the backend has not seen" chip. */
+export function Unsaved({ dirty }: { dirty: boolean }) {
+  if (!dirty) return null;
+  return (
+    <span className="bg-accent-soft text-accent shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium">
+      未保存
+    </span>
   );
 }
