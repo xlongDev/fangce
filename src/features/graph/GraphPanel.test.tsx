@@ -23,16 +23,19 @@ vi.mock("@/hooks/useGraph", () => ({
   useGraphQuery: () => graph.view,
   useGraphBuild: () => graph.build,
 }));
+// The portrait card owns its own queries; this file is about the list and the
+// card's header, and PortraitCard has a test of its own.
+vi.mock("@/features/graph/PortraitCard", () => ({ PortraitCard: () => null }));
 
 function Probe() {
   const location = useLocation();
   return <span data-testid="location">{location.pathname + location.hash}</span>;
 }
 
-function mount() {
+function mount(props: { onAskAbout?: (name: string) => void } = {}) {
   render(
     <MemoryRouter initialEntries={["/reader"]}>
-      <GraphPanel bookId="b1" onOpenChapter={() => {}} />
+      <GraphPanel bookId="b1" onOpenChapter={() => {}} {...props} />
       <Probe />
     </MemoryRouter>,
   );
@@ -104,6 +107,25 @@ describe("GraphPanel", () => {
     expect(screen.getByRole("button", { name: /青云山/ })).toBeTruthy();
     // Once as the filter chip, once as the section heading above the chips.
     expect(screen.getAllByText("地点").length).toBe(2);
+  });
+
+  it("hands the character to the assistant", async () => {
+    // The card knows what the book says about someone; the assistant is where a
+    // reader can ask what that adds up to. Without this the character tool only
+    // exists for readers who think to ask by name.
+    const user = userEvent.setup();
+    const onAskAbout = vi.fn();
+    graph.status.data = { entities: 1, relations: 0, model: "m" };
+    graph.view.data = {
+      entities: [{ name: "林昭", kind: "人物", mentions: 4 }],
+      relations: [],
+    };
+    mount({ onAskAbout });
+
+    await user.click(screen.getByRole("button", { name: /林昭/ }));
+    await user.click(screen.getByRole("button", { name: "问助手" }));
+
+    expect(onAskAbout).toHaveBeenCalledWith("林昭");
   });
 
   it("keeps a kind the model invented instead of dropping the entity", () => {

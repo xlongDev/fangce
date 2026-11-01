@@ -407,6 +407,8 @@ export function ReaderView({
   } | null>(null);
   // Query the search panel opens with (the toolbar's 搜索 action).
   const [searchSeed, setSearchSeed] = useState("");
+  /** Pre-filled question for the assistant, from a character card. */
+  const [aiQuestion, setAiQuestion] = useState("");
 
   // A followed link into a book that renders as prose opens on the chapter that
   // quotes the passage. The chapter is all this path can promise: an
@@ -1784,6 +1786,19 @@ export function ReaderView({
     setPending(null);
   };
 
+  /**
+   * Asks the assistant about a character from the graph panel.
+   *
+   * The question is a seed, not a send: the panel opens with it in the box and
+   * the reader presses 提问 themselves. A card is a thing to look at, and
+   * spending a model call on a click that only meant "who was this again"
+   * would be the wrong default.
+   */
+  const askAboutCharacter = (name: string) => {
+    setAiQuestion(`「${name}」是谁？在书里和谁有什么关系？`);
+    setPanel("ai");
+  };
+
   /** Asks the assistant about the current selection. */
   const askAboutSelection = (range: TextRange) => {
     setAiContext(range.text);
@@ -2627,6 +2642,7 @@ export function ReaderView({
               setPanel("none");
               goTo(idx);
             },
+            onAskAbout: askAboutCharacter,
           }}
           search={{
             useFoliate,
@@ -2673,6 +2689,7 @@ export function ReaderView({
             chapterIdx,
             paragraphs: displayChapterData?.paragraphs ?? [],
             onJumpCitation: jumpToCitation,
+            question: aiQuestion,
           }}
         />
       </div>

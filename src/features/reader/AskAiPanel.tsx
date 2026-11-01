@@ -58,6 +58,7 @@ export function AskAiPanel({
   chapterIdx,
   paragraphs,
   onJump,
+  seedQuestion = "",
 }: {
   bookId: string;
   selection: string | null;
@@ -67,6 +68,8 @@ export function AskAiPanel({
   chapterIdx: number;
   paragraphs: string[];
   onJump: (hit: RagHit) => void;
+  /** Pre-filled question, e.g. from a character card. Only an initial value. */
+  seedQuestion?: string;
 }) {
   const config = useAiConfig();
   const settings = config.data ? completeAiConfig(config.data) : null;
@@ -84,7 +87,7 @@ export function AskAiPanel({
   const exportConversation = useExportAiConversation();
   const { choose } = useSavePath();
 
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(seedQuestion);
   const [ragMode, setRagMode] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");

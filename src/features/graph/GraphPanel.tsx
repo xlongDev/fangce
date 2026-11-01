@@ -46,9 +46,12 @@ function groupByKind(entities: GraphEntity[]): { kind: string; items: GraphEntit
 export function GraphPanel({
   bookId,
   onOpenChapter,
+  onAskAbout,
 }: {
   bookId: string;
   onOpenChapter: (chapterIdx: number) => void;
+  /** Hands the character to the assistant. `undefined` hides the button. */
+  onAskAbout?: (name: string) => void;
 }) {
   const [selected, setSelected] = useState<GraphEntity | null>(null);
   /** `null` means "whatever the graph suggests", not "all" — the fallback
@@ -120,10 +123,18 @@ export function GraphPanel({
           <div className="min-w-0">
             <p className="text-text-1 truncate text-[13px] font-medium">{selected.name}</p>
             <p className="text-text-3 truncate text-[11px]">
-              {kindOf(selected)} · 提及 {selected.mentions} 次
+              {kindOf(selected)} · 提及 {selected.mentions} 次 · {relations.length} 条关系
             </p>
           </div>
-          <p className="text-text-3 ml-auto shrink-0 text-[11px]">{relations.length} 条关系</p>
+          {onAskAbout && (
+            <button
+              type="button"
+              onClick={() => onAskAbout(selected.name)}
+              className="focus-visible:focus-ring border-hairline text-text-2 hover:text-accent ml-auto shrink-0 rounded-full border px-2.5 py-1 text-[11.5px] transition-colors"
+            >
+              问助手
+            </button>
+          )}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           <PortraitCard bookId={bookId} entity={selected} />

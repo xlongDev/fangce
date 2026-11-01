@@ -86,6 +86,7 @@ export function ReaderPanels({
   };
   graph: {
     onOpenChapter: (idx: number) => void;
+    onAskAbout: (name: string) => void;
   };
   search: {
     /** foliate books search inside their own renderer; the rest hit the index. */
@@ -114,6 +115,7 @@ export function ReaderPanels({
     chapterIdx: number;
     paragraphs: string[];
     onJumpCitation: (hit: RagHit) => void;
+    question: string;
   };
 }) {
   return (
@@ -177,7 +179,11 @@ export function ReaderPanels({
                 <SearchPanel bookId={bookId} initialQuery={search.seed} onPick={search.onPick} />
               ))}
             {panel === "graph" && (
-              <GraphPanel bookId={bookId} onOpenChapter={graph.onOpenChapter} />
+              <GraphPanel
+                bookId={bookId}
+                onOpenChapter={graph.onOpenChapter}
+                onAskAbout={graph.onAskAbout}
+              />
             )}
             {panel === "ai" && (
               <AskAiPanel
@@ -188,6 +194,7 @@ export function ReaderPanels({
                 chapterIdx={ai.chapterIdx}
                 paragraphs={ai.paragraphs}
                 onJump={ai.onJumpCitation}
+                seedQuestion={ai.question}
               />
             )}
             {panel === "guide" && <GuidePanel bookId={bookId} />}
