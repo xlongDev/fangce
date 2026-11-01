@@ -280,7 +280,7 @@ struct Delta {
 #[derive(Debug, Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
-    messages: Vec<ChatMessage>,
+    messages: Vec<WireMessage<'a>>,
     stream: bool,
     temperature: f64,
     max_tokens: u32,
@@ -289,6 +289,64 @@ struct ChatRequest<'a> {
     tools: Option<Vec<ToolDef>>,
     #[serde(flatten)]
     thinking: Map<String, Value>,
+}
+
+/// One message as a provider reads it.
+///
+/// Deliberately not [`ChatMessage`]: that type also crosses IPC, where the
+/// renderer speaks camelCase, while the wire speaks snake_case and nests a tool
+/// call under `function`. One type serving both contracts sent `toolCalls` and
+/// `toolCallId` to providers that only accept `tool_calls` and `tool_call_id` —
+/// so the second round of every tool conversation was rejected, and it looked
+/// like a broken model rather than a broken client.
+#[derive(Debug, Serialize)]
+struct WireMessage<'a> {
+    role: Role,
+    /// Omitted for an assistant turn that only asked for tools. OpenAI
+    /// documents `content` as optional there, and a strict gateway rejects the
+    /// empty string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<&'a str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<WireToolCall<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct WireToolCall<'a> {
+    id: &'a str,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    function: WireFunction<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct WireFunction<'a> {
+    name: &'a str,
+    arguments: &'a str,
+}
+
+/// Projects the IPC-shaped messages onto the shape the wire expects.
+fn wire_messages(messages: &[ChatMessage]) -> Vec<WireMessage<'_>> {
+    messages
+        .iter()
+        .map(|message| WireMessage {
+            role: message.role,
+            content: (!(message.content.is_empty() && !message.tool_calls.is_empty()))
+                .then_some(message.content.as_str()),
+            tool_calls: message
+                .tool_calls
+                .iter()
+                .map(|call| WireToolCall {
+                    id: &call.id,
+                    kind: "function",
+                    function: WireFunction { name: &call.name, arguments: &call.arguments },
+                })
+                .collect(),
+            tool_call_id: message.tool_call_id.as_deref(),
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -377,7 +435,7 @@ fn request_body(
 
     serde_json::to_value(ChatRequest {
         model: &config.model,
-        messages,
+        messages: wire_messages(&messages),
         stream: true,
         temperature,
         max_tokens: config.max_tokens,
@@ -844,6 +902,40 @@ mod tests {
         );
         // A field named in the error but absent from the body is nothing to do.
         assert_eq!(rejected_optional_field(&json!({}), "thinking is not supported"), None);
+    }
+
+    #[test]
+    fn a_tool_round_is_written_in_the_wire_shape() {
+        // The messages cross IPC in camelCase and the wire wants snake_case.
+        // Sending `toolCalls` made every second round fail with a 400 that read
+        // like the model was broken.
+        let config = AiConfig::default();
+        let mut asked = ChatMessage::new(Role::Assistant, "");
+        asked.tool_calls = vec![ToolCall {
+            id: "c1".into(),
+            name: "wordcloud".into(),
+            arguments: r#"{"scope":"chapter"}"#.into(),
+        }];
+        let mut reply = ChatMessage::new(Role::Tool, "统计完成");
+        reply.tool_call_id = Some("c1".into());
+
+        let body = request_body(&config, vec![asked, reply], None);
+        let first = &body["messages"][0];
+        let second = &body["messages"][1];
+
+        assert_eq!(first["tool_calls"][0]["id"], json!("c1"));
+        assert_eq!(first["tool_calls"][0]["type"], json!("function"));
+        assert_eq!(first["tool_calls"][0]["function"]["name"], json!("wordcloud"));
+        assert_eq!(
+            first["tool_calls"][0]["function"]["arguments"],
+            json!(r#"{"scope":"chapter"}"#)
+        );
+        assert!(first.get("content").is_none(), "只调工具的轮次不写空 content");
+        assert!(first.get("toolCalls").is_none(), "camelCase 会被服务商拒掉");
+
+        assert_eq!(second["role"], json!("tool"));
+        assert_eq!(second["tool_call_id"], json!("c1"));
+        assert!(second.get("toolCallId").is_none());
     }
 
     #[test]
