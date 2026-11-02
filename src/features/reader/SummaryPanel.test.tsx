@@ -67,6 +67,21 @@ describe("SummaryPanel", () => {
     expect(screen.getByText("还没有摘要")).toBeTruthy();
   });
 
+  it("tells a chapter with no prose apart from one not generated yet", () => {
+    // Both rows are empty; only the second is work. Counting the cover page as
+    // missing is what left the button offering to 补齐 a page that is a picture.
+    summary.list.data = [
+      { idx: 0, title: "第 1 章", summary: "", createdAt: 1 },
+      { idx: 1, title: "第一章", summary: "", createdAt: 0 },
+    ];
+    mount();
+
+    expect(screen.getByText("这一章没有正文（封面、版权页或目录）")).toBeTruthy();
+    expect(screen.getByText("还没有摘要")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "补齐 1 章" })).toBeTruthy();
+    expect(screen.getByText(/1 章无正文/)).toBeTruthy();
+  });
+
   it("jumps to a chapter when its row is clicked", async () => {
     const user = userEvent.setup();
     summary.list.data = rows();

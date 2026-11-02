@@ -40,7 +40,11 @@ export function SummaryPanel({
 
   const rows = list.data ?? [];
   const ready = rows.filter((row) => row.summary !== "").length;
-  const missing = rows.length - ready;
+  // Three states, not two. A row with a timestamp and no text is a chapter the
+  // backend decided has nothing to summarise — a cover, a copyright page — and
+  // offering to 补齐 it would be a button that never finishes.
+  const textless = rows.filter((row) => row.summary === "" && row.createdAt > 0).length;
+  const missing = rows.filter((row) => row.summary === "" && row.createdAt === 0).length;
   const building = build.isPending;
 
   if (rows.length === 0) {
@@ -61,6 +65,7 @@ export function SummaryPanel({
         <div className="flex items-center justify-between gap-2">
           <p className="text-text-3 text-[11.5px]">
             已读 {rows.length} 章 · {ready} 章有摘要
+            {textless > 0 && ` · ${textless} 章无正文`}
           </p>
           <button
             type="button"
@@ -70,7 +75,7 @@ export function SummaryPanel({
           >
             {building
               ? progress
-                ? `${progress.done}/${progress.total}`
+                ? `${progress.done}/${progress.total} 章`
                 : "读取章节…"
               : missing === 0
                 ? "已补齐"
@@ -122,7 +127,8 @@ export function SummaryPanel({
                 row.summary ? "text-text-2" : "text-text-3",
               )}
             >
-              {row.summary || "还没有摘要"}
+              {row.summary ||
+                (row.createdAt > 0 ? "这一章没有正文（封面、版权页或目录）" : "还没有摘要")}
             </p>
           </button>
         ))}
