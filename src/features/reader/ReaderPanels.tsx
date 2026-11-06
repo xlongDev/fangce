@@ -12,6 +12,7 @@ import { SummaryPanel } from "@/features/reader/SummaryPanel";
 import { TocPanel } from "@/features/reader/TocPanel";
 import type { Panel } from "@/features/reader/ReaderChrome";
 import { GraphPanel } from "@/features/graph/GraphPanel";
+import { CharacterPanel } from "@/features/graph/CharacterPanel";
 import { SearchPanel } from "@/features/search/SearchPanel";
 import type { PdfOutlineItem } from "@/lib/pdf";
 import type { Annotation, Bookmark, ChapterMeta, RagHit, SearchHit } from "@/types/ipc";
@@ -30,6 +31,8 @@ export function panelTitle(panel: Exclude<Panel, "none">): string {
       return "搜索正文";
     case "graph":
       return "知识图谱";
+    case "characters":
+      return "角色卡";
     case "guide":
       return "AI 导读";
     case "summary":
@@ -53,6 +56,7 @@ export function ReaderPanels({
   onClose,
   paired = false,
   toc,
+  summary,
   graph,
   search,
   annotations,
@@ -86,6 +90,20 @@ export function ReaderPanels({
     onJumpBookmark: (bookmark: Bookmark) => void;
     onDeleteBookmark: (id: string) => void;
     onAddBookmark: () => void;
+  };
+  /**
+   * The summary drawer's own chapter numbering.
+   *
+   * Not `toc`'s: for a foliate book the table of contents is the book's own nav
+   * (16 entries here), while the summaries are keyed by the importer's chapters
+   * (36 — every part *and* every chapter). Passing the nav's index in as a
+   * chapter index truncated the list at an arbitrary row and sent 第 1 章 to
+   * 第一部分, because `toc.onJump` reads its argument as a nav entry.
+   */
+  summary: {
+    /** The reader's position as a chapter index, inclusive. */
+    currentIdx: number;
+    onJump: (idx: number) => void;
   };
   graph: {
     onOpenChapter: (idx: number) => void;
@@ -188,6 +206,9 @@ export function ReaderPanels({
                 onAskAbout={graph.onAskAbout}
               />
             )}
+            {panel === "characters" && (
+              <CharacterPanel bookId={bookId} onAskAbout={graph.onAskAbout} />
+            )}
             {panel === "ai" && (
               <AskAiPanel
                 bookId={bookId}
@@ -203,7 +224,11 @@ export function ReaderPanels({
             {/* The drawer already knows the reader's position and how to jump
                 — the same two things the table of contents uses. */}
             {panel === "summary" && (
-              <SummaryPanel bookId={bookId} currentIdx={toc.currentIdx} onJump={toc.onJump} />
+              <SummaryPanel
+                bookId={bookId}
+                currentIdx={summary.currentIdx}
+                onJump={summary.onJump}
+              />
             )}
             {panel === "guide" && <GuidePanel bookId={bookId} />}
           </Reveal>

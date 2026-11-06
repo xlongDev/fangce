@@ -218,7 +218,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(idx, paragraphs)| RawChapter {
-                title: Some(format!("第 {} 章", idx + 1)),
+                title: Some(crate::document::untitled_section(idx + 1)),
                 paragraphs: paragraphs.iter().map(|p| p.to_string()).collect(),
             })
             .collect();

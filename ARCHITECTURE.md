@@ -244,11 +244,15 @@ DeepL / Wikipedia 在**后端**发请求，因此 Key 永远不进渲染层，CO
 
 存储：向量 **L2 归一化后以 f32 LE 字节存 BLOB**，检索退化为点积（即余弦相似度）。`model` 与 `dims` 随行入表并参与过滤——不同模型的向量不在同一个空间，混比是噪声；换向量模型后重建索引即切换空间。
 
-管线：`rag_index_book` 按批（16 条/请求）嵌入并 emit `rag://index-progress`，旧索引与新块同事务替换，失败保留原索引；`rag_chat` 把问题嵌入后取 Top-6（跨书或限单书），编号片段拼进提示词，回答流式推送、引用随 `done` 事件返回，前端点引用按既有 `chapter + offset` 参数跳转。
+这条过滤有一个不体面的副作用，所以 `rag.status` 除了计数还报 `bookStale` 与 `staleBooks`：**旧模型的块仍然躺在表里**，`book_chunks > 0` 让面板显示「已索引」，而检索一条都取不到。读者换了模型之后看到的不是报错，是助手突然变笨。两个计数就是为此存在，面板据此把状态行换成「索引是旧模型建的，点此重建」。
+
+管线（建索引）：`rag_index_book` 按批（16 条/请求）嵌入并 emit `rag://index-progress`，旧索引与新块同事务替换，失败保留原索引；`rag_index_library` 走同一段逻辑，逐本重建**已经有块的书**（不替读者索引他从未索引过的书），进度按本 emit `rag://library-progress`，单本失败只记日志并继续。
+
+管线（查）：检索**不是一条命令**，而是助手的一个工具。`search_book` 把问题嵌入后取 Top-K（`rag_top_k`，默认 6，限当前书），开着防剧透时再加 `max_chapter`；编号片段作为工具结果回给模型，回答流式推送、引用随 `done` 事件返回，前端点引用按既有 `chapter + offset` 参数跳转。这样「查不查书」由模型在那一轮自己决定，而不是由前端替它决定。
 
 ### 检索重排与朗读
 
-**重排是可选的第二阶段**。重排没有 OpenAI 标准，但 Cohere 的 `/rerank` 线格式成了事实标准（Jina、SiliconFlow 等同型），所以 `rerank_model` 留空即关闭；配置后 `rag_chat` 把第一阶段召回放宽到 Top-24，再由重排模型挑出最终 Top-6。重排失败**直接报错**而不是静默降级：配置错了却每问都「碰巧还能用」，比诚实失败更难排查。
+**重排是可选的第二阶段**。重排没有 OpenAI 标准，但 Cohere 的 `/rerank` 线格式成了事实标准（Jina、SiliconFlow 等同型），所以 `rerank_model` 留空即关闭；配置后 `search_book` 把第一阶段召回放宽到 `rag_top_k × 4`（默认 6 → 24），再由重排模型挑出最终 Top-K。重排失败**直接报错**而不是静默降级：配置错了却每问都「碰巧还能用」，比诚实失败更难排查。
 
 **朗读是双引擎的**：系统 `speechSynthesis`（离线、不引依赖）与 **Edge TTS**（Rust 侧 WebSocket，`tts.rs`）。之所以要有第二个，是因为默认音色 **Yunjian 是服务语音**（`zh-CN-YunjianNeural`）——`AVSpeechSynthesisVoice` 与任何系统清单里都没有它，而它正是这个阅读器想给出的默认声音。Edge 那条**必须走 Rust**：握手要一个浏览器不允许脚本设置的 `Cookie` 与 `Origin`，`Sec-MS-GEC` 是按原始时钟签的，渲染层既拿不到它也不该被信任持有。两个引擎在 `voice.ts` 里按 `edge:` 前缀分派，Edge 不可达时回落到系统音色并在面板上给出错误与重试。
 
@@ -267,6 +271,8 @@ DeepL / Wikipedia 在**后端**发请求，因此 Key 永远不进渲染层，CO
 合并规则（Rust 侧纯函数 `merge`）：实体按名字去重、mentions 累加，空名与超过 30 字的「名字」（基本是模型在粘贴散文）丢弃；关系按 `(subject, relation, object)` 去重，保留首次出现的证据句与章节。关系**直接存名字而不是实体 id**：模型可能抽出实体表里没有的关系端点，外键只会把它悄悄扔掉。
 
 整本重建：逐章抽取（40 字以下的章跳过）、进度经 `graph://build-progress` 推送，最后旧图与新图同事务整体替换——中途失败保留旧图谱，永远不会有半张图。
+
+**角色卡是图谱的一个视图，不是第二张表。** 卡片就是 `entities` 里 `kind = '人物'` 的行（常量 `CHARACTER_KIND`，与抽取提示词里那个字符串必须同串），「添加角色」是 `ON CONFLICT (book_id, name) DO UPDATE`，同名不会变成两张卡；「清空」连带删掉提到这些名字的 `entity_relations`，否则图谱里会留下一堆悬空边。立绘落在资源协议下（`covers/portraits/<slug(book_id)>/<slug(name)>.png`），所以卡片不需要自己的图片字段。角色卡包是一个 **zip**（`manifest.json` + `portraits/<slug>.png`）——`.ctz`/`.ctzx` 已经是书档，不另造一个相近的扩展名让人猜。
 
 ### 书源模型
 
@@ -538,13 +544,15 @@ pnpm exec prettier --write src/lib/bindings.ts   # 生成物未格式化，pre-c
 ```text
 book://import-progress       { done, total, path }
 ai://stream                  { requestId, text, done, finishReason, error, citations? }
-rag://index-progress         { done, total }
+rag://index-progress         { done, total }    # 块
+rag://library-progress       { done, total }    # 本：全库重建一次推进一本书
 graph://build-progress       { done, total }
 source://download-progress   { done, total, chapter }
 ```
 
-目前只有这五个事件；TTS 的音频走 `tts_edge_speak` 的返回值、同步结果是 `sync.now` 的
-返回值，两者都不发事件。
+TTS 的音频走 `tts_edge_speak` 的返回值、同步结果是 `sync.now` 的返回值，两者都不发事件。
+两个 rag 事件分开而不复用同一个名字：一个数的是块（几百到上千），一个数的是书（几本到几十本），
+混用会让其中一个进度条报出与实际不符的数。
 
 ---
 

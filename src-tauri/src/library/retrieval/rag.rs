@@ -218,6 +218,59 @@ pub fn search(
     Ok(scored.into_iter().take(k).map(|(_, hit)| hit).collect())
 }
 
+/// Books whose stored chunks were built with a different model than `model`.
+///
+/// Retrieval filters on `model` and `dims`, so those chunks are invisible: the
+/// book looks indexed in the panel and answers nothing. That silence is the
+/// whole reason this count exists — without it, switching the embedding model
+/// is a change that quietly breaks every book at once.
+pub fn stale_books(conn: &Connection, model: &str) -> AppResult<usize> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT book_id) FROM chunks WHERE model <> ?1",
+        params![model],
+        |row| row.get(0),
+    )?;
+    Ok(count as usize)
+}
+
+/// Whether this book's own index predates the configured model.
+pub fn book_is_stale(conn: &Connection, book_id: &str, model: &str) -> AppResult<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM chunks WHERE book_id = ?1 AND model <> ?2",
+        params![book_id, model],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+/// Ids of the books that carry an index, oldest work first is not a thing here:
+/// the caller walks them in whatever order this returns.
+pub fn indexed_books(conn: &Connection) -> AppResult<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT DISTINCT book_id FROM chunks ORDER BY book_id")?;
+    let mut rows = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(row.get(0)?);
+    }
+    Ok(out)
+}
+
+/// Drops the whole library's index, returning how many chunks went.
+pub fn clear_library(conn: &Connection) -> AppResult<usize> {
+    let removed = conn.execute("DELETE FROM chunks", [])?;
+    Ok(removed)
+}
+
+/// Drops every chunk of one book, returning how many rows went.
+///
+/// The index is derived data — chapters are the source of truth — so this costs
+/// one rebuild and nothing else. That is why the assistant's menu offers it as
+/// a maintenance action instead of a confirmation dialog.
+pub fn clear(conn: &Connection, book_id: &str) -> AppResult<usize> {
+    let removed = conn.execute("DELETE FROM chunks WHERE book_id = ?1", params![book_id])?;
+    Ok(removed)
+}
+
 /// Chunk counts for the status query: this book, and the whole library.
 pub fn counts(conn: &Connection, book_id: &str) -> AppResult<(usize, usize)> {
     let one: i64 = conn.query_row(
@@ -239,6 +292,57 @@ fn now_seconds() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::{Layout, Library};
+    use crate::document::fixture;
+
+    /// A library with two books and a handful of chunks, so the counting
+    /// queries run against real rows rather than a mocked connection.
+    fn seeded(tag: &str, rows: &[(&str, &str)]) -> (std::path::PathBuf, Library) {
+        let dir = fixture::temp_dir(tag);
+        let layout = Layout::create(dir.clone()).expect("layout");
+        let library = Library::open(&layout.data_dir).expect("open");
+        library
+            .with(|conn| {
+                for id in ["b1", "b2"] {
+                    conn.execute(
+                        "INSERT INTO books (id, title, sort_title, format, content_hash, \
+                         file_path, file_size, added_at, updated_at) \
+                         VALUES (?1, 'T', 't', 'epub', ?1, 'p', 1, 1, 1)",
+                        params![id],
+                    )?;
+                }
+                for (book, model) in rows {
+                    conn.execute(
+                        "INSERT INTO chunks (book_id, chapter_idx, start_char, end_char, text, \
+                         embedding, model, dims, updated_at) \
+                         VALUES (?1, 0, 0, 1, 'x', x'00', ?2, 1, 1)",
+                        params![book, model],
+                    )?;
+                }
+                Ok(())
+            })
+            .expect("seed");
+        (dir, library)
+    }
+
+    #[test]
+    fn staleness_is_per_model_and_per_book() {
+        let (_dir, library) = seeded("rag-stale", &[("b1", "old"), ("b1", "old"), ("b2", "new")]);
+
+        // b1's two chunks are the old model; b2's one is the current one.
+        assert_eq!(library.with(|c| stale_books(c, "new")).unwrap(), 1);
+        assert!(library.with(|c| book_is_stale(c, "b1", "new")).unwrap());
+        assert!(!library.with(|c| book_is_stale(c, "b2", "new")).unwrap());
+
+        // Every indexed book is listed once, whatever its chunk count.
+        let books = library.with(indexed_books).unwrap();
+        assert_eq!(books, vec!["b1".to_string(), "b2".to_string()]);
+
+        // And the library-wide clear takes all of them.
+        assert_eq!(library.with(clear_library).unwrap(), 3);
+        assert_eq!(library.with(|c| counts(c, "b1")).unwrap(), (0, 0));
+        assert!(library.with(indexed_books).unwrap().is_empty());
+    }
 
     #[test]
     fn chunks_respect_paragraph_boundaries() {

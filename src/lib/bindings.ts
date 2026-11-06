@@ -176,6 +176,12 @@ export const commands = {
    */
   aiConversationExport: (id: string, path: string) =>
     __TAURI_INVOKE<null>("ai_conversation_export", { id, path }),
+  /**
+   *  `ai.conversationClear` — deletes this book's saved conversations, or the
+   *  whole library's when `book_id` is `None`. Returns how many went.
+   */
+  aiConversationClear: (bookId: string | null) =>
+    __TAURI_INVOKE<number>("ai_conversation_clear", { bookId }),
   /**  `annotation.create` — records one highlight and returns it. */
   annotationCreate: (
     bookId: string,
@@ -492,6 +498,38 @@ export const commands = {
   graphQuery: (bookId: string, entity: string | null) =>
     __TAURI_INVOKE<GraphView>("graph_query", { bookId, entity }),
   /**
+   *  `graph.characters` — the card wall.
+   *
+   *  One command rather than a query plus N portrait lookups: whether a picture
+   *  exists is a `stat`, and a hundred round trips to answer it is how a wall of
+   *  cards ends up painting in order.
+   */
+  graphCharacters: (bookId: string) =>
+    __TAURI_INVOKE<CharacterCard[]>("graph_characters", { bookId }),
+  /**  `graph.addCharacter` — a name the extractor never found. */
+  graphAddCharacter: (bookId: string, name: string) =>
+    __TAURI_INVOKE<CharacterCard>("graph_add_character", { bookId, name }),
+  /**  `graph.clearCharacters` — empties the wall, portraits included. */
+  graphClearCharacters: (bookId: string) =>
+    __TAURI_INVOKE<number>("graph_clear_characters", { bookId }),
+  /**
+   *  `graph.openPortraits` — reveals this book's portrait folder in the file
+   *  manager, so a reader can drop in their own pictures.
+   */
+  graphOpenPortraits: (bookId: string) => __TAURI_INVOKE<null>("graph_open_portraits", { bookId }),
+  /**
+   *  `graph.exportCharacters` — writes the wall to a pack and returns how many
+   *  cards went into it.
+   */
+  graphExportCharacters: (bookId: string, path: string) =>
+    __TAURI_INVOKE<number>("graph_export_characters", { bookId, path }),
+  /**
+   *  `graph.importCharacters` — merges a pack into this book, returning how many
+   *  cards it added.
+   */
+  graphImportCharacters: (bookId: string, path: string) =>
+    __TAURI_INVOKE<number>("graph_import_characters", { bookId, path }),
+  /**
    *  `lookup.translate` — one DeepL round trip, no streaming: a paragraph comes
    *  back in well under a second and the popup renders it whole. The key lives
    *  in the same settings row as the AI config; an empty key is the frontend's
@@ -544,6 +582,25 @@ export const commands = {
   ragStatus: (bookId: string) => __TAURI_INVOKE<RagStatus>("rag_status", { bookId }),
   /**  `rag.indexBook` — rebuilds the embedding index for one book. */
   ragIndexBook: (bookId: string) => __TAURI_INVOKE<number>("rag_index_book", { bookId }),
+  /**
+   *  `rag.indexLibrary` — rebuilds every book that carries an index, against the
+   *  model configured now.
+   *
+   *  This is what makes switching the embedding model a recoverable mistake: the
+   *  old vectors stay in the table (they are invisible to retrieval, not deleted),
+   *  so a reader who tries a model and goes back still has to rebuild, and doing
+   *  that one book at a time means opening thirty books.
+   */
+  ragIndexLibrary: () => __TAURI_INVOKE<number>("rag_index_library"),
+  /**  `rag.clearLibrary` — drops every book's index, returning how many chunks went. */
+  ragClearLibrary: () => __TAURI_INVOKE<number>("rag_clear_library"),
+  /**
+   *  `rag.clearBook` — drops this book's index and reports how many chunks went.
+   *
+   *  Chunks are derived from chapters, so a clear costs one rebuild and nothing
+   *  else. That is why the assistant's menu offers it without a warning dialog.
+   */
+  ragClearBook: (bookId: string) => __TAURI_INVOKE<number>("rag_clear_book", { bookId }),
   /**  `reader.toc` — chapter metadata in reading order. */
   readerToc: (bookId: string) => __TAURI_INVOKE<ChapterMeta[]>("reader_toc", { bookId }),
   /**
@@ -1123,6 +1180,23 @@ export type ChapterSummary = {
   summary: string;
   /**  When it was written; 0 for a chapter that has none. */
   createdAt: number;
+  /**
+   *  Characters in the chapter, image markers and all.
+   *
+   *  The panel needs it to say *why* a row is empty. 「这一章只有 10 字」 is an
+   *  answer the reader can check; 「封面、版权页或目录」 was a guess, and a
+   *  dedication page (71 characters, very much not a cover) proved it wrong.
+   */
+  chars: number;
+};
+
+/**  One card on the character wall: the entity, plus where its portrait is. */
+export type CharacterCard = {
+  name: string;
+  kind: string;
+  mentions: number;
+  /**  Served from the resource protocol; `None` until one is drawn or imported. */
+  portrait: string | null;
 };
 
 /**
@@ -1613,6 +1687,15 @@ export type RagStatus = {
   libraryChunks: number;
   /**  Empty when retrieval is not configured. */
   embeddingModel: string;
+  /**
+   *  Books whose index was built with another model. Retrieval filters on the
+   *  model, so these are invisible until rebuilt — the panel has to say so
+   *  rather than let the reader wonder why a book that "is indexed" finds
+   *  nothing.
+   */
+  staleBooks: number;
+  /**  Whether this book's own index predates the configured model. */
+  bookStale: boolean;
 };
 
 /**  Everything the stats page draws. */

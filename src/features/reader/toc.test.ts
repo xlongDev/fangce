@@ -37,7 +37,7 @@ describe("tocRows", () => {
 
     expect(rows.map((row) => row.marker)).toEqual(["1", "2"]);
     expect(rows.map((row) => row.depth)).toEqual([0, 0]);
-    expect(rows[1]!.title).toBe("第 2 章");
+    expect(rows[1]!.title).toBe("第 2 节");
   });
 
   it("marks a PDF outline by page and prefers it over the chapter list", () => {

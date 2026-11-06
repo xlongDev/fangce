@@ -27,6 +27,7 @@ import {
   SpeakerHigh,
   Sparkle,
   Translate,
+  Users,
 } from "@phosphor-icons/react";
 
 import { GlassButton, GlassIconButton } from "@/components/glass/button";
@@ -42,7 +43,16 @@ import { cn } from "@/lib/cn";
 
 /** Which side panel is open. Only one at a time, so they never stack. */
 export type Panel =
-  "none" | "annotations" | "search" | "ai" | "guide" | "graph" | "summary" | "toc" | "settings";
+  | "none"
+  | "annotations"
+  | "search"
+  | "ai"
+  | "guide"
+  | "graph"
+  | "characters"
+  | "summary"
+  | "toc"
+  | "settings";
 
 /**
  * Reader chrome buttons: same anatomy as the sidebar's glass buttons, but
@@ -183,12 +193,22 @@ export function ReaderToolButtons({
       >
         <Graph size={16} />
       </GlassIconButton>
+      {/* The same entities, but as faces: a reader who wants to see 林昭 rather
+          than read a list of names has no use for the graph's filters. */}
+      <GlassIconButton
+        label="角色卡"
+        size="sm"
+        className={CHROME_BTN}
+        onClick={() => onTogglePanel("characters")}
+      >
+        <Users size={16} />
+      </GlassIconButton>
       {/* The assistant had no door of its own: it could only be opened by
           selecting text and picking 问 AI, so a reader who wanted to ask
           something else had no way in. */}
-      {/* Next to the graph because it answers the other half of the same
-          question: the graph says who someone is, the summaries say what
-          happened. */}
+      {/* Beside the graph and the card wall because it answers the other half
+          of the same question: those two say who someone is, the summaries say
+          what happened. */}
       <GlassIconButton
         label="章节摘要"
         size="sm"

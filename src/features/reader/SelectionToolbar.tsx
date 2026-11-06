@@ -25,6 +25,7 @@ import { cn } from "@/lib/cn";
 import { activeReadingViewport } from "@/features/reader/readingViewport";
 import { useSettings } from "@/stores/settings";
 import type { WebDefinition } from "@/lib/bindings";
+import { AiSpeechButton } from "@/components/common/AiSpeechButton";
 import { OverlayPortal } from "@/components/glass/overlay";
 import type { Annotation, AnnotationStyle } from "@/types/ipc";
 import { HIGHLIGHT_COLORS } from "@/stores/reader";
@@ -769,11 +770,22 @@ function AiLookup({
       {error ? (
         <p className="text-text-3">{friendlyAiError(error)}</p>
       ) : (
-        <>
-          {answer}
-          {streaming && <span className="text-accent animate-pulse">▍</span>}
-          {!answer && !error && <span className="text-text-3">正在查询…</span>}
-        </>
+        <div className="flex items-start gap-2">
+          <p className="min-w-0 flex-1 whitespace-pre-wrap">
+            {answer}
+            {streaming && <span className="text-accent animate-pulse">▍</span>}
+            {!answer && <span className="text-text-3">正在查询…</span>}
+          </p>
+          <AiSpeechButton
+            id={`lookup:${title}`}
+            text={answer}
+            title={title}
+            chapter="划词问答"
+            disabled={streaming}
+            streaming={streaming}
+            label="朗读这条回答"
+          />
+        </div>
       )}
     </LookupPanel>
   );

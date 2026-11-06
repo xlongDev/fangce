@@ -372,6 +372,74 @@ pub fn entity(conn: &Connection, book_id: &str, name: &str) -> AppResult<Option<
     }
 }
 
+/// The kind every character card carries. The extractor prompt above spells it
+/// the same way, and the card wall filters on it, so the two must not drift.
+pub const CHARACTER_KIND: &str = "人物";
+
+/// The book's characters, most-mentioned first — the order the card wall shows.
+pub fn characters(conn: &Connection, book_id: &str) -> AppResult<Vec<GraphEntity>> {
+    let mut stmt = conn.prepare(
+        "SELECT name, kind, mentions FROM entities
+          WHERE book_id = ?1 AND kind = ?2
+          ORDER BY mentions DESC, name",
+    )?;
+    let mut rows = stmt.query(params![book_id, CHARACTER_KIND])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(GraphEntity {
+            name: row.get(0)?,
+            kind: row.get(1)?,
+            mentions: row.get::<_, i64>(2)? as usize,
+        });
+    }
+    Ok(out)
+}
+
+/// Adds a character the extractor never found — the reader knows someone the
+/// graph does not.
+///
+/// Idempotent: a name already in the graph is promoted to 人物 rather than
+/// duplicated, because `entities` is unique on (book_id, name).
+pub fn add_character(conn: &Connection, book_id: &str, name: &str) -> AppResult<GraphEntity> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::InvalidArgument("角色名不能为空".into()));
+    }
+    if name.chars().count() > MAX_NAME_CHARS {
+        return Err(AppError::InvalidArgument(format!("名字太长了（上限 {MAX_NAME_CHARS} 字）")));
+    }
+    conn.execute(
+        "INSERT INTO entities (book_id, name, kind, mentions) VALUES (?1, ?2, ?3, 0)
+         ON CONFLICT (book_id, name) DO UPDATE SET kind = ?3",
+        params![book_id, name, CHARACTER_KIND],
+    )?;
+    entity(conn, book_id, name)?.ok_or_else(|| AppError::Message("刚写入的角色读不回来".into()))
+}
+
+/// Removes every character card of one book, returning the names that went.
+///
+/// The relations that named them go too: a relation whose subject is gone would
+/// keep the name alive in the graph panel as a dangling edge.
+pub fn clear_characters(conn: &Connection, book_id: &str) -> AppResult<Vec<String>> {
+    let names: Vec<String> = characters(conn, book_id)?.into_iter().map(|e| e.name).collect();
+    if names.is_empty() {
+        return Ok(names);
+    }
+    let tx = conn.unchecked_transaction()?;
+    for name in &names {
+        tx.execute(
+            "DELETE FROM entity_relations WHERE book_id = ?1 AND (subject = ?2 OR object = ?2)",
+            params![book_id, name],
+        )?;
+    }
+    tx.execute(
+        "DELETE FROM entities WHERE book_id = ?1 AND kind = ?2",
+        params![book_id, CHARACTER_KIND],
+    )?;
+    tx.commit()?;
+    Ok(names)
+}
+
 pub fn query(conn: &Connection, book_id: &str, entity: Option<&str>) -> AppResult<GraphView> {
     let mut view = GraphView::default();
     match entity {
@@ -562,5 +630,38 @@ mod tests {
         // Rebuild with less data and nothing from the old graph survives.
         replace(&harness.library, "b", &entities[..1], &[]).expect("replace again");
         assert_eq!(harness.library.with(|conn| counts(conn, "b")).expect("counts"), (1, 0));
+    }
+
+    #[test]
+    fn a_manual_character_joins_the_wall_and_clearing_takes_its_edges() {
+        let harness = Harness::new("graph-characters");
+        let entities = vec![
+            GraphEntity { name: "孙悟空".into(), kind: "人物".into(), mentions: 3 },
+            GraphEntity { name: "花果山".into(), kind: "地点".into(), mentions: 1 },
+        ];
+        let relations = vec![GraphRelation {
+            subject: "孙悟空".into(),
+            relation: "出身于".into(),
+            object: "花果山".into(),
+            evidence: "花果山福地".into(),
+            chapter_idx: 1,
+        }];
+        replace(&harness.library, "b", &entities, &relations).expect("replace");
+
+        let wall = harness.library.with(|conn| characters(conn, "b")).expect("characters");
+        assert_eq!(wall.len(), 1, "只有人物上墙：{wall:?}");
+        assert_eq!(wall[0].name, "孙悟空");
+
+        let added = harness.library.with(|conn| add_character(conn, "b", " 白骨精 ")).expect("add");
+        assert_eq!(added.name, "白骨精", "名字去掉空白");
+        assert_eq!(added.kind, CHARACTER_KIND);
+        // The same name twice is one card, not two.
+        harness.library.with(|conn| add_character(conn, "b", "白骨精")).expect("add twice");
+        assert_eq!(harness.library.with(|conn| characters(conn, "b")).expect("wall").len(), 2);
+
+        let removed = harness.library.with(|conn| clear_characters(conn, "b")).expect("clear");
+        assert_eq!(removed.len(), 2);
+        let (left, edges) = harness.library.with(|conn| counts(conn, "b")).expect("counts");
+        assert_eq!((left, edges), (1, 0), "地点留着，人物的关系一并删掉");
     }
 }

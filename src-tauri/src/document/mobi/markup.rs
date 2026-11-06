@@ -160,7 +160,7 @@ pub(super) fn split_oversized(chapters: &mut Vec<RawChapter>) {
             continue;
         }
         let chapter = chapters.remove(index);
-        let base = chapter.title.unwrap_or_else(|| format!("第 {} 章", index + 1));
+        let base = chapter.title.unwrap_or_else(|| crate::document::untitled_section(index + 1));
         let mut parts: Vec<RawChapter> = Vec::new();
         let mut current = RawChapter::default();
         let mut size = 0usize;

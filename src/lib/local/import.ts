@@ -193,7 +193,7 @@ async function extractChapters(
       }
       const blocks = textBlocks(doc.body);
       if (blocks.length === 0) continue;
-      const { title, paragraphs } = chapterFromBlocks(blocks, `第 ${chapters.length + 1} 章`);
+      const { title, paragraphs } = chapterFromBlocks(blocks, `第 ${chapters.length + 1} 节`);
       chapters.push({ idx: chapters.length, title, paragraphs });
     } catch {
       // A section that will not open is skipped, not fatal: the rest of the

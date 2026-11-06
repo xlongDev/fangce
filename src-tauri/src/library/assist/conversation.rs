@@ -160,6 +160,19 @@ pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Deletes every conversation of one book, or of the whole library when
+/// `book_id` is `None`. Returns how many conversations went.
+///
+/// Messages follow through the cascade; nothing else references a conversation,
+/// so there is nothing to clean up by hand.
+pub fn clear(conn: &Connection, book_id: Option<&str>) -> AppResult<usize> {
+    let removed = match book_id {
+        Some(id) => conn.execute("DELETE FROM ai_conversations WHERE book_id = ?1", params![id])?,
+        None => conn.execute("DELETE FROM ai_conversations", [])?,
+    };
+    Ok(removed)
+}
+
 /// Appends one turn and bumps the conversation's clock.
 ///
 /// The first question becomes the title, so a new conversation names itself

@@ -21,6 +21,11 @@ const PANELS = [
   { key: "toc", label: "目录与书签" },
   { key: "annotations", label: "标注" },
   { key: "summary", label: "章节摘要" },
+  // The card wall is a grid of fixed-ratio cards; a grid is exactly the kind of
+  // panel that widens its own box instead of wrapping. The demo has no
+  // characters (the graph lives in the desktop store), so this covers the empty
+  // state and the panel's own chrome — the two rows that exist without data.
+  { key: "characters", label: "角色卡" },
 ] as const;
 
 interface Metrics {

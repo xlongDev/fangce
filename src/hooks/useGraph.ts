@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { desktopQuery, ipc, onGraphProgress } from "@/lib/ipc";
 import { showToast } from "@/stores/toasts";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
-import type { GraphProgress } from "@/types/ipc";
+import type { CharacterCard, GraphProgress } from "@/types/ipc";
 
 /** Graph status for one book. Refreshed after every build. */
 export function useGraphStatus(bookId: string) {
@@ -58,7 +58,65 @@ export function useGeneratePortrait(bookId: string) {
     meta: { silent: true },
     onSuccess: (_url, { name }) => {
       queryClient.invalidateQueries({ queryKey: ["graph", "portrait", bookId, name] });
+      // The card wall caches the picture's URL with the card, so a redraw has
+      // to reach that list too or the wall keeps showing the old bytes.
+      queryClient.invalidateQueries({ queryKey: ["graph", "characters", bookId] });
     },
+  });
+}
+
+/* ------------------------------------------------------------- characters */
+
+/**
+ * The card wall: every character of one book, with its portrait URL.
+ *
+ * One query rather than the graph's entity list plus a portrait lookup per
+ * name — the backend answers both in one pass, and a wall that paints in two
+ * waves reads as a loading bug.
+ */
+export function useCharacters(bookId: string) {
+  return useQuery<CharacterCard[]>({
+    queryKey: ["graph", "characters", bookId],
+    queryFn: desktopQuery<CharacterCard[]>([], () => ipc.graphCharacters(bookId)),
+    staleTime: 5_000,
+  });
+}
+
+/** A name the extractor never found. */
+export function useAddCharacter(bookId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<CharacterCard, unknown, string>({
+    mutationFn: (name) => ipc.graphAddCharacter(bookId, name),
+    meta: { silent: true },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["graph"] }),
+  });
+}
+
+/** Empties the wall; the backend removes the portraits with the rows. */
+export function useClearCharacters(bookId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<number, unknown, void>({
+    mutationFn: () => ipc.graphClearCharacters(bookId),
+    meta: { silent: true },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["graph"] }),
+  });
+}
+
+/** Writes the wall to a pack; the path comes from the native save panel. */
+export function useExportCharacters(bookId: string) {
+  return useMutation<number, unknown, string>({
+    mutationFn: (path) => ipc.graphExportCharacters(bookId, path),
+    meta: { silent: true },
+  });
+}
+
+/** Merges a pack into this book. */
+export function useImportCharacters(bookId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<number, unknown, string>({
+    mutationFn: (path) => ipc.graphImportCharacters(bookId, path),
+    meta: { silent: true },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["graph"] }),
   });
 }
 

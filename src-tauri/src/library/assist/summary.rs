@@ -97,6 +97,12 @@ pub struct ChapterSummary {
     pub summary: String,
     /// When it was written; 0 for a chapter that has none.
     pub created_at: i64,
+    /// Characters in the chapter, image markers and all.
+    ///
+    /// The panel needs it to say *why* a row is empty. 「这一章只有 10 字」 is an
+    /// answer the reader can check; 「封面、版权页或目录」 was a guess, and a
+    /// dedication page (71 characters, very much not a cover) proved it wrong.
+    pub chars: usize,
 }
 
 /// What one build produced.
@@ -119,7 +125,8 @@ pub fn list(conn: &Connection, book_id: &str, upto: usize) -> AppResult<Vec<Chap
     let mut stmt = conn.prepare(
         "SELECT c.idx, c.title, \
                 CASE WHEN s.chars = c.chars THEN s.summary END, \
-                CASE WHEN s.chars = c.chars THEN s.created_at ELSE 0 END \
+                CASE WHEN s.chars = c.chars THEN s.created_at ELSE 0 END, \
+                c.chars \
            FROM chapters c \
            LEFT JOIN chapter_summaries s ON s.book_id = c.book_id AND s.idx = c.idx \
           WHERE c.book_id = ?1 AND c.idx <= ?2 \
@@ -132,6 +139,7 @@ pub fn list(conn: &Connection, book_id: &str, upto: usize) -> AppResult<Vec<Chap
                 title: row.get::<_, String>(1)?,
                 summary: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                 created_at: row.get(3)?,
+                chars: row.get::<_, i64>(4)? as usize,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -642,6 +650,9 @@ mod tests {
         let list = list(&conn, "b", 0).expect("list");
         assert_eq!(list[0].summary, "");
         assert!(list[0].created_at > 0, "有行=没有正文；没有行=还没生成");
+        // And it says how short the chapter is, which is the difference between
+        // "this is a cover" and "something went wrong".
+        assert_eq!(list[0].chars, "\u{FFFC}cover.jpeg".chars().count());
     }
 
     #[test]

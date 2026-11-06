@@ -1,23 +1,44 @@
-import { Suspense, lazy, useEffect, useRef, useState } from "react";
-import { DownloadSimple, PencilSimple, Plus, Trash, X } from "@phosphor-icons/react";
+import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  ArrowsClockwise,
+  Broom,
+  DotsThreeVertical,
+  DownloadSimple,
+  EyeSlash,
+  PencilSimple,
+  Plus,
+  Sparkle,
+  Trash,
+  X,
+} from "@phosphor-icons/react";
 
 import { AiErrorCard } from "@/components/common/AiErrorCard";
+import { AiSpeechButton } from "@/components/common/AiSpeechButton";
 import { Markdown } from "@/components/common/Markdown";
 import { GlassIconButton } from "@/components/glass/button";
 import { GlassInput, GlassSelect } from "@/components/glass/input";
+import { GlassMenu, GlassMenuItem } from "@/components/glass/menu";
 import {
   useAiConfig,
   useAiConversations,
   useAppendAiMessage,
   useChatStream,
+  useClearAiConversations,
   useCreateAiConversation,
   useDeleteAiConversation,
   useExportAiConversation,
   useLoadAiConversation,
   useRenameAiConversation,
+  useSaveAiConfig,
   type ChatTurn,
 } from "@/hooks/useAi";
-import { useIndexBook, useRagStatus } from "@/hooks/useRag";
+import {
+  useClearIndex,
+  useClearLibrary,
+  useIndexBook,
+  useRagStatus,
+  useRebuildLibrary,
+} from "@/hooks/useRag";
 import { useSavePath } from "@/hooks/useSavePath";
 import { setToolsEnabled, toolsEnabled } from "@/lib/aiToolPreference";
 import {
@@ -37,7 +58,7 @@ import { ToolRow } from "@/features/reader/ToolRow";
 const ToolArtifact = lazy(() =>
   import("@/features/reader/ToolArtifact").then((module) => ({ default: module.ToolArtifact })),
 );
-import type { RagHit, StoredMessage } from "@/types/ipc";
+import type { AiConfig, RagHit, StoredMessage } from "@/types/ipc";
 
 /**
  * The reading assistant's drawer: a conversation about this book.
@@ -99,11 +120,49 @@ export function AskAiPanel({
   const indexBook = useIndexBook(bookId);
   const ragReady = (status.data?.embeddingModel ?? "") !== "";
   const thisBookIndexed = (status.data?.bookChunks ?? 0) > 0;
+  const bookStale = status.data?.bookStale ?? false;
+  const staleBooks = status.data?.staleBooks ?? 0;
+  const libraryChunks = status.data?.libraryChunks ?? 0;
+
+  const saveConfig = useSaveAiConfig();
+  const clearIndex = useClearIndex(bookId);
+  const library = useRebuildLibrary();
+  const clearLibrary = useClearLibrary();
+  const clearConversations = useClearAiConversations(bookId);
+  /** Which deletion the strip under the header is asking about, if any. Both
+   *  are irreversible, and both live behind one confirm rather than two. */
+  const [confirming, setConfirming] = useState<"none" | "one" | "all">("none");
+
+  /**
+   * Writes one preference back to the config.
+   *
+   * The panel's chips and the settings page edit the same switches, so the
+   * panel saves rather than keeping a copy: a reader who turns 防剧透 on here
+   * should find it on there, and the backend reads only the stored value.
+   */
+  const setPreference = (
+    patch: Partial<Pick<AiConfig, "deepThinking" | "spoilerSafe" | "model">>,
+  ) => {
+    if (!config.data) return;
+    saveConfig.mutate({ ...config.data, ...patch });
+  };
 
   /** The open conversation's title, from the list — the transcript itself is
    *  owned by the stream hook and is not re-read. */
   const currentTitle =
     (conversations.data ?? []).find((entry) => entry.id === conversationId)?.title ?? "";
+  const conversationCount = (conversations.data ?? []).length;
+
+  /**
+   * The models the reader can pick without opening settings.
+   *
+   * Only what the app already knows: the one in use, plus the ones an OC Ferry
+   * import brought in. A hand-typed endpoint has no model list to ask for, and
+   * inventing one would be a dropdown of guesses.
+   */
+  const modelChoices = [
+    ...new Set([settings?.model ?? "", ...(settings?.importedModels ?? [])].filter(Boolean)),
+  ];
 
   const startNew = () => {
     setConversationId(null);
@@ -250,6 +309,13 @@ export function AskAiPanel({
 
   const empty = chat.turns.length === 0;
   const quickQuestions = settings?.quickQuestions ?? [];
+  // Only the newest answer may start itself when a stream ends. Every older
+  // turn sees the same falling edge, so passing `streaming` to all of them
+  // would start one voice per turn at the same `done`.
+  const lastAssistantId = chat.turns.reduce<string | null>(
+    (last, turn) => (turn.role === "assistant" ? turn.id : last),
+    null,
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -291,39 +357,135 @@ export function AskAiPanel({
         <GlassIconButton size="sm" variant="subtle" label="新建对话" onClick={startNew}>
           <Plus size={14} />
         </GlassIconButton>
-        <GlassIconButton
-          size="sm"
-          variant="subtle"
-          label="重命名对话"
-          disabled={!conversationId}
-          onClick={() => {
-            setDraftTitle(currentTitle);
-            setRenaming(true);
-          }}
+        {/* Everything that is not "ask another question" lives behind one
+            button. The header has 272px to spend and the switcher needs most of
+            it: five 38px buttons left the conversation's own title 50px, which
+            is not a title, it is an ellipsis. */}
+        <GlassMenu
+          label="对话与索引"
+          trigger={
+            <GlassIconButton size="sm" variant="subtle" label="更多">
+              <DotsThreeVertical size={14} />
+            </GlassIconButton>
+          }
         >
-          <PencilSimple size={14} />
-        </GlassIconButton>
-        <GlassIconButton
-          size="sm"
-          variant="subtle"
-          label="导出对话"
-          disabled={!conversationId}
-          onClick={onExport}
-        >
-          <DownloadSimple size={14} />
-        </GlassIconButton>
-        <GlassIconButton
-          size="sm"
-          variant="subtle"
-          label="删除对话"
-          disabled={!conversationId}
-          onClick={onDelete}
-        >
-          <Trash size={14} />
-        </GlassIconButton>
+          <GlassMenuItem
+            icon={<PencilSimple size={14} />}
+            label="重命名对话"
+            disabled={!conversationId}
+            onClick={() => {
+              setDraftTitle(currentTitle);
+              setRenaming(true);
+            }}
+          />
+          <GlassMenuItem
+            icon={<DownloadSimple size={14} />}
+            label="导出对话"
+            disabled={!conversationId}
+            onClick={() => void onExport()}
+          />
+          <GlassMenuItem
+            icon={<Trash size={14} />}
+            tone="danger"
+            label="删除这个对话"
+            disabled={!conversationId}
+            onClick={() => setConfirming("one")}
+          />
+          <div className="border-hairline my-1.5 border-t" />
+          <GlassMenuItem
+            icon={<ArrowsClockwise size={14} />}
+            label={
+              indexBook.build.isPending && indexBook.progress
+                ? `重建中 ${indexBook.progress.done}/${indexBook.progress.total}`
+                : "重建本书索引"
+            }
+            disabled={!ragReady || indexBook.build.isPending}
+            onClick={() => indexBook.build.mutate()}
+          />
+          <GlassMenuItem
+            icon={<Broom size={14} />}
+            label="清除本书索引"
+            disabled={!thisBookIndexed || clearIndex.isPending}
+            onClick={() => clearIndex.mutate()}
+          />
+          <div className="border-hairline my-1.5 border-t" />
+          {staleBooks > 0 && (
+            <p className="text-text-3 px-2.5 py-1 text-[11.5px] leading-relaxed">
+              有 {staleBooks} 本书的索引是旧模型建的
+            </p>
+          )}
+          <GlassMenuItem
+            icon={<ArrowsClockwise size={14} />}
+            label={
+              library.build.isPending && library.progress
+                ? `重建中 ${library.progress.done}/${library.progress.total} 本`
+                : "重建全库索引"
+            }
+            disabled={!ragReady || libraryChunks === 0 || library.build.isPending}
+            onClick={() => library.build.mutate()}
+          />
+          <GlassMenuItem
+            icon={<Broom size={14} />}
+            label="清除全库索引"
+            disabled={libraryChunks === 0 || clearLibrary.isPending}
+            onClick={() => clearLibrary.mutate()}
+          />
+          <div className="border-hairline my-1.5 border-t" />
+          <GlassMenuItem
+            icon={<Trash size={14} />}
+            tone="danger"
+            label="清除本书对话"
+            disabled={conversationCount === 0}
+            onClick={() => setConfirming("all")}
+          />
+        </GlassMenu>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        {/* Deleting is the one action here that cannot be undone, so it asks
+            in the place the transcript was — not in a menu row that closes on
+            the same click that asked. */}
+        {confirming !== "none" && (
+          <div className="glass mb-3 rounded-lg p-2.5">
+            <p className="text-text-2 text-[12px] leading-relaxed">
+              {confirming === "one"
+                ? "删除这个对话，不能恢复。"
+                : `删除本书的 ${conversationCount} 个对话，不能恢复。`}
+            </p>
+            <div className="mt-2 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirming("none")}
+                className="focus-visible:focus-ring text-text-3 hover:text-text-1 text-[12px] transition-colors"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={
+                  confirming === "all" ? clearConversations.isPending : deleteConversation.isPending
+                }
+                onClick={() => {
+                  if (confirming === "one") {
+                    void onDelete().then(() => setConfirming("none"));
+                    return;
+                  }
+                  clearConversations.mutate(undefined, {
+                    onSuccess: () => {
+                      setConfirming("none");
+                      startNew();
+                    },
+                    onError: (error) => showToast("error", String(error)),
+                  });
+                }}
+                className="focus-visible:focus-ring text-danger text-[12px] font-medium transition-opacity hover:opacity-80 disabled:opacity-50"
+              >
+                确定删除
+              </button>
+            </div>
+          </div>
+        )}
+
         {selection && !ragMode && empty && (
           <div className="glass mb-3 rounded-lg p-2.5">
             <div className="mb-1 flex items-center justify-between">
@@ -346,9 +508,11 @@ export function AskAiPanel({
             key={turn.id}
             turn={turn}
             streaming={chat.streaming}
+            canAutoPlay={turn.role === "assistant" && turn.id === lastAssistantId}
             showUsage={showUsage}
             price={settings?.tokenPrice}
             onJump={onJump}
+            speechChapter={chapterTitle}
           />
         ))}
 
@@ -420,8 +584,58 @@ export function AskAiPanel({
               : "本书未索引，点此建立"}
           </button>
         )}
+        {/* Retrieval filters on the embedding model, so a book indexed under
+            the previous one looks fine here and answers nothing. Saying so is
+            the difference between "the assistant is dumb" and "rebuild this". */}
+        {ragMode && ragReady && thisBookIndexed && bookStale && (
+          <button
+            type="button"
+            disabled={indexBook.build.isPending}
+            onClick={() => indexBook.build.mutate()}
+            title="换了向量模型之后，旧索引检索不到"
+            className="focus-visible:focus-ring text-text-3 hover:text-text-1 truncate text-[12px] transition-colors disabled:opacity-60"
+          >
+            {indexBook.build.isPending && indexBook.progress
+              ? `重建中 ${indexBook.progress.done}/${indexBook.progress.total}`
+              : "索引是旧模型建的，点此重建"}
+          </button>
+        )}
         {ragMode && !ragReady && (
           <span className="text-text-3 text-[11px]">未配置向量模型，只能读章节</span>
+        )}
+      </div>
+
+      {/* Three switches that change what the next answer costs or what it is
+          allowed to say — kept next to the input, where the reader is about to
+          spend the money, rather than in the settings page they would have to
+          leave the book to open. */}
+      <div className="border-hairline flex items-center gap-1.5 border-t px-3 py-2">
+        <Toggle
+          label="深度思考"
+          icon={<Sparkle size={12} />}
+          on={settings?.deepThinking ?? false}
+          onToggle={() => setPreference({ deepThinking: !(settings?.deepThinking ?? false) })}
+        />
+        <Toggle
+          label="防剧透"
+          icon={<EyeSlash size={12} />}
+          on={settings?.spoilerSafe ?? false}
+          onToggle={() => setPreference({ spoilerSafe: !(settings?.spoilerSafe ?? false) })}
+        />
+        {modelChoices.length > 1 && (
+          <select
+            value={settings?.model ?? ""}
+            onChange={(event) => setPreference({ model: event.target.value })}
+            aria-label="模型"
+            title={settings?.model}
+            className="border-hairline text-text-2 hover:text-text-1 focus-visible:focus-ring ml-auto max-w-[46%] min-w-0 appearance-none truncate rounded-full border bg-transparent py-1 pr-2 pl-2.5 text-[11.5px] transition-colors [&>option]:text-black"
+          >
+            {modelChoices.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
         )}
       </div>
 
@@ -467,6 +681,39 @@ export function AskAiPanel({
   );
 }
 
+/** One of the switches above the input.
+ *
+ *  A pressed chip rather than a checkbox: both of these are "on for the next
+ *  answer", they sit two pixels from the button that spends the money, and at
+ *  12px a box and a label read as one grey line.
+ */
+function Toggle({
+  label,
+  icon,
+  on,
+  onToggle,
+}: {
+  label: string;
+  icon: ReactNode;
+  on: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={onToggle}
+      className={cn(
+        "focus-visible:focus-ring inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-1 text-[11.5px] transition-colors",
+        on ? "border-accent text-accent" : "border-hairline text-text-3 hover:text-text-2",
+      )}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
 /** One exchange: the question in a quiet block, the answer as prose. */
 function Turn({
   turn,
@@ -474,12 +721,18 @@ function Turn({
   showUsage,
   price,
   onJump,
+  speechChapter,
+  canAutoPlay,
 }: {
   turn: ChatTurn;
   streaming: boolean;
   showUsage: boolean;
   price: Parameters<typeof TokenUsageBar>[0]["price"];
   onJump: (hit: RagHit) => void;
+  /** Where the answer came from, shown under its title in the player. */
+  speechChapter: string;
+  /** Only the newest answer watches the stream's falling edge. */
+  canAutoPlay: boolean;
 }) {
   if (turn.role === "user") {
     return (
@@ -527,6 +780,24 @@ function Turn({
       ) : (
         <Markdown text={turn.content} />
       )}
+
+      {/* One control per answer, not one for the drawer: the queue belongs to
+          the turn the reader chose, and only that turn can stop it. Reasoning,
+          tool artefacts and the citation list are deliberately not spoken.
+          Drawn even while the answer is still being written — a button that
+          mounts only on `done` cannot see the falling edge that starts
+          「生成完自动朗读」. */}
+      <div className="mt-1 flex justify-end">
+        <AiSpeechButton
+          id={`turn:${turn.id}`}
+          text={turn.content}
+          title="AI 助手"
+          chapter={speechChapter}
+          disabled={streaming || turn.content === ""}
+          streaming={canAutoPlay ? streaming : false}
+          label="朗读这条回答"
+        />
+      </div>
 
       {turn.citations && turn.citations.length > 0 ? (
         <div className="border-hairline mt-2 border-t pt-2">

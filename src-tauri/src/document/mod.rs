@@ -40,6 +40,19 @@ pub const LINK_PARAGRAPH_PREFIX: &str = "\u{FFFB}";
 /// Field separator inside a [`LINK_PARAGRAPH_PREFIX`] payload.
 pub const LINK_FIELD_SEPARATOR: char = '\u{1F}';
 
+/// The title a section gets when the document itself does not name it.
+///
+/// 「节」, not 「章」. A spine document without a heading is not necessarily a
+/// chapter: a cover image, an image page, a title page and a dedication are
+/// sections too. Numbering those 第 N 章 made 《助推》's cover read as 「第 1 章」,
+/// two rows above the book's actual 第 1 章 — and the summary panel then said
+/// 「第 1 章 没有正文」, which reads as a bug rather than as a cover page.
+///
+/// `position` is one-based, the way the reader counts.
+pub fn untitled_section(position: usize) -> String {
+    format!("第 {position} 节")
+}
+
 /// Formats the library can hold today.
 ///
 /// The four Kindle values — [`Mobi`], [`Azw`], [`Azw3`], [`Prc`] — are one PDB

@@ -1017,8 +1017,14 @@ export function ReaderView({
    * queue of its own.
    */
   const [inherited] = useState(sessionNow);
+  // An answer's queue has no chapter to adopt: its `unit` index points into a
+  // list of spoken sentences, and `applyPending` would land the page on an
+  // unrelated paragraph of this book.
   const ours =
-    inherited.bookId !== null && inherited.bookId === bookId && inherited.chapterIdx === chapterIdx;
+    inherited.origin === "book" &&
+    inherited.bookId !== null &&
+    inherited.bookId === bookId &&
+    inherited.chapterIdx === chapterIdx;
   /** The paragraph the voice is in, when the voice is the one that decides
    *  where this page opens. Read by `applyPending`, ahead of the fraction. */
   const pendingSpeechPara = useRef<number | null>(null);
@@ -2059,12 +2065,27 @@ export function ReaderView({
   // it draws the same bar on 书架 and 设置, and only this page knows any of it.
   // The queue itself is published by `useReadAloud`, which is what builds it.
   const publishSession = useSpeechSession((state) => state.publish);
+  const speechOrigin = useSpeechSession((state) => state.origin);
   useEffect(() => {
     // One session, one publisher: the pane in use. The companion's book is
     // not what the shell's player is playing, so it does not get to say so.
     if (secondary) return;
+    // While an answer is on the voice the player must keep saying so. The
+    // dependency is also the way back: ending that session republishes the
+    // book, which is what makes 「回到阅读」 a real destination again.
+    if (speechOrigin === "ai") return;
     publishSession({ bookId, title, coverUrl, chapter: headerChapter, chapterIdx, bookLanguage });
-  }, [publishSession, bookId, title, coverUrl, headerChapter, chapterIdx, bookLanguage, secondary]);
+  }, [
+    publishSession,
+    speechOrigin,
+    bookId,
+    title,
+    coverUrl,
+    headerChapter,
+    chapterIdx,
+    bookLanguage,
+    secondary,
+  ]);
 
   // The toolbar's edit mode: when the reader tapped a painted highlight,
   // `pending` carries its id — resolve it to the whole annotation so the ink
@@ -2636,6 +2657,17 @@ export function ReaderView({
             },
             onDeleteBookmark: (id) => deleteBookmark.mutate(id),
             onAddBookmark: addBookmark,
+          }}
+          summary={{
+            // The spine's chapter index, not the drawer's nav index. The two
+            // lists differ (36 chapters against 16 nav entries), and handing
+            // the nav's index to a list keyed by chapters cut it short and
+            // jumped 第 1 章 to 第一部分.
+            currentIdx: chapterIdx,
+            onJump: (idx) => {
+              setPanel("none");
+              goTo(idx);
+            },
           }}
           graph={{
             onOpenChapter: (idx) => {

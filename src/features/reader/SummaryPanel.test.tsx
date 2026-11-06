@@ -33,9 +33,9 @@ function mount(onJump = vi.fn()) {
 
 function rows(): ChapterSummary[] {
   return [
-    { idx: 0, title: "第一章", summary: "林昭进了大殿。", createdAt: 1 },
-    { idx: 1, title: "第二章", summary: "", createdAt: 0 },
-    { idx: 2, title: "第三章", summary: "他离开了。", createdAt: 1 },
+    { idx: 0, title: "第一章", summary: "林昭进了大殿。", createdAt: 1, chars: 3000 },
+    { idx: 1, title: "第二章", summary: "", createdAt: 0, chars: 2800 },
+    { idx: 2, title: "第三章", summary: "他离开了。", createdAt: 1, chars: 2500 },
   ];
 }
 
@@ -71,12 +71,14 @@ describe("SummaryPanel", () => {
     // Both rows are empty; only the second is work. Counting the cover page as
     // missing is what left the button offering to 补齐 a page that is a picture.
     summary.list.data = [
-      { idx: 0, title: "第 1 章", summary: "", createdAt: 1 },
-      { idx: 1, title: "第一章", summary: "", createdAt: 0 },
+      { idx: 0, title: "第 1 章", summary: "", createdAt: 1, chars: 10 },
+      { idx: 1, title: "第一章", summary: "", createdAt: 0, chars: 3000 },
     ];
     mount();
 
-    expect(screen.getByText("这一章没有正文（封面、版权页或目录）")).toBeTruthy();
+    // The count, not a guess about what the page is: 10 characters is a cover,
+    // and the reader can see that for themselves.
+    expect(screen.getByText("这一章只有 10 字，没有可摘要的正文")).toBeTruthy();
     expect(screen.getByText("还没有摘要")).toBeTruthy();
     expect(screen.getByRole("button", { name: "补齐 1 章" })).toBeTruthy();
     expect(screen.getByText(/1 章无正文/)).toBeTruthy();
@@ -92,7 +94,9 @@ describe("SummaryPanel", () => {
   });
 
   it("will not build when there is nothing missing", () => {
-    summary.list.data = [{ idx: 0, title: "第一章", summary: "林昭进了大殿。", createdAt: 1 }];
+    summary.list.data = [
+      { idx: 0, title: "第一章", summary: "林昭进了大殿。", createdAt: 1, chars: 3000 },
+    ];
     mount();
 
     const button = screen.getByRole("button", { name: "已补齐" }) as HTMLButtonElement;
@@ -102,7 +106,7 @@ describe("SummaryPanel", () => {
   it("refuses a recap until at least one chapter has a summary", () => {
     // The backend would answer with an error; asking it would be a round trip
     // to learn something the panel already knows.
-    summary.list.data = [{ idx: 0, title: "第一章", summary: "", createdAt: 0 }];
+    summary.list.data = [{ idx: 0, title: "第一章", summary: "", createdAt: 0, chars: 3000 }];
     mount();
 
     const button = screen.getByRole("button", { name: "生成前情提要" }) as HTMLButtonElement;

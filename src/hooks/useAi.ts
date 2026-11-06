@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { desktopQuery, ipc, onAiStream } from "@/lib/ipc";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { forgetConversation } from "@/lib/aiConversationMemory";
 import { trimHistory } from "@/lib/aiChat";
 import type {
   AiConfig,
@@ -501,5 +502,25 @@ export function useExportAiConversation() {
   return useMutation<null, unknown, { id: string; path: string }>({
     mutationFn: ({ id, path }) => ipc.aiConversationExport(id, path),
     meta: { silent: true },
+  });
+}
+
+/**
+ * Deletes every conversation of one book.
+ *
+ * The remembered pointer goes with them: it names a conversation that no longer
+ * exists, and reopening the panel would otherwise fail once and forget it in a
+ * toast the reader never asked for.
+ */
+export function useClearAiConversations(bookId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<number, unknown, void>({
+    mutationFn: () => ipc.aiConversationClear(bookId),
+    meta: { silent: true },
+    onSuccess: () => {
+      forgetConversation(bookId);
+      queryClient.invalidateQueries({ queryKey: ["ai", "conversations"] });
+      queryClient.invalidateQueries({ queryKey: ["ai", "conversation"] });
+    },
   });
 }

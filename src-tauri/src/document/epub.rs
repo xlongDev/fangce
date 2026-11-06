@@ -100,7 +100,7 @@ pub fn read_chapters(path: &Path) -> AppResult<Vec<RawChapter>> {
             continue;
         }
         if chapter.title.is_none() {
-            chapter.title = Some(format!("第 {} 章", chapters.len() + 1));
+            chapter.title = Some(super::untitled_section(chapters.len() + 1));
         }
         entry_index.insert(entry, chapters.len());
         chapters.push(chapter);

@@ -320,6 +320,8 @@ const AI_STREAM_EVENT = "ai://stream";
 
 /** Event carrying RAG index build progress. */
 const RAG_INDEX_EVENT = "rag://index-progress";
+/** Counted in books, not chunks — see `commands::rag::RAG_LIBRARY_EVENT`. */
+const RAG_LIBRARY_EVENT = "rag://library-progress";
 
 /** Event carrying knowledge graph build progress. */
 const GRAPH_BUILD_EVENT = "graph://build-progress";
@@ -412,6 +414,14 @@ export async function onRagProgress(
 ): Promise<UnlistenFn | undefined> {
   if (!isTauri()) return undefined;
   return listen<RagProgress>(RAG_INDEX_EVENT, (event) => handler(event.payload));
+}
+
+/** Subscribes to a whole-library index rebuild; no-op outside the Tauri shell. */
+export async function onRagLibraryProgress(
+  handler: (progress: RagProgress) => void,
+): Promise<UnlistenFn | undefined> {
+  if (!isTauri()) return undefined;
+  return listen<RagProgress>(RAG_LIBRARY_EVENT, (event) => handler(event.payload));
 }
 
 /** Subscribes to graph build progress; no-op outside the Tauri shell. */

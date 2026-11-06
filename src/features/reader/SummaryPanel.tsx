@@ -1,4 +1,5 @@
 import { AiErrorCard } from "@/components/common/AiErrorCard";
+import { AiSpeechButton } from "@/components/common/AiSpeechButton";
 import { useAiChat } from "@/hooks/useAi";
 import { useChapterSummaries, useSummaryBuild } from "@/hooks/useSummary";
 import { cn } from "@/lib/cn";
@@ -100,37 +101,69 @@ export function SummaryPanel({
           {recap.error ? (
             <AiErrorCard message={recap.error} />
           ) : (
-            <p className="text-text-1 text-[12.5px] leading-relaxed whitespace-pre-wrap">
-              {recap.text}
-            </p>
+            <div className="flex items-start gap-2">
+              <p className="text-text-1 min-w-0 flex-1 text-[12.5px] leading-relaxed whitespace-pre-wrap">
+                {recap.text}
+              </p>
+              <AiSpeechButton
+                id={`recap:${bookId}:${currentIdx}`}
+                text={recap.text}
+                title="前情提要"
+                chapter={`已读 ${rows.length} 章`}
+                disabled={recap.streaming}
+                streaming={recap.streaming}
+                label="朗读前情提要"
+              />
+            </div>
           )}
         </div>
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {rows.map((row) => (
-          <button
-            key={row.idx}
-            type="button"
-            onClick={() => onJump(row.idx)}
-            className={cn(
-              "focus-visible:focus-ring hover:bg-surface-2/50 block w-full border-l-2 px-4 py-2.5 text-left transition-colors",
-              row.idx === currentIdx ? "border-accent bg-surface-2/40" : "border-transparent",
-            )}
-          >
-            <p className="text-text-1 truncate text-[12.5px] font-medium">
-              {row.idx + 1}. {row.title}
-            </p>
-            <p
+          // The row stays one jump button, and the speaker is its sibling:
+          // a button inside a button is not a control the browser can focus.
+          // It sits over the row's right edge, with enough padding inside the
+          // button that a long chapter title never runs under it.
+          <div key={row.idx} className="relative">
+            <button
+              type="button"
+              onClick={() => onJump(row.idx)}
               className={cn(
-                "mt-0.5 text-[12px] leading-relaxed",
-                row.summary ? "text-text-2" : "text-text-3",
+                "focus-visible:focus-ring hover:bg-surface-2/50 block w-full border-l-2 py-2.5 pl-4 text-left transition-colors",
+                row.summary ? "pr-10" : "pr-4",
+                row.idx === currentIdx ? "border-accent bg-surface-2/40" : "border-transparent",
               )}
             >
-              {row.summary ||
-                (row.createdAt > 0 ? "这一章没有正文（封面、版权页或目录）" : "还没有摘要")}
-            </p>
-          </button>
+              <p className="text-text-1 truncate text-[12.5px] font-medium">
+                {row.idx + 1}. {row.title}
+              </p>
+              <p
+                className={cn(
+                  "mt-0.5 text-[12px] leading-relaxed",
+                  row.summary ? "text-text-2" : "text-text-3",
+                )}
+              >
+                {row.summary ||
+                  (row.createdAt > 0
+                    ? // The count, not a guess about what the page is. 「封面、版权页
+                      // 或目录」 was wrong for a dedication page, and a reader who
+                      // sees 「只有 10 字」 stops wondering whether extraction broke.
+                      `这一章只有 ${row.chars} 字，没有可摘要的正文`
+                    : "还没有摘要")}
+              </p>
+            </button>
+            {row.summary && (
+              <AiSpeechButton
+                className="absolute top-2 right-2"
+                id={`summary:${bookId}:${row.idx}`}
+                text={row.summary}
+                title={`第 ${row.idx + 1} 章摘要`}
+                chapter={row.title}
+                label="朗读这章摘要"
+              />
+            )}
+          </div>
         ))}
       </div>
     </div>

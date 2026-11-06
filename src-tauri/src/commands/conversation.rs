@@ -89,6 +89,17 @@ pub fn ai_conversation_append(
     })
 }
 
+/// `ai.conversationClear` — deletes this book's saved conversations, or the
+/// whole library's when `book_id` is `None`. Returns how many went.
+#[tauri::command]
+#[specta::specta]
+pub fn ai_conversation_clear(
+    state: State<'_, AppState>,
+    book_id: Option<String>,
+) -> AppResult<usize> {
+    state.library.with(|conn| conversation::clear(conn, book_id.as_deref()))
+}
+
 /// `ai.conversationExport` — writes one conversation out as Markdown.
 ///
 /// The path comes from the native save panel, so this only has to write. The

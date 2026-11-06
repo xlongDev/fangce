@@ -57,7 +57,10 @@ export function tocRows(chapters: TocChapter[], outline: TocOutlineItem[]): TocR
   }
   return chapters.map((chapter) => ({
     marker: chapter.depth === undefined ? String(chapter.idx + 1) : "",
-    title: chapter.title || `第 ${chapter.idx + 1} 章`,
+    // 「节」 for the same reason the extractor uses it: an untitled section is
+    // not necessarily a chapter, and calling a cover page 第 1 章 collides with
+    // the book's own 第 1 章.
+    title: chapter.title || `第 ${chapter.idx + 1} 节`,
     depth: chapter.depth ?? 0,
     target: chapter.idx,
   }));

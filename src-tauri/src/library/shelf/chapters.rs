@@ -49,7 +49,7 @@ pub fn insert(tx: &Transaction<'_>, book_id: &str, chapters: &[RawChapter]) -> A
             .title
             .clone()
             .filter(|title| !title.trim().is_empty())
-            .unwrap_or_else(|| format!("第 {} 章", index + 1));
+            .unwrap_or_else(|| crate::document::untitled_section(index + 1));
         let content = chapter.paragraphs.join("\n");
         let chars = content.chars().count();
         tx.execute(
@@ -259,7 +259,10 @@ mod tests {
         let meta = list(&conn, "b").expect("list");
         assert_eq!(meta.len(), 2);
         assert_eq!(meta[0].title, "甲");
-        assert_eq!(meta[1].title, "第 2 章", "缺标题的章节要编号兜底");
+        assert_eq!(
+            meta[1].title, "第 2 节",
+            "缺标题的章节要编号兜底，且不能叫「章」——会和书里真正的章撞名"
+        );
 
         let body = content(&conn, "b", 0).expect("content").expect("some");
         assert_eq!(body.paragraphs, ["一", "二"]);

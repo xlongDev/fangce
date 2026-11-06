@@ -22,7 +22,7 @@ mod shelf;
 mod transfer;
 
 pub use assist::{conversation, graph, guide, ocr, summary};
-pub use io::{clippings, export, import, pack, source};
+pub use io::{characters, clippings, export, import, pack, source};
 pub use lookup::{dictionaries, markup, mdict, stardict};
 pub use marks::{annotations, bookmarks, migrate};
 pub use retrieval::{rag, search};
