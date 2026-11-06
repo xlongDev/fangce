@@ -41,11 +41,11 @@ function washed(text: string, spans: AiSpeechSpan[] | undefined, style: CSSPrope
  * An AI answer drawn as the blocks the voice reads, with the words the voice
  * is on washed in the reader's own ink.
  *
- * This replaces `Markdown` on the reading guide on purpose. The wash is
- * measured against spoken characters, so the text it paints has to be the
- * exact string the engine was given — markup stripped. The panel keeps
- * `Markdown.tsx`'s type styles and list marks, so the only visible difference
- * is that inline bold/code markers are no longer styled.
+ * This replaces `Markdown` on the AI guide and the assistant's answers on
+ * purpose. The wash is measured against spoken characters, so the text it
+ * paints has to be the exact string the engine was given — markup stripped.
+ * The panel keeps `Markdown.tsx`'s type styles and list marks, so the only
+ * visible difference is that inline bold/code markers are no longer styled.
  *
  * One clip is one sentence, so the three levels are simple: the word the
  * engine reported, the clip, or the whole display block. Only the word level

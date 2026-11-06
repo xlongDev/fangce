@@ -14,7 +14,7 @@ import {
 
 import { AiErrorCard } from "@/components/common/AiErrorCard";
 import { AiSpeechButton } from "@/components/common/AiSpeechButton";
-import { Markdown } from "@/components/common/Markdown";
+import { AiSpeechText } from "@/components/common/AiSpeechText";
 import { GlassIconButton } from "@/components/glass/button";
 import { GlassInput, GlassSelect } from "@/components/glass/input";
 import { GlassMenu, GlassMenuItem } from "@/components/glass/menu";
@@ -778,7 +778,9 @@ function Turn({
       {thinking ? (
         <p className="text-text-3 text-[12.5px]">正在思考…</p>
       ) : (
-        <Markdown text={turn.content} />
+        // The same id as this turn's speaker: the wash follows the voice only
+        // while this answer is the one being read.
+        <AiSpeechText id={`turn:${turn.id}`} text={turn.content} />
       )}
 
       {/* One control per answer, not one for the drawer: the queue belongs to
