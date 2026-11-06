@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ArrowUUpLeft } from "@phosphor-icons/react";
 
 import { AiErrorCard } from "@/components/common/AiErrorCard";
+import { AiSpeechButton } from "@/components/common/AiSpeechButton";
 import { useGraphBuild, useGraphQuery, useGraphStatus } from "@/hooks/useGraph";
 import { PortraitCard } from "@/features/graph/PortraitCard";
 import type { GraphEntity } from "@/types/ipc";
@@ -145,12 +146,14 @@ export function GraphPanel({
               {relations.map((relation) => (
                 <li
                   key={`${relation.subject}-${relation.relation}-${relation.object}-${relation.chapterIdx}`}
-                  className="border-hairline border-b pb-3 last:border-0 last:pb-0"
+                  className="border-hairline relative border-b pb-3 last:border-0 last:pb-0"
                 >
+                  {/* The row jumps to its chapter, so the speaker is a sibling
+                      rather than a button inside a button. */}
                   <button
                     type="button"
                     onClick={() => onOpenChapter(relation.chapterIdx)}
-                    className="focus-visible:focus-ring w-full rounded-md text-left transition-colors"
+                    className="focus-visible:focus-ring w-full rounded-md pr-8 text-left transition-colors"
                   >
                     <p className="text-text-1 text-[13px]">
                       {relation.subject} <span className="text-accent">{relation.relation}</span>{" "}
@@ -163,6 +166,16 @@ export function GraphPanel({
                     )}
                     <p className="text-text-3 mt-1 text-[11px]">第 {relation.chapterIdx + 1} 章</p>
                   </button>
+                  {relation.evidence && (
+                    <AiSpeechButton
+                      className="absolute top-0 right-0"
+                      id={`evidence:${bookId}:${relation.subject}:${relation.object}:${relation.chapterIdx}`}
+                      text={relation.evidence}
+                      title="图谱证据"
+                      chapter={`第 ${relation.chapterIdx + 1} 章`}
+                      label="朗读这段证据"
+                    />
+                  )}
                 </li>
               ))}
             </ul>

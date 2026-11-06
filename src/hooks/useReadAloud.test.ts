@@ -102,7 +102,12 @@ describe("useReadAloud", () => {
   // point of it — but not across tests, where a leftover queue would answer the
   // next case before it publishes one of its own.
   beforeEach(() => {
-    useSpeechSession.setState({ units: [], controls: null });
+    useSpeechSession.setState({
+      units: [],
+      controls: null,
+      origin: "book",
+      activeId: null,
+    });
     scrollCalls.length = 0;
   });
 
@@ -486,5 +491,60 @@ describe("useReadAloud", () => {
     rerender({ ...options, onChapterEnd: vi.fn() });
 
     expect(result.current.playFromStart).not.toBe(first);
+  });
+
+  /**
+   * An answer and a book share one engine, so they share one `unit` index.
+   * These three pin the reason the session carries an origin at all: without
+   * it, the reader reads the answer's third sentence as the book's third
+   * sentence and paints it on the page.
+   */
+  describe("while an answer owns the voice", () => {
+    const ANSWER_UNITS: SpeechUnit[] = [{ text: "导读第一句。", source: 0, start: 0, end: 6 }];
+    const startAnswer = () =>
+      useSpeechSession.getState().startAi({
+        id: "guide:b1",
+        title: "AI 导读",
+        chapter: "全书",
+        units: ANSWER_UNITS,
+      });
+
+    it("does not follow the voice into the book or wash a sentence", () => {
+      const scroller = document.createElement("div");
+      for (const index of [0, 1]) {
+        const paragraph = document.createElement("p");
+        paragraph.dataset.paraIdx = String(index);
+        scroller.append(paragraph);
+      }
+      startAnswer();
+      const { result } = setup({
+        isPdf: true,
+        scrollRef: { current: scroller },
+        tts: fakeTts({ status: "playing", unit: 0 }),
+      });
+
+      expect(result.current.span).toBeNull();
+      expect(result.current.pdfWash).toBeNull();
+      expect(scrollCalls).toHaveLength(0);
+    });
+
+    it("keeps the answer's queue and lends no transport", () => {
+      startAnswer();
+      setup({ tts: fakeTts({ status: "playing", unit: 0 }) });
+
+      expect(useSpeechSession.getState().units).toEqual(ANSWER_UNITS);
+      expect(useSpeechSession.getState().controls).toBeNull();
+    });
+
+    it("takes the session back when the reader starts the book", () => {
+      startAnswer();
+      const { result, tts, options } = setup();
+
+      act(() => result.current.toggle());
+
+      expect(useSpeechSession.getState().origin).toBe("book");
+      expect(useSpeechSession.getState().activeId).toBeNull();
+      expect(tts.play).toHaveBeenCalledWith(QUEUE, 0, options.onChapterEnd);
+    });
   });
 });

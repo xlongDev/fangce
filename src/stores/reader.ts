@@ -76,6 +76,15 @@ interface ReaderState {
    *  a session is on. It is the only thing that can control the voice from
    *  outside the app, apart from the menu-bar icon. */
   speechMiniPlayer: boolean;
+  /** Whether AI answers offer read-aloud at all. Off hides every speaker
+   *  button and disables auto-play, without touching the book's own voice. */
+  aiSpeechEnabled: boolean;
+  /** Start reading an answer as soon as its stream finishes. Off by default:
+   *  a voice that starts by itself is not something to spring on a reader. */
+  aiSpeechAutoPlay: boolean;
+  /** Wash the words an AI answer's voice is on, using the same granularity,
+   *  shape and ink as the book's read-aloud wash. */
+  aiSpeechHighlight: boolean;
   /** Body typeface, a key into `FONT_STACKS`. */
   fontFamily: string;
   /** Index into `LINE_HEIGHTS`. */
@@ -577,6 +586,9 @@ export const DEFAULT_READER_SETTINGS = {
   speechWashColors: [],
   speechPlayerStyle: "full",
   speechMiniPlayer: true,
+  aiSpeechEnabled: true,
+  aiSpeechAutoPlay: false,
+  aiSpeechHighlight: true,
   byBook: {},
   activeSurface: null,
 } satisfies Partial<ReaderState>;

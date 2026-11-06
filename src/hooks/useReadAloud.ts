@@ -24,7 +24,7 @@ import {
 } from "@/features/reader/speech";
 import { useSpeechVoices, type Tts } from "@/features/reader/tts";
 import { defaultVoice, engineOf } from "@/features/reader/voice";
-import { useSpeechSession } from "@/stores/speech";
+import { sessionNow, useSpeechSession } from "@/stores/speech";
 
 /**
  * Read-aloud: the queue, the wash, and the transport over it.
@@ -178,6 +178,34 @@ export function useReadAloud({
    * same array the engine was handed.
    */
   const sessionUnits = useSpeechSession((state) => state.units);
+  /** An answer is on the voice. The engine is shared, so its `unit` index now
+   *  points into the answer's queue, not into this chapter's — everything
+   *  below that maps an index back onto the page has to stand down. */
+  const aiReading = useSpeechSession((state) => state.origin === "ai");
+
+  /**
+   * Every way this reader starts the book's own voice.
+   *
+   * The footer button, a seek, a chapter roll-over and 「朗读此处」 all have to
+   * take the session back from an answer before they speak: otherwise the
+   * voice would be reading the book while the store still said `ai`, and the
+   * page would neither follow nor wash it. Read off the store at call time
+   * rather than from a render, so a click in the same frame as an answer's
+   * session ending cannot see a stale origin.
+   */
+  const playBook = useCallback(
+    (units: string[], from: number, onFinish?: () => void, trim?: number) => {
+      const session = sessionNow();
+      if (session.origin === "ai") session.endAi();
+      // Passed through, not defaulted: `play`'s fourth argument is optional,
+      // and a reader that only named three must still be seen to have named
+      // three. A default here would add a `0` to every call and quietly
+      // change the shape every transport test pins.
+      if (trim === undefined) play(units, from, onFinish);
+      else play(units, from, onFinish, trim);
+    },
+    [play],
+  );
 
   // Read-aloud units for the prose path: the chapter split into sentences. The
   // foliate path builds its own from foliate's blocks, whose text lives in
@@ -195,22 +223,22 @@ export function useReadAloud({
   // sentence or the word the voice is on, or the whole paragraph at that level
   // (see `washSpan` for why nothing is washed until the position arrives).
   const span = useMemo<WashSpan | null>(() => {
-    if (unit === null) return null;
+    if (aiReading || unit === null) return null;
     const at = speechQueue[unit];
     if (!at) return null;
     const head = speechTrim?.unit === unit ? speechTrim.trim : 0;
     const wash = washSpan(unit, at, boundary, granularity, head, paragraphs?.[at.source]?.length);
     return wash === null ? null : { source: at.source, ...wash };
-  }, [unit, speechQueue, boundary, granularity, speechTrim, paragraphs]);
+  }, [aiReading, unit, speechQueue, boundary, granularity, speechTrim, paragraphs]);
   // The PDF wash: the same span the prose path paints, expressed as a needle
   // inside the spoken text — the page anchors on the sentence (the two
   // extraction pipelines disagree on whitespace) and paints the span within it.
   const pdfWash = useMemo(() => {
-    if (!isPdf || unit === null) return null;
+    if (aiReading || !isPdf || unit === null) return null;
     const at = speechQueue[unit];
     if (!at) return null;
     return pdfWashNeedle(span, at, paragraphs?.[at.source], granularity === "paragraph");
-  }, [isPdf, unit, speechQueue, span, paragraphs, granularity]);
+  }, [aiReading, isPdf, unit, speechQueue, span, paragraphs, granularity]);
   // foliate units, exactly as foliate handed them out, so the follow effect can
   // resolve a unit index back to a block and a range inside the section. State
   // rather than a ref: the player renders their text as it comes in.
@@ -286,8 +314,12 @@ export function useReadAloud({
   );
 
   // Follow the voice: `nearest` only scrolls when the paragraph is fully out
-  // of view, so skimming ahead is never yanked back.
+  // of view, so skimming ahead is never yanked back. While an answer is on the
+  // voice this effect must not run at all: the engine's index belongs to the
+  // answer's queue, and treating it as a chapter position would scroll the
+  // page to an unrelated sentence and wash the wrong words.
   useEffect(() => {
+    if (aiReading) return;
     if (!useFoliate) {
       if (unit === null) return;
       const source = speechQueue[unit]?.source;
@@ -312,18 +344,27 @@ export function useReadAloud({
     focusOn(handle, at);
     // `granularity` is not listed: `focusOn` carries it, and it is what decides
     // how much of the unit gets washed.
-  }, [useFoliate, unit, speechQueue, foliateUnits, scrollRef, foliateRef, focusOn]);
+  }, [aiReading, useFoliate, unit, speechQueue, foliateUnits, scrollRef, foliateRef, focusOn]);
 
   // Word-level narrowing: several of these land inside one sentence, so they
   // only re-wash the run — scrolling again for every word would jitter.
   useEffect(() => {
-    if (!useFoliate || granularity !== "word") return;
+    if (aiReading || !useFoliate || granularity !== "word") return;
     if (unit === null || boundary?.unit !== unit) return;
     const at = foliateUnits[unit];
     if (!at) return;
     const wash = foliateWashSpan(unit, at);
     if (wash) foliateRef.current?.paintSpan(at, wash);
-  }, [useFoliate, granularity, unit, boundary, foliateUnits, foliateWashSpan, foliateRef]);
+  }, [
+    aiReading,
+    useFoliate,
+    granularity,
+    unit,
+    boundary,
+    foliateUnits,
+    foliateWashSpan,
+    foliateRef,
+  ]);
 
   /**
    * Read-aloud for foliate books: one section at a time. foliate owns the
@@ -347,14 +388,14 @@ export function useReadAloud({
           return;
         }
         setFoliateUnits(units);
-        play(
+        playBook(
           units.map((at) => at.text),
           0,
           onFinish,
         );
       });
     },
-    [play, stop, foliateRef],
+    [playBook, stop, foliateRef],
   );
 
   /** The foliate roll-over: finish this section, hand the voice to the next.
@@ -445,7 +486,7 @@ export function useReadAloud({
     const spot = boundaryAt();
     const trim = head + (spot !== null && spot.unit === unit ? spot.charIndex : 0);
     setSpeechTrim(trim > 0 ? { unit, trim } : null);
-    play(
+    playBook(
       activeUnits.map((at) => at.text),
       unit,
       useFoliate ? continueFoliate : onChapterEnd,
@@ -457,7 +498,7 @@ export function useReadAloud({
     speechTrim,
     activeUnits,
     boundaryAt,
-    play,
+    playBook,
     useFoliate,
     onChapterEnd,
     continueFoliate,
@@ -510,7 +551,7 @@ export function useReadAloud({
     // A transport jump always lands on an utterance boundary, so any head
     // trim left over from 「朗读此处」 no longer applies.
     setSpeechTrim(null);
-    play(
+    playBook(
       activeUnits.map((utterance) => utterance.text),
       at,
       useFoliate ? continueFoliate : onChapterEnd,
@@ -631,7 +672,7 @@ export function useReadAloud({
     }
     if (speechQueue.length > 0) {
       setSpeechTrim(null);
-      play(
+      playBook(
         speechQueue.map((at) => at.text),
         unitAtView(),
         onChapterEnd,
@@ -662,7 +703,7 @@ export function useReadAloud({
     );
     if (index < 0) return;
     setSpeechTrim(trim > 0 ? { unit: index, trim } : null);
-    play(
+    playBook(
       speechQueue.map((at) => at.text),
       index,
       onChapterEnd,
@@ -680,12 +721,12 @@ export function useReadAloud({
    * and `onChapterEnd` is only ever a continuation on the prose path.
    */
   const playFromStart = useCallback(() => {
-    play(
+    playBook(
       speechQueue.map((at) => at.text),
       0,
       onChapterEnd,
     );
-  }, [speechQueue, play, onChapterEnd]);
+  }, [speechQueue, playBook, onChapterEnd]);
 
   /**
    * Lends this reader's transport to the shell's player.
@@ -711,6 +752,10 @@ export function useReadAloud({
   const setControls = useSpeechSession((state) => state.setControls);
   const publishSession = useSpeechSession((state) => state.publish);
   useEffect(() => {
+    // An answer's session must not borrow this reader's transport: its next /
+    // scrubber would land on a chapter that is not what the voice is reading.
+    // The player's own detached transport uses the published answer units.
+    if (aiReading) return;
     setControls({
       toggle: () => latest.current.toggle(),
       step: (dir) => latest.current.step(dir),
@@ -722,7 +767,7 @@ export function useReadAloud({
     // Gone means "the voice plays on alone", not "stop": the player behind the
     // bar still drives the engine, it just cannot roll into the next chapter.
     return () => setControls(null);
-  }, [setControls]);
+  }, [setControls, aiReading]);
   // The queue the player's clocks and scrubber run on. Published rather than
   // worked out again up there: the engine knows where the voice is, but only the
   // reader knows what the utterances are.
@@ -733,9 +778,9 @@ export function useReadAloud({
   // the published copy would take the clock, the scrubber and the「回到阅读」
   // landing down with it. So the copy stands until there is something to say.
   useEffect(() => {
-    if (activeUnits.length === 0) return;
+    if (aiReading || activeUnits.length === 0) return;
     publishSession({ units: activeUnits });
-  }, [activeUnits, publishSession]);
+  }, [aiReading, activeUnits, publishSession]);
 
   return {
     status,

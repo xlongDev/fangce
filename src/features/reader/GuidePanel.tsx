@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { ArrowClockwise } from "@phosphor-icons/react";
 
 import { AiErrorCard } from "@/components/common/AiErrorCard";
-import { Markdown } from "@/components/common/Markdown";
+import { AiSpeechButton } from "@/components/common/AiSpeechButton";
+import { AiSpeechText } from "@/components/common/AiSpeechText";
 import { useAiChat } from "@/hooks/useAi";
 
 /**
@@ -24,22 +25,41 @@ export function GuidePanel({ bookId }: { bookId: string }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {error ? <AiErrorCard message={error} /> : text ? <Markdown text={text} /> : <Waiting />}
+        {error ? (
+          <AiErrorCard message={error} />
+        ) : text ? (
+          <AiSpeechText id={`guide:${bookId}`} text={text} />
+        ) : (
+          <Waiting />
+        )}
       </div>
 
       <div className="border-hairline flex items-center justify-between gap-3 border-t px-3 py-2">
         <p className="text-text-3 text-[11px] leading-snug">
           由书名、目录与章节开头生成，缓存在本机
         </p>
-        <button
-          type="button"
-          disabled={streaming}
-          onClick={() => sendDigest(bookId, true)}
-          className="glass-liquid text-text-2 hover:text-text-1 focus-visible:focus-ring flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[12px] transition-colors disabled:opacity-60"
-        >
-          <ArrowClockwise size={12} />
-          {streaming ? "生成中" : "重新生成"}
-        </button>
+        {/* The answer is only worth speaking once it has stopped growing:
+            the engine fixes its queue at play time and cannot append deltas. */}
+        <div className="flex shrink-0 items-center gap-1.5">
+          <AiSpeechButton
+            id={`guide:${bookId}`}
+            text={text}
+            title="AI 导读"
+            chapter="全书"
+            disabled={streaming || error !== null}
+            streaming={streaming}
+            label="朗读这份导读"
+          />
+          <button
+            type="button"
+            disabled={streaming}
+            onClick={() => sendDigest(bookId, true)}
+            className="glass-liquid text-text-2 hover:text-text-1 focus-visible:focus-ring flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[12px] transition-colors disabled:opacity-60"
+          >
+            <ArrowClockwise size={12} />
+            {streaming ? "生成中" : "重新生成"}
+          </button>
+        </div>
       </div>
     </div>
   );

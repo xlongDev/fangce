@@ -709,6 +709,34 @@ export function SettingsPanel({
       </Section>
 
       <Section title="朗读">
+        {/* The AI answers share the book's voice, so their controls live in
+            the same group as its wash and player — not in a second settings
+            page the reader would have to find. */}
+        <Group label="AI 回答朗读">
+          <div className="w-full space-y-2.5">
+            <AiSpeechSwitchRow
+              label="显示朗读按钮"
+              hint="在 AI 导读、助手回答、摘要与图谱证据上显示朗读入口。"
+              checked={settings.aiSpeechEnabled}
+              onChange={(next) => update({ aiSpeechEnabled: next })}
+            />
+            <AiSpeechSwitchRow
+              label="生成完自动朗读"
+              hint="回答写完后自动开始，不用再点一次喇叭。"
+              checked={settings.aiSpeechAutoPlay}
+              disabled={!settings.aiSpeechEnabled}
+              onChange={(next) => update({ aiSpeechAutoPlay: next })}
+            />
+            <AiSpeechSwitchRow
+              label="高亮正在读的内容"
+              hint="复用上面的朗读高亮、高亮样式与高亮颜色。"
+              checked={settings.aiSpeechHighlight}
+              disabled={!settings.aiSpeechEnabled}
+              onChange={(next) => update({ aiSpeechHighlight: next })}
+            />
+          </div>
+        </Group>
+
         <Group label="朗读高亮">
           <Chips
             options={SPEECH_GRANULARITIES}
@@ -951,6 +979,38 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
     <div className="border-hairline border-b py-3 last:border-0">
       <p className="text-text-3 mb-2 text-[12px]">{label}</p>
       <div className="flex flex-wrap gap-1.5">{children}</div>
+    </div>
+  );
+}
+
+/** One AI read-aloud preference: a name, the reason it exists, and a switch.
+ *  The hint is not decoration — 自动朗读 especially needs to say when a voice
+ *  will start by itself before the reader turns it on. */
+function AiSpeechSwitchRow({
+  label,
+  hint,
+  checked,
+  disabled = false,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <div className="flex w-full items-start gap-3">
+      <div className="min-w-0 flex-1">
+        <p className="text-text-1 text-[12.5px]">{label}</p>
+        <p className="text-text-3 mt-0.5 text-[11.5px] leading-relaxed">{hint}</p>
+      </div>
+      <GlassSwitch
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onChange}
+        ariaLabel={label}
+      />
     </div>
   );
 }

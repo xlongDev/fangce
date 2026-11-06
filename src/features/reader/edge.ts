@@ -350,8 +350,14 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
   }
 
   async function start(index: number, current: number): Promise<void> {
-    events.loading(true);
+    // A prefetched clip is already decoded, so there is nothing to wait for.
+    // Setting `loading` on every utterance made the player's bars flash once
+    // per sentence — a visible stutter even while the audio never stopped,
+    // and most noticeable on short AI answers with many clips.
+    if (!ready.has(index)) events.loading(true);
     const clip = await ensure(index, current);
+    // Unconditional: a generation cancelled mid-`ensure` still has to take
+    // the bars down. `setLoading(false)` on an already-false state is free.
     events.loading(false);
     if (generation !== current) return;
     if (!clip) {

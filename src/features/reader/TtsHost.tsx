@@ -44,9 +44,21 @@ export function TtsHost({ children }: { children: ReactNode }) {
   return <TtsHostContext.Provider value={value}>{children}</TtsHostContext.Provider>;
 }
 
+/**
+ * The same host, without the requirement that there is one.
+ *
+ * A read-aloud control drawn outside the shell — a panel rendered alone in a
+ * unit test, say — has no engine to talk to and must not pretend otherwise. It
+ * renders nothing rather than throwing; `useTtsHost` stays strict for the
+ * surfaces that cannot work without a voice.
+ */
+export function useTtsHostOptional(): TtsHostValue | null {
+  return useContext(TtsHostContext);
+}
+
 /** The engine every read-aloud surface talks to. */
 export function useTtsHost(): TtsHostValue {
-  const value = useContext(TtsHostContext);
+  const value = useTtsHostOptional();
   if (value === null) throw new Error("useTtsHost 必须在 TtsHost 内使用");
   return value;
 }

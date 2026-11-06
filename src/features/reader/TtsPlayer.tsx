@@ -84,6 +84,21 @@ export function TtsPlayer({
   const { status, unit: index, error, loading } = tts;
   const { sleep, choose: onSleep } = sleepTimer;
   const units = session.units;
+  const origin = useSpeechSession((state) => state.origin);
+  const endAi = useSpeechSession((state) => state.endAi);
+
+  /**
+   * An answer's session ends with the voice, by whichever route it ended —
+   * the queue ran out, the player's stop, a tray command, a chapter change,
+   * or a synthesis failure. One rule here covers all of them; a callback
+   * handed to `play` would only cover the first.
+   *
+   * `play` publishes `playing` synchronously, so the frame that starts an
+   * answer cannot be mistaken for the idle frame that ends it.
+   */
+  useEffect(() => {
+    if (origin === "ai" && status === "idle") endAi();
+  }, [origin, status, endAi]);
 
   // The reading surface's glass tokens, and only while a reader is under us: on
   // the shelf there is no page, and the app's own tokens are the ones that
@@ -141,8 +156,11 @@ export function TtsPlayer({
   const miniBarAllowed = useReaderSettings((state) => state.speechMiniPlayer);
   const theme = useResolvedTheme();
   useEffect(() => {
-    void ipc.miniBarWatch(miniBarAllowed && live);
-  }, [miniBarAllowed, live]);
+    // The bar's whole way back is 「回到阅读」 — a chapter position. An answer
+    // has no chapter to return to (`bookId` is deliberately null), so a bar
+    // offering that button would be offering a jump to nowhere.
+    void ipc.miniBarWatch(miniBarAllowed && live && origin !== "ai");
+  }, [miniBarAllowed, live, origin]);
 
   // Memoised on the values rather than rebuilt per render: the shell re-renders
   // for reasons of its own, and every one of them would otherwise push a fresh
