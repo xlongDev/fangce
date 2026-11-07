@@ -21,12 +21,18 @@ export function useGraphStatus(bookId: string) {
   });
 }
 
-/** All entities, or the relations of one selected entity. */
-export function useGraphQuery(bookId: string, entity: string | null) {
+/** All entities, or the relations of one selected entity.
+ *
+ *  `maxChapter` is the reader's position when 防剧透 is on. It belongs in the
+ *  query key: flipping the switch must re-ask, not replay relations from a
+ *  cache that still holds the later chapters. */
+export function useGraphQuery(bookId: string, entity: string | null, maxChapter: number | null) {
   return useQuery({
-    queryKey: ["graph", "view", bookId, entity],
+    queryKey: ["graph", "view", bookId, entity, maxChapter],
     queryFn: () => {
-      return desktopQuery({ entities: [], relations: [] }, () => ipc.graphQuery(bookId, entity))();
+      return desktopQuery({ entities: [], relations: [] }, () =>
+        ipc.graphQuery(bookId, entity, maxChapter),
+      )();
     },
     staleTime: 5_000,
   });

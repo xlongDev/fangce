@@ -2670,6 +2670,7 @@ export function ReaderView({
             },
           }}
           graph={{
+            currentIdx: chapterIdx,
             onOpenChapter: (idx) => {
               setPanel("none");
               goTo(idx);

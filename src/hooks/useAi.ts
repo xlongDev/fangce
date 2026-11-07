@@ -193,12 +193,20 @@ export function useAiChat() {
     [start],
   );
 
+  /** One paragraph arranging the reader's own annotated highlights for a book.
+   *  Same stream as the guide and the recap, so the same rendering and the same
+   *  error card serve all three. */
+  const sendNotesRecap = useCallback(
+    (bookId: string) => start((requestId) => ipc.notesRecap(requestId, bookId)),
+    [start],
+  );
+
   const reset = useCallback(() => {
     activeRequest.current = null;
     setState(IDLE);
   }, []);
 
-  return { ...state, send, sendDigest, sendRecap, reset };
+  return { ...state, send, sendDigest, sendRecap, sendNotesRecap, reset };
 }
 
 /** One rendered exchange. The panel draws these; the hook grows the last one. */

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 
@@ -15,13 +15,25 @@ const { graph } = vi.hoisted(() => ({
       data: { entities: 0, relations: 0, model: "" } as GraphStatus,
     },
     view: { isPending: false, data: { entities: [], relations: [] } as GraphView },
+    detail: { isPending: false, data: { entities: [], relations: [] } as GraphView },
+    spoilerSafe: false as boolean,
+    lastMaxChapter: null as number | null,
     build: { build: { isPending: false, mutate: vi.fn() }, progress: null as unknown },
   },
 }));
 vi.mock("@/hooks/useGraph", () => ({
   useGraphStatus: () => graph.status,
-  useGraphQuery: () => graph.view,
+  // `null` is the entity list the panel opened on; a name is the selected
+  // entity's neighbourhood. Both are always mounted, so the mock has to tell
+  // them apart the way the query key does.
+  useGraphQuery: (_bookId: string, entity: string | null, maxChapter: number | null) => {
+    graph.lastMaxChapter = maxChapter;
+    return entity === null ? graph.view : graph.detail;
+  },
   useGraphBuild: () => graph.build,
+}));
+vi.mock("@/hooks/useAi", () => ({
+  useAiConfig: () => ({ data: { spoilerSafe: graph.spoilerSafe } }),
 }));
 // The portrait card owns its own queries; this file is about the list and the
 // card's header, and PortraitCard has a test of its own.
@@ -35,7 +47,7 @@ function Probe() {
 function mount(props: { onAskAbout?: (name: string) => void } = {}) {
   render(
     <MemoryRouter initialEntries={["/reader"]}>
-      <GraphPanel bookId="b1" onOpenChapter={() => {}} {...props} />
+      <GraphPanel bookId="b1" currentIdx={2} onOpenChapter={() => {}} {...props} />
       <Probe />
     </MemoryRouter>,
   );
@@ -140,5 +152,66 @@ describe("GraphPanel", () => {
 
     expect(screen.getByRole("button", { name: /雾隐楼/ })).toBeTruthy();
     expect(screen.getAllByText("势力").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("walks to the other end of a relation instead of back to the list", async () => {
+    const user = userEvent.setup();
+    graph.status.data = { entities: 3, relations: 3, model: "m" };
+    graph.view.data = {
+      entities: [
+        { name: "林昭", kind: "人物", mentions: 4 },
+        { name: "玄清道人", kind: "人物", mentions: 3 },
+        { name: "青云山", kind: "地点", mentions: 9 },
+      ],
+      relations: [],
+    };
+    // Empty evidence: the row's speaker is not part of what this asserts, and
+    // a bare fixture keeps the panel's own dependencies out of the test.
+    graph.detail.data = {
+      entities: [],
+      relations: [
+        { subject: "林昭", relation: "拜师", object: "玄清道人", evidence: "", chapterIdx: 2 },
+        { subject: "林昭", relation: "拜师", object: "玄清道人", evidence: "", chapterIdx: 5 },
+        { subject: "林昭", relation: "居于", object: "青云山", evidence: "", chapterIdx: 3 },
+      ],
+    };
+    mount();
+
+    await user.click(screen.getByRole("button", { name: /林昭/ }));
+    expect(screen.getByText("相关 2 位")).toBeTruthy();
+    // Two 拜师 edges fold into one destination rather than two identical rows.
+    const strip = screen.getByRole("region", { name: "关系邻居" });
+    expect(within(strip).getByRole("button", { name: /玄清道人/ })).toBeTruthy();
+
+    await user.click(within(strip).getByRole("button", { name: /玄清道人/ }));
+    // The centre changed: from 玄清道人's side only 林昭 remains, and the
+    // reader is still in the detail view rather than back at the entity list.
+    expect(screen.getByText("相关 1 位")).toBeTruthy();
+    const next = screen.getByRole("region", { name: "关系邻居" });
+    expect(within(next).getByRole("button", { name: /林昭/ })).toBeTruthy();
+  });
+
+  it("keeps the graph inside the reader's position when 防剧透 is on", async () => {
+    const user = userEvent.setup();
+    graph.spoilerSafe = true;
+    graph.status.data = { entities: 1, relations: 1, model: "m" };
+    graph.view.data = {
+      entities: [{ name: "林昭", kind: "人物", mentions: 4 }],
+      relations: [],
+    };
+    graph.detail.data = {
+      entities: [],
+      relations: [
+        { subject: "林昭", relation: "拜师", object: "玄清道人", evidence: "", chapterIdx: 2 },
+      ],
+    };
+    mount();
+
+    // Both queries — the list and the selected entity — carry the limit, and
+    // the limit belongs in their query keys so flipping the switch re-asks.
+    expect(graph.lastMaxChapter).toBe(2);
+    await user.click(screen.getByRole("button", { name: /林昭/ }));
+    expect(screen.getByText(/防剧透已开启，只显示第 1–3 章的关系/)).toBeTruthy();
+    graph.spoilerSafe = false;
   });
 });

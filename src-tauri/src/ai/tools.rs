@@ -284,7 +284,7 @@ fn lookup_character(ctx: &ToolContext<'_>, arguments: &Value) -> Result<ToolOutc
         .library
         .with(|conn| {
             let entity = book_graph::entity(conn, book_id, name)?;
-            let relations = book_graph::query(conn, book_id, Some(name))?.relations;
+            let relations = book_graph::query(conn, book_id, Some(name), None)?.relations;
             Ok((entity, relations))
         })
         .map_err(|err| err.to_string())?;
@@ -524,8 +524,75 @@ async fn read_chapter(ctx: &ToolContext<'_>, arguments: &Value) -> Result<ToolOu
         });
     }
 
+    // A long chapter costs one model call per piece. A follow-up about the same
+    // chapter should not pay for the whole digest again, so the finished one is
+    // kept in `settings` — the table the reading guide already uses, so this
+    // needs no migration. `chars` is the invalidation rule: re-extracting a
+    // chapter changes its text without changing its number.
+    let key = digest_cache_key(book_id, idx);
+    if let Some(cached) = load_digest(ctx.library, &key, total) {
+        return Ok(digest_outcome(chapter, &title, total, &cached));
+    }
+
     let (digest, compressed, pieces) = compress_chapter(ctx, &content).await?;
-    Ok(ToolOutcome {
+    let made = CachedDigest { chars: total, digest, compressed, pieces };
+    store_digest(ctx.library, &key, &made);
+    Ok(digest_outcome(chapter, &title, total, &made))
+}
+
+/// One long chapter's finished digest, kept between questions.
+///
+/// `chars` is the whole invalidation rule: a digest of text that has since been
+/// re-extracted is worse than no digest at all. JSON in `settings`, because a
+/// second table for a few rows of derived text is not worth a migration.
+#[derive(Serialize, Deserialize)]
+struct CachedDigest {
+    chars: usize,
+    digest: String,
+    compressed: usize,
+    pieces: usize,
+}
+
+fn digest_cache_key(book_id: &str, idx: usize) -> String {
+    format!("chapter-digest:{book_id}:{idx}")
+}
+
+/// A miss — absent, unreadable or stale — is not an error: the digest is simply
+/// built again. A cache that can fail the tool is worse than no cache.
+fn load_digest(library: &Library, key: &str, chars: usize) -> Option<CachedDigest> {
+    let raw: Option<String> = library
+        .with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT value FROM settings WHERE key = ?1",
+                    rusqlite::params![key],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok())
+        })
+        .ok()
+        .flatten();
+    let cached: CachedDigest = serde_json::from_str(&raw?).ok()?;
+    (cached.chars == chars && !cached.digest.trim().is_empty()).then_some(cached)
+}
+
+fn store_digest(library: &Library, key: &str, cached: &CachedDigest) {
+    let Ok(value) = serde_json::to_string(cached) else { return };
+    let _ = library.with(|conn| {
+        conn.execute(
+            "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3) \
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value, \
+                                             updated_at = excluded.updated_at",
+            rusqlite::params![key, value, crate::library::now_seconds()],
+        )?;
+        Ok(())
+    });
+}
+
+/// One shape for a cached and a freshly built digest: neither the panel nor the
+/// model should be able to tell which one answered.
+fn digest_outcome(chapter: i64, title: &str, total: usize, cached: &CachedDigest) -> ToolOutcome {
+    ToolOutcome {
         view: ToolCallView {
             name: "read_chapter".into(),
             label: format!("读取第 {chapter} 章"),
@@ -536,9 +603,10 @@ async fn read_chapter(ctx: &ToolContext<'_>, arguments: &Value) -> Result<ToolOu
             wordcloud: None,
         },
         for_model: format!(
-            "第 {chapter} 章「{title}」的提要（本章共 {total} 字，分 {pieces} 段，压缩了其中 {compressed} 段）：\n\n{digest}"
+            "第 {chapter} 章「{title}」的提要（本章共 {total} 字，分 {} 段，压缩了其中 {} 段）：\n\n{}",
+            cached.pieces, cached.compressed, cached.digest
         ),
-    })
+    }
 }
 
 /// Compresses a chapter too long to send whole.
@@ -1133,6 +1201,60 @@ mod tests {
         assert!(outcome.for_model.contains("第一段提要"), "{}", outcome.for_model);
         assert!(outcome.for_model.contains("第三段提要"), "{}", outcome.for_model);
         assert!(!outcome.for_model.contains("后面的内容你还没有看到"), "不该再有截断说明");
+    }
+
+    #[test]
+    fn a_repeated_long_chapter_read_reuses_the_digest_until_the_text_changes() {
+        // 24,990 characters: three compressed pieces, three model calls.
+        let harness = Harness::new("tool-digest-cache");
+        harness.add_chapter(0, "第一章", &"林昭走进大殿。".repeat(3570));
+        // Six replies: three for the first read, three for the read after the
+        // text changes. A cache that stops working sends more than six and
+        // fails on the count rather than hanging on a dead port.
+        let mock = mock_chat(vec![
+            answer("第一段提要"),
+            answer("第二段提要"),
+            answer("第三段提要"),
+            answer("新第一段"),
+            answer("新第二段"),
+            answer("新第三段"),
+        ]);
+        let config = AiConfig { base_url: mock.base_url.clone(), ..AiConfig::default() };
+        let client = direct_client();
+        let ctx = ToolContext {
+            library: &harness.library,
+            client: &client,
+            config: &config,
+            book_id: Some("b"),
+            max_chapter: None,
+            cancelled: &|| false,
+        };
+        let read = || tauri::async_runtime::block_on(read_chapter(&ctx, &json!({ "chapter": 1 })));
+
+        let first = read().expect("first read");
+        assert_eq!(mock.count(), 3);
+        let again = read().expect("cached read");
+        assert_eq!(mock.count(), 3, "同一章的追问不该再压缩一遍");
+        assert_eq!(first.for_model, again.for_model, "缓存命中要与现算一模一样");
+
+        // Re-extraction replaces the text behind the same chapter number. The
+        // old digest describes words that are no longer there. Still three
+        // pieces, so a regression cannot be mistaken for a longer chapter.
+        let changed = "玄清道人推开殿门走。".repeat(2380);
+        harness
+            .library
+            .with(|conn| {
+                conn.execute(
+                    "UPDATE chapters SET content = ?1, chars = ?2 WHERE book_id = 'b' AND idx = 0",
+                    rusqlite::params![changed, changed.chars().count() as i64],
+                )?;
+                Ok(())
+            })
+            .expect("replace chapter text");
+
+        let rebuilt = read().expect("rebuilt read");
+        assert_eq!(mock.count(), 6, "文本变了就该重建提要");
+        assert!(rebuilt.for_model.contains("新第一段"), "{}", rebuilt.for_model);
     }
 
     #[test]

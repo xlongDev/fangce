@@ -106,6 +106,8 @@ export function ReaderPanels({
     onJump: (idx: number) => void;
   };
   graph: {
+    /** The spine's chapter index, inclusive — the same one `summary` uses. */
+    currentIdx: number;
     onOpenChapter: (idx: number) => void;
     onAskAbout: (name: string) => void;
   };
@@ -202,6 +204,7 @@ export function ReaderPanels({
             {panel === "graph" && (
               <GraphPanel
                 bookId={bookId}
+                currentIdx={graph.currentIdx}
                 onOpenChapter={graph.onOpenChapter}
                 onAskAbout={graph.onAskAbout}
               />

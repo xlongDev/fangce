@@ -78,14 +78,18 @@ pub async fn graph_build(
 
 /// `graph.query` — all entities when `entity` is `null`, otherwise the
 /// neighborhood of that one entity.
+///
+/// `max_chapter` is the reader's position when 防剧透 is on; `None` keeps the
+/// whole graph, which is what a reader who never turned the switch on expects.
 #[tauri::command]
 #[specta::specta]
 pub fn graph_query(
     state: State<'_, AppState>,
     book_id: String,
     entity: Option<String>,
+    max_chapter: Option<usize>,
 ) -> AppResult<GraphView> {
-    state.library.with(|conn| graph::query(conn, &book_id, entity.as_deref()))
+    state.library.with(|conn| graph::query(conn, &book_id, entity.as_deref(), max_chapter))
 }
 
 /// One card on the character wall: the entity, plus where its portrait is.

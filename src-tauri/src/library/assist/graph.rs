@@ -440,7 +440,19 @@ pub fn clear_characters(conn: &Connection, book_id: &str) -> AppResult<Vec<Strin
     Ok(names)
 }
 
-pub fn query(conn: &Connection, book_id: &str, entity: Option<&str>) -> AppResult<GraphView> {
+/// The whole entity list, or the neighborhood of one entity.
+///
+/// `max_chapter` keeps a spoiler-safe panel inside the reader's position: a
+/// relation carries the chapter it was first seen in, and its `evidence` is a
+/// line of that chapter's text. Only relations are filtered. An entity is a
+/// name and a mention count, which says nothing about what happens later, and
+/// hiding the names would leave a graph panel that looks empty at chapter one.
+pub fn query(
+    conn: &Connection,
+    book_id: &str,
+    entity: Option<&str>,
+    max_chapter: Option<usize>,
+) -> AppResult<GraphView> {
     let mut view = GraphView::default();
     match entity {
         None => {
@@ -461,9 +473,14 @@ pub fn query(conn: &Connection, book_id: &str, entity: Option<&str>) -> AppResul
             let mut stmt = conn.prepare(
                 "SELECT subject, relation, object, evidence, chapter_idx FROM entity_relations
                   WHERE book_id = ?1 AND (subject = ?2 OR object = ?2)
+                    AND chapter_idx <= COALESCE(?3, chapter_idx)
                   ORDER BY chapter_idx LIMIT 100",
             )?;
-            let mut rows = stmt.query(params![book_id, name])?;
+            // NULL means "no limit": comparing a column with itself is always
+            // true, so the reader who left 防剧透 off gets the whole graph
+            // without a second prepared statement.
+            let limit = max_chapter.map(|idx| idx as i64);
+            let mut rows = stmt.query(params![book_id, name, limit])?;
             while let Some(row) = rows.next()? {
                 view.relations.push(GraphRelation {
                     subject: row.get(0)?,
@@ -617,19 +634,60 @@ mod tests {
         replace(&harness.library, "b", &entities, &relations).expect("replace");
         assert_eq!(harness.library.with(|conn| counts(conn, "b")).expect("counts"), (2, 1));
 
-        let all = harness.library.with(|conn| query(conn, "b", None)).expect("query all");
+        let all = harness.library.with(|conn| query(conn, "b", None, None)).expect("query all");
         assert_eq!(all.entities.len(), 2);
         assert_eq!(all.entities[0].name, "孙悟空", "按 mentions 排序");
         assert!(all.relations.is_empty());
 
         let around =
-            harness.library.with(|conn| query(conn, "b", Some("花果山"))).expect("query one");
+            harness.library.with(|conn| query(conn, "b", Some("花果山"), None)).expect("query one");
         assert_eq!(around.relations.len(), 1, "object 方向也命中");
         assert_eq!(around.relations[0].subject, "孙悟空");
 
         // Rebuild with less data and nothing from the old graph survives.
         replace(&harness.library, "b", &entities[..1], &[]).expect("replace again");
         assert_eq!(harness.library.with(|conn| counts(conn, "b")).expect("counts"), (1, 0));
+    }
+
+    #[test]
+    fn a_spoiler_safe_query_keeps_names_but_drops_later_relations() {
+        let harness = Harness::new("graph-spoiler");
+        let entities = vec![
+            GraphEntity { name: "孙悟空".into(), kind: "人物".into(), mentions: 3 },
+            GraphEntity { name: "花果山".into(), kind: "地点".into(), mentions: 1 },
+        ];
+        let relations = vec![
+            GraphRelation {
+                subject: "孙悟空".into(),
+                relation: "出身于".into(),
+                object: "花果山".into(),
+                evidence: "花果山福地".into(),
+                chapter_idx: 1,
+            },
+            GraphRelation {
+                subject: "孙悟空".into(),
+                relation: "大闹".into(),
+                object: "花果山".into(),
+                evidence: "后文才发生的事".into(),
+                chapter_idx: 40,
+            },
+        ];
+        replace(&harness.library, "b", &entities, &relations).expect("replace");
+
+        let safe =
+            harness.library.with(|conn| query(conn, "b", Some("孙悟空"), Some(2))).expect("query");
+        assert_eq!(safe.relations.len(), 1, "读到第 2 章时不该看到第 40 章的证据");
+        assert_eq!(safe.relations[0].chapter_idx, 1);
+
+        // Entities are deliberately not filtered: a name is not a plot point,
+        // and hiding them would leave the panel empty at chapter one.
+        let all = harness.library.with(|conn| query(conn, "b", None, Some(2))).expect("query all");
+        assert_eq!(all.entities.len(), 2);
+
+        // No limit is the old behaviour, unchanged.
+        let whole =
+            harness.library.with(|conn| query(conn, "b", Some("孙悟空"), None)).expect("query");
+        assert_eq!(whole.relations.len(), 2);
     }
 
     #[test]

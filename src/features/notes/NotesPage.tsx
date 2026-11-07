@@ -25,10 +25,12 @@ import {
 } from "@phosphor-icons/react";
 
 import { cn } from "@/lib/cn";
+import { isDesktopRuntime } from "@/lib/ipc";
 import { SPRING, useMotion } from "@/lib/motion";
 import { displayTitle } from "@/lib/title";
 import { useSettings, type NotesView } from "@/stores/settings";
 import { useBooks } from "@/hooks/useLibrary";
+import { useAiChat } from "@/hooks/useAi";
 import {
   useAnnotationsByBook,
   useDeleteAnnotation,
@@ -40,6 +42,8 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { NoteCell } from "@/features/reader/AnnotationNote";
+import { AiErrorCard } from "@/components/common/AiErrorCard";
+import { AiSpeechButton } from "@/components/common/AiSpeechButton";
 import { EmptyState } from "@/components/common/EmptyState";
 import { QueryError } from "@/components/common/QueryError";
 import { authorLine } from "@/features/library/format";
@@ -602,6 +606,13 @@ function BookSection({
   onToggleSelect: (id: string) => void;
 }) {
   const { book, entries } = group;
+  const recap = useAiChat();
+  // Only a note is the reader saying something; a bare highlight is a passage
+  // they marked. An all-highlight book has nothing for the model to arrange.
+  const noted = entries.filter((entry) => (entry.annotation.note ?? "").trim() !== "").length;
+  let blocked: string | undefined;
+  if (!isDesktopRuntime) blocked = "整理笔记要调用模型，只在桌面端可用";
+  else if (noted === 0) blocked = "给划线写上笔记后才能整理";
   return (
     <section className="px-4 pt-4 first:pt-3">
       <header className="flex items-center gap-3 px-1 pb-2">
@@ -622,8 +633,40 @@ function BookSection({
           </h2>
           <p className="text-text-3 truncate text-[11.5px]">{authorLine(book)}</p>
         </div>
+        <button
+          type="button"
+          disabled={blocked !== undefined || recap.streaming}
+          onClick={() => recap.sendNotesRecap(book.id)}
+          title={blocked}
+          className="border-hairline text-text-2 hover:text-text-1 focus-visible:focus-ring shrink-0 rounded-full border px-2.5 py-1 text-[11.5px] transition-colors disabled:opacity-45"
+        >
+          {recap.streaming ? "正在整理…" : recap.text ? "重新整理" : "整理成一段"}
+        </button>
         <span className="text-text-3 shrink-0 text-[11.5px]">{entries.length} 条</span>
       </header>
+
+      {(recap.text || recap.error) && (
+        <div className="border-hairline mb-2 rounded-lg border px-3 py-2.5">
+          {recap.error ? (
+            <AiErrorCard message={recap.error} />
+          ) : (
+            <div className="flex items-start gap-2">
+              <p className="text-text-1 min-w-0 flex-1 text-[12.5px] leading-relaxed whitespace-pre-wrap">
+                {recap.text}
+              </p>
+              <AiSpeechButton
+                id={`notes-recap:${book.id}`}
+                text={recap.text}
+                title="批注回顾"
+                chapter={displayTitle(book.title)}
+                disabled={recap.streaming}
+                streaming={recap.streaming}
+                label="朗读这段回顾"
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       <ul className="space-y-0.5">
         {entries.map((entry) => (

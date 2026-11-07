@@ -3,9 +3,11 @@ import { ArrowUUpLeft } from "@phosphor-icons/react";
 
 import { AiErrorCard } from "@/components/common/AiErrorCard";
 import { AiSpeechButton } from "@/components/common/AiSpeechButton";
+import { useAiConfig } from "@/hooks/useAi";
 import { useGraphBuild, useGraphQuery, useGraphStatus } from "@/hooks/useGraph";
 import { PortraitCard } from "@/features/graph/PortraitCard";
-import type { GraphEntity } from "@/types/ipc";
+import { neighbors } from "@/features/graph/neighbors";
+import type { GraphEntity, GraphRelation } from "@/types/ipc";
 
 /** The kinds the extractor is asked for, in the order a reader looks for them.
  *
@@ -46,10 +48,13 @@ function groupByKind(entities: GraphEntity[]): { kind: string; items: GraphEntit
 /** The knowledge-graph drawer: build it, browse entities, follow relations. */
 export function GraphPanel({
   bookId,
+  currentIdx,
   onOpenChapter,
   onAskAbout,
 }: {
   bookId: string;
+  /** The reader's position, inclusive. Only used when 防剧透 is on. */
+  currentIdx: number;
   onOpenChapter: (chapterIdx: number) => void;
   /** Hands the character to the assistant. `undefined` hides the button. */
   onAskAbout?: (name: string) => void;
@@ -58,8 +63,15 @@ export function GraphPanel({
   /** `null` means "whatever the graph suggests", not "all" — the fallback
    *  below decides, and an explicit 全部 is its own value. */
   const [picked, setPicked] = useState<string | null>(null);
+  const config = useAiConfig();
+  const spoilerSafe = config.data?.spoilerSafe ?? false;
+  const maxChapter = spoilerSafe ? currentIdx : null;
   const status = useGraphStatus(bookId);
-  const view = useGraphQuery(bookId, selected?.name ?? null);
+  const view = useGraphQuery(bookId, selected?.name ?? null, maxChapter);
+  // The list is what this panel opened on, so this key is already cached and
+  // asking again costs no request. It is the only map from a relation's bare
+  // name back to the full entity the card needs when the reader walks to it.
+  const allEntities = useGraphQuery(bookId, null, maxChapter);
   const build = useGraphBuild(bookId);
 
   if (status.isPending || view.isPending) {
@@ -137,7 +149,18 @@ export function GraphPanel({
             </button>
           )}
         </div>
+        <NeighborStrip
+          center={selected.name}
+          relations={relations}
+          entities={allEntities.data?.entities ?? []}
+          onSelect={setSelected}
+        />
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+          {spoilerSafe && (
+            <p className="text-text-3 mb-3 text-[11px] leading-relaxed">
+              防剧透已开启，只显示第 1–{currentIdx + 1} 章的关系。
+            </p>
+          )}
           <PortraitCard bookId={bookId} entity={selected} />
           {relations.length === 0 ? (
             <p className="text-text-3 text-[13px] leading-relaxed">没有抽到与它相关的关系。</p>
@@ -252,6 +275,70 @@ export function GraphPanel({
         ))}
       </div>
     </div>
+  );
+}
+
+/** How many neighbours the strip names before it says how many it left out. */
+const MAX_NEIGHBORS = 12;
+
+/**
+ * The other ends of a selected entity's relations, as a way to walk the graph
+ * without going back to the list. A relation row can only jump to its chapter;
+ * the other name it prints was plain text until this strip existed.
+ *
+ * A fixed order rather than a force-directed graph: the drawer is ~320px wide,
+ * the backend hands over one entity's neighbourhood at a time, and a layout
+ * that reshuffles on every open reads as jitter rather than structure.
+ *
+ * A name missing from `entities` — the list is capped at 200 rows — stays
+ * visible but cannot be clicked: a chip that jumps nowhere is worse than a
+ * dimmed one.
+ */
+function NeighborStrip({
+  center,
+  relations,
+  entities,
+  onSelect,
+}: {
+  center: string;
+  relations: readonly GraphRelation[];
+  entities: readonly GraphEntity[];
+  onSelect: (entity: GraphEntity) => void;
+}) {
+  const all = neighbors(center, relations);
+  if (all.length === 0) return null;
+  const shown = all.slice(0, MAX_NEIGHBORS);
+  const byName = new Map(entities.map((entity) => [entity.name, entity]));
+
+  return (
+    <section aria-label="关系邻居" className="border-hairline border-b px-4 py-2.5">
+      <p className="text-text-3 mb-1.5 text-[11px]">相关 {all.length} 位</p>
+      <div className="flex flex-wrap gap-1.5">
+        {shown.map((neighbor) => {
+          const entity = byName.get(neighbor.name);
+          return (
+            <button
+              key={neighbor.name}
+              type="button"
+              disabled={entity === undefined}
+              title={
+                entity ? `${neighbor.sample} · ${neighbor.count} 条关系` : "这个实体不在当前列表里"
+              }
+              onClick={() => entity && onSelect(entity)}
+              className="focus-visible:focus-ring border-hairline text-text-2 hover:border-accent hover:text-text-1 rounded-full border px-2.5 py-1 text-[11.5px] transition-colors disabled:opacity-45"
+            >
+              {neighbor.name}
+              {neighbor.count > 1 && <span className="text-text-3 ml-1">{neighbor.count}</span>}
+            </button>
+          );
+        })}
+        {all.length > shown.length && (
+          <span className="text-text-3 self-center text-[11px]">
+            另有 {all.length - shown.length} 位
+          </span>
+        )}
+      </div>
+    </section>
   );
 }
 

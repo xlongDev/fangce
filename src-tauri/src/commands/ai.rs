@@ -335,7 +335,8 @@ fn portrait_subject(
         out.push_str(&format!("读者写的形象：{}\n", appearance.trim()));
     }
 
-    let relations = library.with(|conn| crate::library::graph::query(conn, book_id, Some(name)))?;
+    let relations =
+        library.with(|conn| crate::library::graph::query(conn, book_id, Some(name), None))?;
     let evidence: Vec<&str> = relations
         .relations
         .iter()

@@ -16,6 +16,7 @@ pub mod font;
 pub mod graph;
 pub mod lookup;
 pub mod mini_bar;
+pub mod notes_recap;
 pub mod ocr;
 pub mod rag;
 pub mod reader;

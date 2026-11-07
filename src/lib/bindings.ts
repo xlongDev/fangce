@@ -492,11 +492,22 @@ export const commands = {
   chapterRecap: (requestId: string, bookId: string, upto: number) =>
     __TAURI_INVOKE<null>("chapter_recap", { requestId, bookId, upto }),
   /**
+   *  `notes.recap` — streams a review of one book's annotated highlights.
+   *
+   *  The backend reads the annotations itself rather than taking them from the
+   *  renderer: one source of truth, and a command whose only input is a book id.
+   */
+  notesRecap: (requestId: string, bookId: string) =>
+    __TAURI_INVOKE<null>("notes_recap", { requestId, bookId }),
+  /**
    *  `graph.query` — all entities when `entity` is `null`, otherwise the
    *  neighborhood of that one entity.
+   *
+   *  `max_chapter` is the reader's position when 防剧透 is on; `None` keeps the
+   *  whole graph, which is what a reader who never turned the switch on expects.
    */
-  graphQuery: (bookId: string, entity: string | null) =>
-    __TAURI_INVOKE<GraphView>("graph_query", { bookId, entity }),
+  graphQuery: (bookId: string, entity: string | null, maxChapter: number | null) =>
+    __TAURI_INVOKE<GraphView>("graph_query", { bookId, entity, maxChapter }),
   /**
    *  `graph.characters` — the card wall.
    *
