@@ -123,6 +123,10 @@ export function GlassDialog({
           <Dialog.Portal forceMount>
             <Dialog.Overlay asChild forceMount>
               <motion.div
+                // Named for `useShelfSelection`'s empty-space exit: a press on
+                // a scrim is a dismissal of the dialog above, not of the mode
+                // underneath it.
+                data-dialog-overlay
                 className="backdrop-glass fixed inset-0 z-50 bg-black/40"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}

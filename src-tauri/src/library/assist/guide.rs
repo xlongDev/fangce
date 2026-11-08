@@ -62,6 +62,16 @@ pub fn cached(conn: &Connection, book_id: &str) -> AppResult<Option<String>> {
     Ok(stored.filter(|text| !text.trim().is_empty()))
 }
 
+/// Every book id whose guide is cached and non-blank, so a batch run can skip
+/// them without one round trip per book.
+pub fn cached_ids(conn: &Connection) -> AppResult<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT substr(key, 7) FROM settings WHERE key LIKE 'guide:%' AND trim(value) <> ''",
+    )?;
+    let ids = stmt.query_map([], |row| row.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(ids)
+}
+
 /// Replaces the stored guide for `book_id`.
 pub fn store(conn: &Connection, book_id: &str, guide: &str) -> AppResult<()> {
     conn.execute(
@@ -309,6 +319,16 @@ mod tests {
         // instead of being served forever.
         store(&conn, "b", "   ").expect("blank");
         assert_eq!(cached(&conn, "b").expect("read"), None);
+    }
+
+    #[test]
+    fn cached_ids_lists_only_filled_guides() {
+        let conn = seeded();
+        assert!(cached_ids(&conn).expect("read").is_empty());
+
+        store(&conn, "b", "有货").expect("store");
+        store(&conn, "other", "   ").expect("blank");
+        assert_eq!(cached_ids(&conn).expect("read"), vec!["b".to_string()]);
     }
 
     #[test]

@@ -1,10 +1,15 @@
-import { useLayoutEffect, useRef, type RefObject } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Star, Tag } from "@phosphor-icons/react";
+import { Sparkle, Star, Tag } from "@phosphor-icons/react";
+import { useQuery } from "@tanstack/react-query";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
 import { SPRING, useMotion } from "@/lib/motion";
+import { AiErrorCard } from "@/components/common/AiErrorCard";
+import { useAiConfig } from "@/hooks/useAi";
+import { isDesktopRuntime, ipc } from "@/lib/ipc";
+import { useGuideBatch } from "@/stores/guideBatch";
 import type { ShelfSelection } from "@/features/library/useShelfSelection";
 
 /**
@@ -27,6 +32,32 @@ export function ShelfBatchBar({
 }) {
   const m = useMotion();
   const barRef = useRef<HTMLDivElement>(null);
+  const [guideConfirm, setGuideConfirm] = useState(false);
+
+  /** Which books already have a cached guide, so the confirm dialog can skip
+   *  them out of the queue and out of the token estimate. Refetched on open:
+   *  a run that just finished wrote new entries, and the store cannot reach
+   *  this cache to invalidate it. */
+  const cached = useQuery({
+    queryKey: ["ai", "guide-status"],
+    queryFn: () => ipc.aiGuideStatus(),
+    enabled: isDesktopRuntime,
+  });
+  const cachedIds = useMemo(() => new Set(cached.data ?? []), [cached.data]);
+
+  /** The books a run would actually generate, right now. */
+  const pending = useMemo(
+    () => selection.selectedBooks.filter((book) => !cachedIds.has(book.id)),
+    [selection.selectedBooks, cachedIds],
+  );
+
+  const { data: config } = useAiConfig();
+  const ready = !!config && config.model.trim() !== "" && config.baseUrl.trim() !== "";
+
+  /** The global run: its progress is the shell's pill, the bar only forbids a
+   *  second one. */
+  const run = useGuideBatch((s) => s.run);
+  const inFlight = run !== null && run.status !== "done";
 
   /**
    * Where the bar belongs, horizontally.
@@ -63,6 +94,11 @@ export function ShelfBatchBar({
     observer.observe(pane);
     return () => observer.disconnect();
   }, [selection.managing, anchorRef]);
+
+  const openGuideConfirm = () => {
+    void cached.refetch();
+    setGuideConfirm(true);
+  };
 
   return (
     <>
@@ -145,6 +181,15 @@ export function ShelfBatchBar({
                 </GlassButton>
                 <GlassButton
                   size="sm"
+                  variant="subtle"
+                  disabled={selection.count === 0 || inFlight || !isDesktopRuntime}
+                  onClick={openGuideConfirm}
+                >
+                  {/* Same mark as the reader's AI 导读 button. */}
+                  <Sparkle size={13} /> 生成导读
+                </GlassButton>
+                <GlassButton
+                  size="sm"
                   variant="ghost"
                   className="text-danger"
                   disabled={selection.count === 0 || busy.delete}
@@ -182,6 +227,46 @@ export function ShelfBatchBar({
           >
             删除
           </GlassButton>
+        </div>
+      </GlassDialog>
+
+      {/* Batch AI guides: confirm (with the token estimate), then hand the run
+          to the global store — progress floats as a shell-level pill, and the
+          reader keeps using the app. 停止 takes effect between books on
+          purpose: a stream cancelled midway comes back as Ok with a stump, and
+          a stump must not be cached. */}
+      <GlassDialog
+        open={guideConfirm}
+        onOpenChange={setGuideConfirm}
+        title="批量生成 AI 导读"
+        widthClass="w-[min(92vw,440px)]"
+      >
+        <div className="space-y-3">
+          <p className="text-text-2 text-sm leading-relaxed">
+            选中 {selection.count} 本
+            {selection.count > pending.length &&
+              `，其中 ${selection.count - pending.length} 本已有导读会自动跳过`}
+            。
+            {pending.length > 0
+              ? `将为 ${pending.length} 本新生成；每本约消耗 1 万 tokens（导读只读书名、目录和几段章节开头，素材有固定上限，输出约一千字），共约 ${pending.length} 万 tokens，实际随模型不同略有出入。`
+              : "所选书籍都已生成过导读，没有需要新建的。"}
+          </p>
+          {!ready && <AiErrorCard message="还没有配置 AI 模型，先到设置里填写接口地址与模型名称" />}
+          <div className="flex justify-end gap-2 pt-1">
+            <GlassButton variant="subtle" onClick={() => setGuideConfirm(false)}>
+              取消
+            </GlassButton>
+            <GlassButton
+              variant="primary"
+              disabled={pending.length === 0 || !ready}
+              onClick={() => {
+                setGuideConfirm(false);
+                void useGuideBatch.getState().start(pending);
+              }}
+            >
+              开始生成
+            </GlassButton>
+          </div>
         </div>
       </GlassDialog>
     </>

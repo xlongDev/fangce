@@ -745,6 +745,14 @@ pub async fn ai_digest(
     }
 }
 
+/// `ai.guide_status` — the ids of every book whose guide is already cached, so
+/// a batch run can skip them and price the rest before generating anything.
+#[tauri::command]
+#[specta::specta]
+pub fn ai_guide_status(state: State<'_, AppState>) -> AppResult<Vec<String>> {
+    state.library.with(guide::cached_ids)
+}
+
 /// Emits a stored answer as "one delta, then done", which is what a stream that
 /// arrived instantly looks like.
 fn replay(app: &AppHandle, request_id: &str, text: String) {

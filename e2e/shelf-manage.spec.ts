@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 /**
  * Batch-manage mode.
  *
- * Three things are worth pinning down here:
+ * Four things are worth pinning down here:
  *
  * 1. The action bar sits centred on the shelf, not 150px off to the right of
  *    centre. A previous `motion.div` used `x: "-50%"` inside its own animate
@@ -30,6 +30,10 @@ import { expect, test } from "@playwright/test";
  *
  * 3. Escape leaves the mode and drops the selection. With the scrim gone the
  *    keyboard needed its own way out; the bar's 完成 is the pointer one.
+ *
+ * 4. Clicking empty space also leaves the mode — but "empty" is defined
+ *    negatively, by what was *not* pressed, because a press on the shelf is
+ *    the mode's whole purpose. See the test at the bottom of this file.
  */
 test("batch-manage bar is centred on the shelf", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -94,6 +98,48 @@ test("cards select instead of opening, and Escape leaves the mode", async ({ pag
   // Re-entering starts from nothing rather than from the last selection.
   await page.getByRole("button", { name: "选择", exact: true }).click();
   await expect(page.locator("[data-batch-bar]")).toContainText("已选 0 本");
+});
+
+/**
+ * Clicking empty space also leaves the mode — but "empty" is defined
+ * negatively, by what was *not* pressed, because a press on the shelf is the
+ * mode's whole purpose. A card, a bar button, a dialog scrim all keep the
+ * mode; bare header text does not.
+ */
+test("clicking empty space leaves the mode; pressing controls does not", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/?demo=1");
+  await expect(page.locator("[data-shelf-scroller]")).toBeVisible();
+  const bar = page.locator("[data-batch-bar]");
+  await page.getByRole("button", { name: "选择", exact: true }).click();
+  await expect(bar).toContainText("已选 0 本");
+
+  // A card press is a selection, not an exit — the reason this is a window
+  // listener rather than a scrim.
+  const first = page.getByRole("button", { name: /我们为什么会生病/ }).first();
+  await first.click();
+  await expect(bar).toContainText("已选 1 本");
+
+  // A bar button keeps the mode (and here grows the selection).
+  await bar.getByRole("button", { name: "全选" }).click();
+  await expect(bar).toContainText(/已选 \d+ 本/);
+
+  // A dialog's scrim dismisses the dialog, not the mode behind it.
+  await bar.getByRole("button", { name: "打标签" }).click();
+  const overlay = page.locator("[data-dialog-overlay]");
+  await expect(overlay).toBeVisible();
+  // Off to the left edge: the dialog content owns the middle of the screen.
+  await overlay.click({ position: { x: 10, y: 300 } });
+  await expect(overlay).toHaveCount(0);
+  await expect(bar).toContainText(/已选 \d+ 本/);
+
+  // Bare header text is empty space: mode and selection both go.
+  await page.getByText("所有导入的书籍").first().click();
+  await expect(bar).toBeHidden();
+
+  // Re-entering starts from nothing.
+  await page.getByRole("button", { name: "选择", exact: true }).click();
+  await expect(bar).toContainText("已选 0 本");
 });
 
 /**

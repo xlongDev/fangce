@@ -24,6 +24,7 @@ import { useActiveReadingSurface } from "@/hooks/useReadingSurface";
 import { useDeepLink } from "@/hooks/useDeepLink";
 import { useFonts } from "@/hooks/useFonts";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { GuideBatchPill } from "@/features/library/GuideBatchPill";
 import { registerCoreCommands, useNavigationBridge } from "@/features/command/registerCoreCommands";
 import { DURATION, EASE_OUT } from "@/lib/motion";
 
@@ -439,6 +440,9 @@ export function AppShell() {
           <BookCoverFlight />
         </div>
         <CommandPalette />
+        {/* The batch AI-guide run floats over every page — the loop outlives
+            the shelf that started it, so its progress has to as well. */}
+        <GuideBatchPill />
       </div>
     </TtsHost>
   );

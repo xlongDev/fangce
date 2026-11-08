@@ -57,6 +57,38 @@ export function useShelfSelection({
     return () => window.removeEventListener("keydown", onKey);
   }, [managing, deleteOpen, exit]);
 
+  /**
+   * Clicking empty space also leaves batch-manage mode.
+   *
+   * Also a window listener and not a scrim, for the same reason Escape is: a
+   * scrim over the shelf would turn every card press into an exit (the bug the
+   * batch bar's comment records). "Empty" is defined negatively — a press that
+   * lands on nothing interactive. Cards, buttons, inputs, the batch bar, any
+   * dialog (its content *and* its scrim, so dismissing the tag sheet by
+   * clicking outside does not take the mode down with it) all keep the mode;
+   * a press whose target is the scroller itself is the scrollbar, and dragging
+   * it must not exit either.
+   */
+  useEffect(() => {
+    if (!managing) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (deleteOpen) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest("[data-shelf-scroller]") === target) return;
+      if (
+        target.closest(
+          "button, a, input, textarea, select, label, [role='button'], [role='dialog'], " +
+            "[data-dialog-overlay], [data-batch-bar], [data-guide-batch-pill]",
+        )
+      )
+        return;
+      exit();
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [managing, deleteOpen, exit]);
+
   const toggle = (book: BookSummary) =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -79,6 +111,9 @@ export function useShelfSelection({
     toggleAll,
     /** Labels the whole selection: the sheet only ever adds in this mode. */
     requestTags: () => onRequestTags(list.filter((book) => selected.has(book.id))),
+    /** The selection as book rows, for surfaces that need titles (the tag
+     *  sheet, the batch guide). */
+    selectedBooks: list.filter((book) => selected.has(book.id)),
     favorite: (favorite: boolean) => onFavorite([...selected], favorite),
     deleteOpen,
     openDelete: () => setDeleteOpen(true),

@@ -83,6 +83,11 @@ export const commands = {
   aiDigest: (requestId: string, bookId: string, refresh: boolean) =>
     __TAURI_INVOKE<null>("ai_digest", { requestId, bookId, refresh }),
   /**
+   *  `ai.guide_status` — the ids of every book whose guide is already cached, so
+   *  a batch run can skip them and price the rest before generating anything.
+   */
+  aiGuideStatus: () => __TAURI_INVOKE<string[]>("ai_guide_status"),
+  /**
    *  `ai.detectOcFerry` — points the reader's single AI slot at a running OC Ferry.
    *
    *  OC Ferry is an Electron app that ferries OpenCode's free models to a local
