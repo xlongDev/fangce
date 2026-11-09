@@ -22,6 +22,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
 import { GlassInput, GlassSwitch } from "@/components/glass/input";
+import { BrandMark } from "@/components/brand/Mark";
 import { useSettings, type ThemeMode } from "@/stores/settings";
 import { resetAllSettings } from "@/stores/reset";
 import { showToast } from "@/stores/toasts";
@@ -50,10 +51,6 @@ import { AiSection } from "@/features/settings/ai/AiForm";
 import { KeymapSection } from "@/features/settings/KeymapSection";
 import { SecretsNotice } from "@/features/settings/SecretsNotice";
 import type { SyncChange, SyncConfig, SyncReport, SyncTally } from "@/types/ipc";
-// The app icon's one source of truth is the Tauri bundle; importing it rather
-// than copying a second PNG into `public/` keeps the About card and the Dock in
-// step. Vite emits it as a same-origin asset, which the CSP already allows.
-import appIcon from "../../../src-tauri/icons/128x128.png?url";
 import { cn } from "@/lib/cn";
 import { SPRING } from "@/lib/motion";
 
@@ -329,18 +326,29 @@ export function SettingsPage() {
                       aria-current={on ? "true" : undefined}
                       onClick={() => jumpTo(id)}
                       className={cn(
-                        "press focus-visible:focus-ring flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] whitespace-nowrap",
+                        "press focus-visible:focus-ring relative flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] whitespace-nowrap",
                         on
-                          ? "bg-surface-3 text-text-1 shadow-glass font-medium"
+                          ? "text-text-1 font-medium"
                           : "text-text-2 hover:text-text-1 hover:bg-surface-1",
                       )}
                     >
+                      {/* The highlight slides between rail entries rather than
+                          teleporting: one shared-layout pill, the same device
+                          as the theme radio below. Labels sit above it, so the
+                          horizontal rail and the vertical one move alike. */}
+                      {on && (
+                        <motion.span
+                          layoutId="settings-rail-active"
+                          className="bg-surface-3 shadow-glass absolute inset-0 rounded-lg"
+                          transition={reduce ? { duration: 0 } : SPRING.layout}
+                        />
+                      )}
                       <Icon
                         size={15}
                         weight={on ? "fill" : "regular"}
-                        className={on ? "text-accent" : "text-text-3"}
+                        className={cn("relative", on ? "text-accent" : "text-text-3")}
                       />
-                      {label}
+                      <span className="relative">{label}</span>
                     </button>
                   </li>
                 );
@@ -678,15 +686,13 @@ function AboutSection() {
 
   return (
     <SettingsGroup id="about" icon={Info} title="关于">
-      {/* The mark, then the person behind it, then the machine facts. A logo
-          in the group header would sit next to the 关于 icon as a second badge;
-          as its own row it reads as the app being introduced. */}
+      {/* The mark, then the person behind it, then the machine facts. The
+          brand's own spectrum — the rectangular SVG the sidebar carries —
+          rather than the Dock's squircle: a logo standing alone reads as the
+          app being introduced, an app icon next to an icon chip reads as
+          chrome. */}
       <div className="flex items-center gap-4 px-5 py-4">
-        <img
-          src={appIcon}
-          alt="方册应用图标"
-          className="border-hairline h-14 w-14 shrink-0 rounded-xl border"
-        />
+        <BrandMark height={56} label="方册品牌标" />
         <div className="min-w-0">
           <p className="text-text-1 text-[15px] font-semibold">
             方册 <span className="text-text-3 ml-1 text-[12px] font-normal">Colophon</span>

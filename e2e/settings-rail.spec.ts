@@ -228,7 +228,7 @@ test("关于 carries the app mark, the author and the full repository URL", asyn
   await openSettings(page);
   const about = page.locator('[data-section="about"]');
 
-  await expect(about.getByRole("img", { name: "方册应用图标" })).toBeVisible();
+  await expect(about.getByRole("img", { name: "方册品牌标" })).toBeVisible();
   await expect(about).toContainText("xlongDev");
   await expect(about.getByRole("button", { name: /github\.com\/xlongDev\/fangce/ })).toBeVisible();
 });
