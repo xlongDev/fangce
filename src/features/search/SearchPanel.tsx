@@ -17,6 +17,16 @@ interface SearchPanelProps {
   onPick: (hit: SearchHit, needle: string) => void;
   /** Query the panel opens with (the toolbar's 搜索 action). */
   initialQuery?: string;
+  /** The ⌘F dialog: put the caret in the field as the shell finishes opening. */
+  focusOnMount?: boolean;
+  /** The ⌘F dialog: select the first hit so one Enter is enough to jump. The
+   *  reader's drawer stays unselected on purpose — a page turn there must not
+   *  be one accidental Enter away. */
+  selectFirst?: boolean;
+  /** Every needle change (the opening seed included), reported back: the PDF
+   *  reader paints its hit markers live off the query, and the panel owns the
+   *  field's state — the page would otherwise never see a keystroke. */
+  onNeedleChange?: (needle: string) => void;
 }
 
 /** Query history, most recent first. Local on purpose: a reading history is
@@ -45,16 +55,52 @@ function rememberQuery(query: string): string[] {
   return next;
 }
 
+function clearHistory(): string[] {
+  try {
+    localStorage.removeItem(HISTORY_KEY);
+  } catch {
+    // Same as a failed write: the list in memory still clears, the store does
+    // not have to agree for this session to be rid of it.
+  }
+  return [];
+}
+
 /** Input plus hit list. Fills whatever container it is placed in. */
-export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: SearchPanelProps) {
+export function SearchPanel({
+  bookId = null,
+  onPick,
+  initialQuery = "",
+  focusOnMount = false,
+  selectFirst = false,
+  onNeedleChange,
+}: SearchPanelProps) {
   const [needle, setNeedle] = useState(initialQuery);
   const [history, setHistory] = useState<string[]>(readHistory);
   /** Cursor over the flat hit list, shared by ↑/↓ and the mouse. */
-  const [active, setActive] = useState(-1);
+  const [active, setActive] = useState(selectFirst ? 0 : -1);
   const m = useMotion();
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const query = useSearch(needle, bookId);
   const trimmed = needle.trim();
+
+  // The opening seed is a needle too: a drawer that opens with one must have
+  // its markers painted before the first keystroke. Mount-only on purpose —
+  // later changes go through `retype`, and the field's state is the panel's.
+  const reported = useRef(false);
+  useEffect(() => {
+    if (reported.current) return;
+    reported.current = true;
+    onNeedleChange?.(initialQuery);
+  });
+
+  // Same 30 ms the command palette waits: Radix mounts the dialog content a
+  // beat after the open state lands, and a focus call made before that is lost.
+  useEffect(() => {
+    if (!focusOnMount) return;
+    const id = window.setTimeout(() => inputRef.current?.focus(), 30);
+    return () => window.clearTimeout(id);
+  }, [focusOnMount]);
 
   // Keys are built here rather than in the JSX so no list uses a raw index.
   const rows = useMemo(
@@ -99,7 +145,8 @@ export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: Search
   // event that changes the query rather than from an effect on it.
   const retype = (next: string) => {
     setNeedle(next);
-    setActive(-1);
+    setActive(selectFirst ? 0 : -1);
+    onNeedleChange?.(next);
   };
 
   useEffect(() => {
@@ -143,6 +190,7 @@ export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: Search
         className="text-text-3 pointer-events-none absolute top-1/2 left-3 -translate-y-1/2"
       />
       <GlassInput
+        ref={inputRef}
         value={needle}
         onChange={(event) => retype(event.target.value)}
         onKeyDown={onKeyDown}
@@ -179,9 +227,19 @@ export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: Search
             </p>
             {history.length > 0 && (
               <div>
-                <p className="text-text-3 flex items-center gap-1.5 text-[11.5px]">
-                  <ClockCounterClockwise size={12} /> 最近搜过
-                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-text-3 flex items-center gap-1.5 text-[11.5px]">
+                    <ClockCounterClockwise size={12} /> 最近搜过
+                  </p>
+                  <button
+                    type="button"
+                    aria-label="清除最近搜过"
+                    onClick={() => setHistory(clearHistory())}
+                    className="text-text-3 hover:text-text-1 focus-visible:focus-ring rounded-md px-1.5 py-0.5 text-[11.5px] transition-colors"
+                  >
+                    清除
+                  </button>
+                </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {history.map((entry) => (
                     <button
@@ -265,10 +323,7 @@ export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: Search
                           <p className="text-text-1 mt-1 text-[13px] leading-relaxed">
                             {parts.map((part) =>
                               part.matched ? (
-                                <mark
-                                  key={part.key}
-                                  className="bg-accent-soft rounded-[2px] text-inherit"
-                                >
+                                <mark key={part.key} className="search-hit">
                                   {part.text}
                                 </mark>
                               ) : (

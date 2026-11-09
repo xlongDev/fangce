@@ -27,15 +27,18 @@ const log = createLogger("commands");
 
 interface Deps {
   openPalette: () => void;
+  openSearch: () => void;
 }
 
 const PALETTE = { mod: true, key: "k" } as const;
+const SEARCH = { mod: true, key: "f" } as const;
 const SIDEBAR = { mod: true, key: "b" } as const;
 const PREFERENCES = { mod: true, key: "," } as const;
 
-export function registerCoreCommands({ openPalette }: Deps): () => void {
+export function registerCoreCommands({ openPalette, openSearch }: Deps): () => void {
   const commands: Command[] = [
     paletteCommand(openPalette),
+    globalSearchCommand(openSearch),
     continueReadingCommand(),
     searchCommand(),
     sidebarCommand(),
@@ -57,6 +60,28 @@ function paletteCommand(open: () => void): Command {
     group: "应用",
     icon: <CommandIcon size={16} />,
     shortcut: [PALETTE],
+    hidden: true,
+    run: open,
+  };
+}
+
+/**
+ * ⌘F, bound through the registry rather than a listener of its own.
+ *
+ * Three things come for free that way: the 快捷键 panel can rebind it (it
+ * lists every command with a shortcut, hidden ones included), the foliate
+ * sections forward it out of their iframes, and the clash check knows about
+ * it. `hidden` keeps it out of the command list — that list already has 全文检索,
+ * which navigates to the full page, and a second search row would be the same
+ * action twice.
+ */
+function globalSearchCommand(open: () => void): Command {
+  return {
+    id: "app.search",
+    title: "全局搜索",
+    group: "应用",
+    icon: <MagnifyingGlass size={16} />,
+    shortcut: [SEARCH],
     hidden: true,
     run: open,
   };

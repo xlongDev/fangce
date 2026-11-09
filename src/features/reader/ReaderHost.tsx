@@ -40,6 +40,8 @@ export interface ReaderHostProps {
   initialChapter?: number | null;
   /** Search term carried over from a result, highlighted in the chapter. */
   initialQuery?: string;
+  /** The hit's snippet; how a foliate book finds the occurrence to land on. */
+  initialSnippet?: string;
   /** Character offset of a search hit, scrolled into view once rendered. */
   initialOffset?: number | null;
   /**
@@ -69,6 +71,7 @@ export function ReaderHost({
   pair = null,
   initialChapter = null,
   initialQuery = "",
+  initialSnippet = "",
   initialOffset = null,
   initialAnnotation = null,
   onOpenPair,
@@ -177,6 +180,7 @@ export function ReaderHost({
       initialCfi={bookSummary.location}
       initialChapter={initialChapter}
       initialQuery={initialQuery}
+      initialSnippet={initialSnippet}
       initialOffset={initialOffset}
       initialAnnotation={initialAnnotation}
       backLabel={backLabel}

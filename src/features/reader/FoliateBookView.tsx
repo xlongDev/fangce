@@ -1,9 +1,22 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { X } from "@phosphor-icons/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ipc, isDesktopRuntime } from "../../lib/ipc";
 import { demoBookBytes, demoEnabled } from "../../lib/demo";
 import { Overlayer } from "foliate-js/overlayer.js";
 import type { FoliateRelocate, View, makeBook } from "foliate-js/view.js";
 import type { Annotation } from "@/types/ipc";
+import { pickFoliateHit } from "@/features/search/snippet";
+import { OverlayPortal } from "@/components/glass/overlay";
+import { EASE_OUT } from "@/lib/motion";
 import type { LayoutMode, PageTransition } from "./theme";
 import { DEFAULT_MARGIN_X } from "@/stores/reader";
 import { speechUnits, unitsFromOffset } from "./speech";
@@ -20,6 +33,7 @@ import type { RulerRect } from "./rulerPointer";
 import { effectiveKeys, shortcutMatches } from "@/lib/commands";
 import { useCommandStore } from "@/stores/commands";
 import { useSettings } from "@/stores/settings";
+import { useReaderSettings } from "@/stores/reader";
 import { CapturedPageTurn } from "./capturedTurn";
 import { markLoneFigures } from "./loneFigure";
 import type { FoliateStyle } from "./foliateStyle";
@@ -107,6 +121,32 @@ export type FoliateSearchHit = {
   match: string;
   post: string;
 };
+
+/** One result as foliate's search generator yields it. */
+type RawSearchResult = {
+  cfi?: string;
+  label?: string;
+  excerpt?: { pre: string; match: string; post: string };
+  subitems?: { cfi: string; excerpt?: { pre: string; match: string; post: string } }[];
+};
+
+/** Flattens one raw result — section-level rows and their subitems alike. */
+function searchRows(result: RawSearchResult): FoliateSearchHit[] {
+  const row = (
+    cfi: string,
+    excerpt?: { pre: string; match: string; post: string },
+  ): FoliateSearchHit => ({
+    cfi,
+    label: result.label ?? "",
+    pre: excerpt?.pre ?? "",
+    match: excerpt?.match ?? "",
+    post: excerpt?.post ?? "",
+  });
+  if (result.subitems) {
+    return result.subitems.filter((sub) => sub.cfi).map((sub) => row(sub.cfi, sub.excerpt));
+  }
+  return result.cfi ? [row(result.cfi, result.excerpt)] : [];
+}
 
 /** One entry of the book's own table of contents, flattened for a list. */
 export type FoliateTocEntry = {
@@ -359,6 +399,22 @@ type Props = {
    * sections, so the closest available anchor is the whole-book fraction.
    */
   startFraction?: number | null;
+  /**
+   * A term the library-wide search sent with `q=`. foliate paints every match
+   * as it walks the book, so running it once after `init` is what puts that ink
+   * on the page the reader just opened. Captured at mount: a later change is a
+   * different trip, not a reason to re-open the book.
+   */
+  initialQuery?: string;
+  /**
+   * The snippet of the hit the library-wide search sent the reader to, with
+   * the matched run still marked. foliate cannot go to the hit's (chapter,
+   * offset) pair — its sections are the container's own — so the occurrence is
+   * found by its words: while the query's walk streams hits past, the one
+   * whose context matches the snippet is jumped to. Captured at mount, like
+   * `initialQuery`.
+   */
+  initialSnippet?: string;
   /** Reading layout, mapped onto the foliate renderer's attributes. */
   layout: LayoutMode;
   /** Page turn animation; `slide`/`pan` = native clipped pan, `fade`/`paper` = VT. */
@@ -712,6 +768,19 @@ const toHostPoint = (owner: Document | null, rect: { left: number; top: number }
 };
 
 /**
+ * The search marker's painters, keyed like `TtsWashStyle`: the same shapes the
+ * read-aloud wash and the annotation highlights draw, so the reader meets one
+ * vocabulary of marks everywhere. The ink rides in the options.
+ */
+const SEARCH_PAINTERS: Record<TtsWashStyle, FoliateOverlayerDraw> = {
+  highlight: Overlayer.highlight,
+  underline: Overlayer.underline,
+  strikethrough: Overlayer.strikethrough,
+  squiggly: Overlayer.squiggly,
+  outline: Overlayer.outline,
+};
+
+/**
  * The live selection's box in host window coordinates, or `null` when the
  * section has nothing selected. The one place the pill's anchor is measured,
  * so its first placement and every later re-measurement agree.
@@ -804,6 +873,8 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     format,
     startCfi,
     startFraction,
+    initialQuery,
+    initialSnippet,
     layout,
     transition,
     marginX,
@@ -824,7 +895,34 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<View | null>(null);
+  /** The URL's `q`, read once. The init effect must not depend on it — that
+   *  would close and re-open the whole book on a parent re-render. */
+  const openQuery = useRef(initialQuery?.trim() ?? "");
+  const openSnippet = useRef(initialSnippet?.trim() ?? "");
   const [error, setError] = useState<string | null>(null);
+  /** 搜索命中标记: on/off, shape and ink. Read through refs by the open effect
+   *  (created once) and applied to the live view by its own effect below —
+   *  which is also where a shape or ink change meets the painted page. The
+   *  vendor's gate sits inside `addAnnotation`, so the flag also keeps
+   *  sections loaded later silent without any per-section wiring here. */
+  const searchMark = useReaderSettings((s) => s.searchMark);
+  const searchMarkStyle = useReaderSettings((s) => s.searchMarkStyle);
+  const searchMarkColor = useReaderSettings((s) => s.searchMarkColor);
+  const searchMarkRef = useRef(searchMark);
+  const searchMarkStyleRef = useRef(searchMarkStyle);
+  const searchMarkColorRef = useRef(searchMarkColor);
+  useEffect(() => {
+    searchMarkRef.current = searchMark;
+    searchMarkStyleRef.current = searchMarkStyle;
+    searchMarkColorRef.current = searchMarkColor;
+  }, [searchMark, searchMarkStyle, searchMarkColor]);
+  /** The query behind whatever ink is (or was) on the page — the open walk's
+   *  `q` or the drawer's latest run. Turning the marker back on repaints it. */
+  const lastQueryRef = useRef("");
+  /** The search hit under the pointer, with its × button's anchor in host
+   *  coordinates; `null` when the pointer is over no search hit. */
+  const [hitClose, setHitClose] = useState<{ value: string; x: number; y: number } | null>(null);
+  const reduce = useReducedMotion();
   // Read-aloud wash. The prose path draws the same one with a `<mark>`, so a
   // reader switching a book's format sees one marker, not two styles.
   // Mirrored into refs for `focusUnit`/`paintTts`, which are created once and
@@ -1139,6 +1237,107 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
    * by the flip effect below.
    */
   const zhLoadedRef = useRef<{ mode: string; converter: ZhConverter } | null>(null);
+
+  /**
+   * The search marker's draw function, as the vendor's `searchMarkDraw` wants
+   * it: one closure for every shape and ink, reading the live settings at
+   * paint time. That is what makes a restyle a *redraw* — the vendor repaints
+   * its stored hits through this same closure — instead of a walk over the
+   * book again.
+   */
+  const searchMarkPainter = useCallback<FoliateOverlayerDraw>((rects, options) => {
+    const wash = foliateWash(
+      searchMarkStyleRef.current,
+      searchMarkColorRef.current,
+      styleRef.current.dark,
+    );
+    return SEARCH_PAINTERS[wash.draw](rects, { ...options, color: wash.color });
+  }, []);
+
+  // The settings meet the book wherever it is. Off erases the ink (the hits
+  // themselves stay found — navigation, the drawer's list and the landing all
+  // keep working); on, or a shape or ink change, redraws what the view still
+  // remembers. Only when nothing is remembered does the last query walk again.
+  // A repaint never jumps: the reader is where they are. The identity of
+  // `markInk` is the trigger — the body reads the settings through the refs,
+  // because the painter closure re-reads them at paint time anyway.
+  const markInk = useMemo(
+    () => ({ on: searchMark, style: searchMarkStyle, color: searchMarkColor }),
+    [searchMark, searchMarkStyle, searchMarkColor],
+  );
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const on = markInk.on;
+    view.searchMarkVisible = on;
+    if (!on) {
+      view.hideSearch();
+      return;
+    }
+    if (view.hasSearchResults()) {
+      view.repaintSearch();
+      return;
+    }
+    const query = lastQueryRef.current;
+    if (query === "") return;
+    void (async () => {
+      try {
+        for await (const result of view.search({ query })) {
+          if (result === "done") break;
+        }
+      } catch {
+        // A repaint that fails only loses the ink; the reader can search again.
+      }
+    })();
+  }, [markInk]);
+
+  /**
+   * The hover-dismiss anchor. One target, updated only when the value or the
+   * anchor actually moved: a pointermove fires per frame, and the button is
+   * React state — re-rendering the whole view per mouse pixel is not a cost
+   * anyone would forgive.
+   */
+  const hitCloseRef = useRef<{ value: string; x: number; y: number } | null>(null);
+  const reportHitClose = useCallback((next: { value: string; x: number; y: number } | null) => {
+    const prev = hitCloseRef.current;
+    if (
+      prev?.value === next?.value &&
+      Math.abs((prev?.x ?? 0) - (next?.x ?? 0)) < 3 &&
+      Math.abs((prev?.y ?? 0) - (next?.y ?? 0)) < 3
+    ) {
+      return;
+    }
+    hitCloseRef.current = next;
+    setHitClose(next);
+  }, []);
+  /** One hit test per frame at most, shared by every section's pointermove. */
+  const hitFrameRef = useRef<number | null>(null);
+  const trackHitClose = useCallback(
+    (doc: Document, move: PointerEvent) => {
+      if (!searchMarkRef.current) return;
+      if (hitFrameRef.current !== null) return;
+      hitFrameRef.current = window.requestAnimationFrame(() => {
+        hitFrameRef.current = null;
+        const content = viewRef.current?.renderer?.getContents().find((entry) => entry.doc === doc);
+        if (!content?.overlayer) return;
+        const [key, , rect] = content.overlayer.hitTest({
+          x: move.clientX,
+          y: move.clientY,
+        });
+        // ponytail: the overlayer answers with the *most recent* run under the
+        // point, so a search hit lying under a reader highlight answers with
+        // the highlight and no × appears. Disambiguating means walking every
+        // key here per frame; worth it only if someone actually hits it.
+        if (key?.startsWith("foliate-search:") && rect) {
+          const point = toHostPoint(doc, { left: rect.right, top: rect.top });
+          reportHitClose({ value: key, x: point.x, y: point.y });
+        } else {
+          reportHitClose(null);
+        }
+      });
+    },
+    [reportHitClose],
+  );
   const attachSection = useCallback(
     (event: Event) => {
       // foliate announces which section a document belongs to; the lightbox's
@@ -1174,10 +1373,18 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       // a document keeps its own events: the host never sees a move, which is
       // why the page number's stillness clock cannot be restarted from the
       // pane (a prose book needs no such thing — its text is the pane). Same
-      // door as the pointer-down above.
-      doc.addEventListener("pointermove", (move) => moveReport.current?.(move), true);
+      // door as the pointer-down above. The same move is what finds a search
+      // hit to offer its dismiss button to.
+      doc.addEventListener(
+        "pointermove",
+        (move) => {
+          moveReport.current?.(move);
+          trackHitClose(doc, move);
+        },
+        true,
+      );
     },
-    [captureSelection, onSectionClick],
+    [captureSelection, onSectionClick, trackHitClose],
   );
 
   useEffect(() => {
@@ -1197,6 +1404,10 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     const onRelocate = (event: Event) => {
       const detail = (event as CustomEvent<FoliateRelocate>).detail;
       locatedRef.current = detail.cfi ?? "";
+      // A turn or a scroll moves the words under the pointer: the dismiss
+      // anchor is stale geometry the moment this fires, and a button parked
+      // over nothing reads as a bug.
+      reportHitClose(null);
       report.current?.({
         cfi: detail.cfi ?? "",
         fraction: detail.fraction ?? 0,
@@ -1315,6 +1526,10 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
           await view.goToFraction(startFraction);
         }
         viewRef.current = view;
+        // The marker gate and its painter are read at draw time; both apply
+        // before any annotation or search ink can be added.
+        view.searchMarkVisible = searchMarkRef.current;
+        view.searchMarkDraw = { draw: searchMarkPainter, options: {} };
         // The renderer (and its section iframes) exist only after `open()`.
         // Binding the `load` listener before `open` was a silent no-op —
         // `view.renderer` was still null, so nothing ever attached and
@@ -1443,6 +1658,43 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         tocRef.current = flattenToc(view.book.toc);
         tocReport.current?.(tocRef.current);
         syncAnnotations();
+
+        // A library-wide hit arrives as `q=<term>`, with the clicked row's
+        // snippet in `s`. foliate paints every match as its search walks the
+        // book, so running the query once is what puts that ink on the page —
+        // and while the walk streams hits past, the one whose context matches
+        // the snippet is jumped to: the hit's own (chapter, offset) pair means
+        // nothing to foliate, so the words are the only handle. The generator
+        // must still be drained after the jump: it is the walk that draws the
+        // ink, not the first result. No context match lands on the first hit,
+        // which still puts the reader on a painted match.
+        const query = openQuery.current;
+        const target = openSnippet.current;
+        if (query) {
+          lastQueryRef.current = query;
+          void (async () => {
+            let first: string | null = null;
+            let landed = false;
+            try {
+              for await (const result of view.search({ query })) {
+                if (cancelled || result === "done") break;
+                if (target === "") continue;
+                const rows = searchRows(result as RawSearchResult);
+                first ??= rows[0]?.cfi ?? null;
+                if (landed) continue;
+                const cfi = pickFoliateHit(target, rows);
+                if (cfi !== null) {
+                  landed = true;
+                  void view.goTo(cfi);
+                }
+              }
+              if (!landed && !cancelled && first !== null) void view.goTo(first);
+            } catch {
+              // A book that cannot be searched still opens; only the ink is
+              // lost, and the reader can search again from the drawer.
+            }
+          })();
+        }
       } catch (cause) {
         if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
       }
@@ -1457,6 +1709,11 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       paintedRef.current = new Map();
       searchedRef.current = new Set();
       ttsRef.current = null;
+      if (hitFrameRef.current !== null) {
+        window.cancelAnimationFrame(hitFrameRef.current);
+        hitFrameRef.current = null;
+      }
+      reportHitClose(null);
       if (view) {
         view.renderer?.removeEventListener("load", attachSection);
         view.renderer?.removeEventListener("stabilized", onStabilized);
@@ -1478,6 +1735,8 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     onShowAnnotation,
     onOverlay,
     syncAnnotations,
+    searchMarkPainter,
+    reportHitClose,
   ]);
 
   // Layout, turn animation and margins apply to the live element: the
@@ -1795,35 +2054,11 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       search: async (query) => {
         const view = viewRef.current;
         if (!view || query.trim() === "") return [];
+        lastQueryRef.current = query.trim();
         const hits: FoliateSearchHit[] = [];
         for await (const result of view.search({ query })) {
           if (result === "done") break;
-          const item = result as {
-            cfi?: string;
-            label?: string;
-            excerpt?: { pre: string; match: string; post: string };
-            subitems?: { cfi: string; excerpt?: { pre: string; match: string; post: string } }[];
-          };
-          if (item.subitems) {
-            for (const sub of item.subitems) {
-              if (!sub.cfi) continue;
-              hits.push({
-                cfi: sub.cfi,
-                label: item.label ?? "",
-                pre: sub.excerpt?.pre ?? "",
-                match: sub.excerpt?.match ?? "",
-                post: sub.excerpt?.post ?? "",
-              });
-            }
-          } else if (item.cfi) {
-            hits.push({
-              cfi: item.cfi,
-              label: item.label ?? "",
-              pre: item.excerpt?.pre ?? "",
-              match: item.excerpt?.match ?? "",
-              post: item.excerpt?.post ?? "",
-            });
-          }
+          hits.push(...searchRows(result as RawSearchResult));
         }
         return hits;
       },
@@ -1873,7 +2108,38 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   if (error) {
     return <p className="text-text-3 p-6 text-sm">这本书的 Kindle 容器打不开：{error}</p>;
   }
-  return <div ref={hostRef} className="h-full w-full" data-view-transition-root />;
+  return (
+    <>
+      <div ref={hostRef} className="h-full w-full" data-view-transition-root />
+      {/* The hover-dismiss button for a search hit. Portalled like the
+          selection toolbar: the reading pane's backdrop-filter would otherwise
+          become the containing block for a fixed element and slice it off. */}
+      <OverlayPortal>
+        <AnimatePresence>
+          {hitClose && (
+            <motion.button
+              key="hit-close"
+              type="button"
+              aria-label="关闭这条搜索标记"
+              className="glass-solid shadow-panel text-text-1 focus-visible:focus-ring fixed z-40 flex h-[18px] w-[18px] items-center justify-center rounded-full hover:text-red-400"
+              style={{ left: hitClose.x - 9, top: hitClose.y - 9 }}
+              initial={reduce ? false : { opacity: 0, scale: 0.6 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={reduce ? undefined : { opacity: 0, scale: 0.6 }}
+              transition={{ duration: 0.14, ease: EASE_OUT }}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                viewRef.current?.deleteSearchHit(hitClose.value);
+                reportHitClose(null);
+              }}
+            >
+              <X size={9} />
+            </motion.button>
+          )}
+        </AnimatePresence>
+      </OverlayPortal>
+    </>
+  );
 });
 
 export default FoliateBookView;

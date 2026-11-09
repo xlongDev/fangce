@@ -170,7 +170,7 @@ export function AppShell() {
   const sidebarHidden = useSettings((s) => s.sidebarHidden);
   const showSidebar = useSettings((s) => s.setSidebarHidden);
   const readerFullscreen = useChrome((s) => s.readerFullscreen);
-  const setOpen = useCommandPalette((s) => s.setOpen);
+  const openWith = useCommandPalette((s) => s.openWith);
   const reduce = useReducedMotion();
 
   // While a book is open the whole window wears the reading surface: the
@@ -214,8 +214,11 @@ export function AppShell() {
     : undefined;
 
   useEffect(() => {
-    return registerCoreCommands({ openPalette: () => setOpen(true) });
-  }, [setOpen]);
+    return registerCoreCommands({
+      openPalette: () => openWith("command"),
+      openSearch: () => openWith("search"),
+    });
+  }, [openWith]);
 
   const sidebarGone = sidebarHidden || readerFullscreen;
 

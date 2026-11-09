@@ -305,6 +305,14 @@ export class View extends HTMLElement {
     #cursorAutohider = new CursorAutohider(this, () =>
         this.hasAttribute('autohide-cursor'))
     isFixedLayout = false
+    // Whether search hits paint a marker at all. The host toggles this off to
+    // keep search navigation without the ink; `#searchResults` still records
+    // the hits, so newly loaded sections stay silent too.
+    searchMarkVisible = true
+    // How a search hit paints, as `{ draw, options }` handed straight to
+    // `overlayer.add`. `null` keeps foliate's own outline; the host replaces
+    // it to restyle the marker (shape, ink) without touching this file again.
+    searchMarkDraw = null
     lastLocation
     history = new History()
     constructor() {
@@ -493,7 +501,12 @@ export class View extends HTMLElement {
                     return
                 }
                 const range = doc ? anchor(doc) : anchor
-                if (range) overlayer.add(value, range, Overlayer.outline)
+                if (range && this.searchMarkVisible) {
+                    if (this.searchMarkDraw)
+                        overlayer.add(value, range,
+                            this.searchMarkDraw.draw, this.searchMarkDraw.options)
+                    else overlayer.add(value, range, Overlayer.outline)
+                }
             }
             return
         } else if (value.startsWith(NOTE_PREFIX)) {
@@ -774,6 +787,30 @@ export class View extends HTMLElement {
         for (const list of this.#searchResults.values())
             for (const item of list) this.deleteAnnotation(item)
         this.#searchResults.clear()
+    }
+    // The host's restyle path: the hits are already found, so a shape or ink
+    // change redraws them where they stand instead of walking the book again.
+    repaintSearch() {
+        for (const list of this.#searchResults.values())
+            for (const item of list) this.addAnnotation(item)
+    }
+    // Removes the ink but keeps the hit list, so `repaintSearch` can restore
+    // it — that is what makes the marker toggle cheap to flip back on.
+    hideSearch() {
+        for (const list of this.#searchResults.values())
+            for (const item of list) this.deleteAnnotation(item)
+    }
+    hasSearchResults() {
+        return this.#searchResults.size > 0
+    }
+    // Drops one hit everywhere: the overlayer and the stored list, so a
+    // section that loads later does not paint it back.
+    deleteSearchHit(value) {
+        this.deleteAnnotation({ value })
+        for (const list of this.#searchResults.values()) {
+            const i = list.findIndex(item => item.value === value)
+            if (i >= 0) list.splice(i, 1)
+        }
     }
     async initTTS(granularity = 'word', nodeFilter, highlighter) {
         const contents = this.renderer.getContents()

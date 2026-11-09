@@ -77,6 +77,30 @@ test("⌘K opens the palette while the focus is inside the book", async ({ page 
   await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 
+/**
+ * ⌘F is a command in the same registry as ⌘K, so it is rebindable from 设置 ›
+ * 快捷键 and is forwarded out of foliate's section iframes by the same rule.
+ * This pins the visible half: the hotkey opens the search body of the palette
+ * shell, with the caret already in its field, and Escape gives the page back.
+ */
+test("⌘F opens the library-wide search", async ({ page }) => {
+  await page.goto("/?demo=1");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toHaveCount(0);
+
+  await page.keyboard.press("Control+f");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("全局搜索");
+
+  const field = page.getByRole("textbox", { name: "搜索正文" });
+  await expect(field).toBeFocused();
+  await page.keyboard.type("哲学");
+  await expect(field).toHaveValue("哲学");
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+});
+
 test("a copy press still reaches the book", async ({ page }) => {
   await openKindleBook(page);
 
@@ -104,4 +128,57 @@ test("a copy press still reaches the book", async ({ page }) => {
   );
   await page.keyboard.press("Control+c");
   expect(await verdict).toBe(false);
+});
+
+test("clearing recent searches empties both the list and the stored history", async ({ page }) => {
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem("fangce.search-history", JSON.stringify(["哲学", "小说"]));
+    } catch {
+      // A blocked store just leaves the empty state empty.
+    }
+  });
+  await page.goto("/?demo=1");
+  await page.keyboard.press("Control+f");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("哲学", { exact: true })).toBeVisible();
+
+  await dialog.getByRole("button", { name: "清除最近搜过" }).click();
+
+  await expect(dialog.getByText("哲学", { exact: true })).toHaveCount(0);
+  await expect(dialog.getByText("最近搜过")).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem("fangce.search-history"))).toBeNull();
+});
+
+/**
+ * The other half of a hit: the term is painted in the chapter it opens.
+ *
+ * A search result navigates through `fangce:navigate` with `?q=...`, so the
+ * event is the same one the palette uses — the web fixture has no SQLite
+ * chapters for the result list itself, but the reader's prose path is real.
+ * The assertion is on the computed ink, not just the class: the default shape
+ * is the vendor's 方框, drawn on the prose path as glyph outlines (`washCss`)
+ * rather than a wash.
+ */
+test("a hit's term is visibly marked in the chapter it opens", async ({ page }) => {
+  await page.goto("/?demo=1");
+  await expect(page.locator("[data-shelf-scroller]")).toBeVisible();
+  await page.evaluate(() =>
+    window.dispatchEvent(
+      new CustomEvent("fangce:navigate", {
+        detail: "/reader?book=demo-1&chapter=0&q=%E8%BA%AB%E4%BD%93&at=0",
+      }),
+    ),
+  );
+
+  const marks = page.locator("[data-reading-content] mark[data-search-hit]");
+  await expect(marks.first()).toBeVisible();
+  expect(await marks.count()).toBeGreaterThan(0);
+
+  const ink = await marks.first().evaluate((el) => {
+    const style = getComputedStyle(el);
+    return { background: style.backgroundColor, outline: style.textShadow };
+  });
+  expect(ink.outline, "the default 方框 outlines the glyphs").not.toBe("none");
+  expect(ink.background, "no wash under the outline shape").toBe("rgba(0, 0, 0, 0)");
 });

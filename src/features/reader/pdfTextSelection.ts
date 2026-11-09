@@ -324,3 +324,103 @@ export function clearTtsWash(): void {
   ttsRange = null;
   repaintTts();
 }
+
+/**
+ * Search-hit markers: the same idea as the read-aloud wash, one page at a
+ * time and many ranges at once. The layer is located per hit from the hit's
+ * own snippet (`searchHitNeedle`), because the offset the backend stores
+ * counts the extraction pipeline's text, not the layer's — the words are the
+ * only shared coordinates.
+ *
+ * One dynamic rule when the reader picked a custom ink, a static accent rule
+ * otherwise; the ranges live per page like the annotations above, so a scroll
+ * layout paints every mounted page without them fighting over one name.
+ */
+const SEARCH_NAME = "pdf-search";
+const SEARCH_STYLE_ID = "pdf-search-ink";
+const searchPainted = new Map<number, Range[]>();
+let searchInk: string | null = null;
+
+function ensureSearchRule(color: string): string {
+  const name = `pdf-search-${color.replace(/[^a-zA-Z0-9]/g, "").toLowerCase()}`;
+  let sheet = document.getElementById(SEARCH_STYLE_ID) as HTMLStyleElement | null;
+  if (!sheet) {
+    sheet = document.createElement("style");
+    sheet.id = SEARCH_STYLE_ID;
+    document.head.append(sheet);
+  }
+  const rule = `::highlight(${name}) { background-color: ${inkWash(color, 0.25)} }`;
+  if (!sheet.textContent?.includes(rule)) sheet.append(rule);
+  return name;
+}
+
+function repaintSearch() {
+  if (typeof CSS === "undefined" || !("highlights" in CSS)) return;
+  const name = searchInk ? ensureSearchRule(searchInk) : SEARCH_NAME;
+  CSS.highlights.set(name, new Highlight(...[...searchPainted.values()].flat()));
+  // One ink at a time: a name this repaint no longer uses would keep painting
+  // the ranges it was built with, in the ink the reader just left.
+  for (const key of Array.from(CSS.highlights.keys())) {
+    if (key.startsWith("pdf-search") && key !== name) CSS.highlights.delete(key);
+  }
+}
+
+/** One hit to paint: `text`/`from`/`to` come from `searchHitNeedle`; `key` is
+ *  what a focus request names (`chapterIdx:offset`). */
+export interface PdfSearchMark {
+  key: string;
+  text: string;
+  from: number;
+  to: number;
+}
+
+/**
+ * Paints the page's search hits; the one whose key matches `focusKey` — a
+ * result the reader just clicked — is also brought into view. Returns whether
+ * that happened, so the caller can consume the request: a zoom re-render
+ * would otherwise yank the reader back to the hit over and over.
+ */
+export function paintPageSearchHits(
+  pageNumber: number,
+  container: HTMLElement,
+  marks: PdfSearchMark[],
+  focusKey: string | null,
+  ink: string | null,
+): boolean {
+  if (typeof CSS === "undefined" || !("highlights" in CSS)) return false;
+  const { nodes } = walkLayer(container);
+  const ranges: Range[] = [];
+  let focused = false;
+  for (const mark of marks) {
+    const at = locateLayerText(container, mark.text, mark.from, mark.to);
+    if (!at) continue;
+    const from = nodeAndOffset(nodes, at.start);
+    const to = nodeAndOffset(nodes, at.end);
+    if (!from || !to) continue;
+    const range = new Range();
+    range.setStart(from.node, Math.min(from.at, from.node.length));
+    range.setEnd(to.node, Math.min(to.at, to.node.length));
+    ranges.push(range);
+    if (!focused && focusKey !== null && mark.key === focusKey) {
+      focused = true;
+      range.startContainer.parentElement?.scrollIntoView({ block: "center", inline: "nearest" });
+    }
+  }
+  searchPainted.set(pageNumber, ranges);
+  searchInk = ink;
+  repaintSearch();
+  return focused;
+}
+
+/** Clears one page's markers — it unmounted, or the query moved on. */
+export function clearPageSearchHits(pageNumber: number): void {
+  if (!searchPainted.delete(pageNumber)) return;
+  repaintSearch();
+}
+
+/** Clears every page's markers — the drawer closed, or the query emptied. */
+export function clearAllSearchHits(): void {
+  if (searchPainted.size === 0) return;
+  searchPainted.clear();
+  repaintSearch();
+}

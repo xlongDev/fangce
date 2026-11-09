@@ -1,31 +1,25 @@
 import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { useReaderPanels } from "@/hooks/useReaderPanels";
 
 /**
- * The reason this hook exists is `close`, so that is what is pinned here: the
- * query and the painted match highlights both have to go with the drawer, on
- * every way out. The bug that prompted the extraction was Escape clearing the
- * query and leaving foliate's highlights painted on the page.
+ * The reason this hook exists is `close`, so that is what is pinned here.
+ * The drawer leaves two things behind — its query and the painted match
+ * highlights — and closing keeps both: a reader who closes the drawer to
+ * read the page the hits are on must not watch the ink vanish with the
+ * panel. What retires them is emptying the field, a new search, or the book
+ * itself closing — none of which is this hook's business.
  */
-/** A render whose `clearPainted` spy can be handed in and read back. Module
- *  scope so it is not rebuilt on every case. */
-function setup(clear = vi.fn()) {
-  return renderHook(({ clearPainted }) => useReaderPanels("", clearPainted), {
-    initialProps: { clearPainted: clear },
-  });
-}
-
 describe("useReaderPanels", () => {
   it("opens on nothing, with the query it was seeded with", () => {
-    const { result } = renderHook(() => useReaderPanels("三体", () => {}));
+    const { result } = renderHook(() => useReaderPanels("三体"));
     expect(result.current.panel).toBe("none");
     expect(result.current.search).toBe("三体");
   });
 
   it("toggle opens the panel it names, and the same id closes it", () => {
-    const { result } = renderHook(() => useReaderPanels("", () => {}));
+    const { result } = renderHook(() => useReaderPanels(""));
 
     act(() => result.current.toggle("toc"));
     expect(result.current.panel).toBe("toc");
@@ -40,9 +34,8 @@ describe("useReaderPanels", () => {
     expect(result.current.panel).toBe("annotations");
   });
 
-  it("close clears the query and the painted matches when the search drawer was open", () => {
-    const clearPainted = vi.fn();
-    const { result } = setup(clearPainted);
+  it("close keeps the query and the painted matches", () => {
+    const { result } = renderHook(() => useReaderPanels(""));
 
     act(() => result.current.setPanel("search"));
     act(() => result.current.setSearch("kittens"));
@@ -54,13 +47,11 @@ describe("useReaderPanels", () => {
 
     expect(closed).toBe(true);
     expect(result.current.panel).toBe("none");
-    expect(result.current.search).toBe("");
-    expect(clearPainted).toHaveBeenCalledTimes(1);
+    expect(result.current.search).toBe("kittens");
   });
 
-  it("close on another panel takes nothing with it", () => {
-    const clearPainted = vi.fn();
-    const { result } = setup(clearPainted);
+  it("close on another panel closes just the panel", () => {
+    const { result } = renderHook(() => useReaderPanels(""));
 
     act(() => result.current.setPanel("toc"));
     act(() => {
@@ -68,14 +59,10 @@ describe("useReaderPanels", () => {
     });
 
     expect(result.current.panel).toBe("none");
-    // Nothing was searched, so there is nothing painted to clear — and the
-    // query the drawer would open with stays whatever the reader left.
-    expect(clearPainted).not.toHaveBeenCalled();
   });
 
   it("close with nothing open reports that it consumed nothing", () => {
-    const clearPainted = vi.fn();
-    const { result } = setup(clearPainted);
+    const { result } = renderHook(() => useReaderPanels(""));
 
     let closed = true;
     act(() => {
@@ -85,12 +72,10 @@ describe("useReaderPanels", () => {
     // The key handler uses this to decide whether Escape belongs to the panel
     // or should fall through to the fullscreen toggle.
     expect(closed).toBe(false);
-    expect(clearPainted).not.toHaveBeenCalled();
   });
 
-  it("a second close does not clean up twice", () => {
-    const clearPainted = vi.fn();
-    const { result } = setup(clearPainted);
+  it("a second close is a no-op", () => {
+    const { result } = renderHook(() => useReaderPanels(""));
 
     act(() => result.current.setPanel("search"));
     act(() => {
@@ -100,24 +85,18 @@ describe("useReaderPanels", () => {
       result.current.close();
     });
 
-    expect(clearPainted).toHaveBeenCalledTimes(1);
+    expect(result.current.panel).toBe("none");
+    expect(result.current.search).toBe("");
   });
 
-  /**
-   * `setPanel` is the raw move the "jump away" paths use: they close the
-   * drawer without cleaning up, because the query and the painted matches are
-   * still the reader's context if they come back.
-   */
-  it("setPanel leaves the query and the painted matches alone", () => {
-    const clearPainted = vi.fn();
-    const { result } = setup(clearPainted);
+  it("setPanel leaves the query alone, like close now does", () => {
+    const { result } = renderHook(() => useReaderPanels(""));
 
     act(() => result.current.setPanel("search"));
     act(() => result.current.setSearch("kittens"));
     act(() => result.current.setPanel("none"));
 
     expect(result.current.search).toBe("kittens");
-    expect(clearPainted).not.toHaveBeenCalled();
   });
 
   /**
@@ -125,14 +104,10 @@ describe("useReaderPanels", () => {
    * identity there re-registers the listener on every render.
    */
   it("close keeps its identity across renders", () => {
-    const clear = vi.fn();
-    const { result, rerender } = renderHook(
-      ({ clearPainted }) => useReaderPanels("", clearPainted),
-      { initialProps: { clearPainted: clear } },
-    );
+    const { result, rerender } = renderHook(() => useReaderPanels(""));
     const first = result.current.close;
 
-    rerender({ clearPainted: clear });
+    rerender();
 
     expect(result.current.close).toBe(first);
   });

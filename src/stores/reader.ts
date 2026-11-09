@@ -132,6 +132,28 @@ interface ReaderState {
    */
   bookTypography: boolean;
   /**
+   * 搜索命中标记: paint the matched term where it landed — the foliate
+   * overlayer marker on a foliate book, the `.search-hit` wash on the prose
+   * path. Off keeps search working (the jump, the hit list, the landing) with
+   * nothing inked on the page, which is for readers who find the marker
+   * louder than the sentence it sits in. Per-hit dismissal is not a setting:
+   * hovering any marker offers its own ×, whatever this switch says.
+   */
+  searchMark: boolean;
+  /**
+   * The marker's shape, shared by both rendering paths and drawn by the same
+   * painters the read-aloud wash uses (`ttsWash.ts`) — one vocabulary of
+   * shapes, not one per feature. 方框 is the default: it is what foliate has
+   * always drawn, and the shape a reader arriving from another app expects a
+   * search hit to wear.
+   */
+  searchMarkStyle: TtsWashStyle;
+  /**
+   * The marker's ink; `null` is the app's own accent, not "unset" — foliate's
+   * hard-coded red was never a design choice, and the app has one.
+   */
+  searchMarkColor: string | null;
+  /**
    * 替换引号: rewrite the book's western curly quotes (“ ” ‘ ’) into the
    * corner brackets vertical CJK is set with (﹁ ﹂ ﹃ ﹄). A vertical column
    * rotates a western quote with the line, which reads as punctuation lying on
@@ -577,6 +599,9 @@ export const DEFAULT_READER_SETTINGS = {
   pdfGap: 0,
   pdfInvertImages: false,
   invertBookImages: false,
+  searchMark: true,
+  searchMarkStyle: "outline",
+  searchMarkColor: null,
   highlightColor: HIGHLIGHT_COLORS[0]!.hex,
   highlightStyle: "highlight",
   // The wash the voice has always drawn: the app's own tint, no shape of the

@@ -43,6 +43,19 @@ const field = () => screen.getByRole("textbox", { name: "标注笔记" });
 const add = () => screen.getByRole("button", { name: /添加笔记/ });
 
 describe("AnnotationNote", () => {
+  it("reveals the add affordance on hover but never hides a saved note", () => {
+    const onEdit = vi.fn();
+    const { unmount } = render(<AnnotationNote note={null} onEdit={onEdit} revealOnHover />);
+    expect(add()).toHaveClass("note-row-actions");
+    unmount();
+
+    // A note somebody wrote is content: the hover reveal must not reach it.
+    render(<AnnotationNote note="第三章埋了伏笔" onEdit={onEdit} revealOnHover />);
+    expect(screen.getByRole("button", { name: "第三章埋了伏笔" })).not.toHaveClass(
+      "note-row-actions",
+    );
+  });
+
   it("shows a saved note and offers no add affordance", () => {
     setup("第三章埋了伏笔");
     expect(screen.getByRole("button", { name: "第三章埋了伏笔" })).toBeInTheDocument();

@@ -105,6 +105,9 @@ export function SettingsPanel({
   /** The ruler's pad is folded away until its bead is pressed: a full picker is
    *  a lot of control for a colour most readers never change. */
   const [rulerPicker, setRulerPicker] = useState(false);
+  /** 搜索命中标记的更多设置（样式与颜色）同样折叠：显示 / 关闭是这组里唯一
+   *  一步能说清的选择，其余设置只在读者想要时展开。 */
+  const [markMore, setMarkMore] = useState(false);
 
   const pickImage = async (file: File) => {
     update({ surface: "custom", customSurface: await compressImage(file) });
@@ -523,6 +526,83 @@ export function SettingsPanel({
           <p className="text-text-3 mt-2 w-full text-[11px] leading-relaxed">
             手柄的 L1 /
             R1、方向键左右、摇杆左右都能翻页；摇杆上下移动阅读标尺。关闭后手柄不再操作阅读。
+          </p>
+        </Group>
+
+        <Group label="搜索命中标记">
+          <Chips
+            options={[
+              { key: true, label: "显示" },
+              { key: false, label: "关闭" },
+            ]}
+            value={settings.searchMark}
+            onChange={(value) => update({ searchMark: value })}
+          />
+          {settings.searchMark && (
+            <button
+              type="button"
+              aria-expanded={markMore}
+              onClick={() => setMarkMore((open) => !open)}
+              className="focus-visible:focus-ring text-text-3 hover:text-text-1 flex w-full items-center gap-1 px-0.5 text-[12px] transition-colors"
+            >
+              {markMore ? "收起样式与颜色" : "更多样式与颜色"}
+              <CaretDown
+                size={11}
+                className={cn("transition-transform", markMore && "rotate-180")}
+              />
+            </button>
+          )}
+          {markMore && settings.searchMark && (
+            <motion.div
+              className="w-full space-y-2.5"
+              initial={reduce ? false : { opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={SPRING.enter}
+            >
+              <Chips
+                options={TTS_WASH_STYLES}
+                value={settings.searchMarkStyle}
+                onChange={(key) => update({ searchMarkStyle: key })}
+              />
+              {/* Same two-row shape as the toolbar's ink row: preset discs for
+                  one tap, the field for a hex the presets don't carry. */}
+              <div className="flex w-full flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  {HIGHLIGHT_COLORS.map(({ hex, label }) => (
+                    <button
+                      key={hex}
+                      type="button"
+                      aria-label={label}
+                      onClick={() => update({ searchMarkColor: hex })}
+                      className={cn(
+                        "focus-visible:focus-ring flex h-5 w-5 items-center justify-center rounded-full transition-transform",
+                        settings.searchMarkColor === hex ? "scale-110" : "hover:scale-105",
+                      )}
+                      style={
+                        settings.searchMarkColor === hex
+                          ? { boxShadow: `0 0 0 2px var(--glass-btn), 0 0 0 3.5px ${hex}` }
+                          : undefined
+                      }
+                    >
+                      <span
+                        aria-hidden
+                        className="block h-3.5 w-3.5 rounded-full"
+                        style={{ backgroundColor: hex }}
+                      />
+                    </button>
+                  ))}
+                </div>
+                <ColorField
+                  value={settings.searchMarkColor}
+                  display={washInk(null, pageNight)}
+                  onChange={(hex) => update({ searchMarkColor: hex })}
+                  onReset={() => update({ searchMarkColor: null })}
+                />
+              </div>
+            </motion.div>
+          )}
+          <p className="text-text-3 mt-2 w-full text-[11px] leading-relaxed">
+            关闭后搜索照常工作：点结果仍然跳到那一处，抽屉里仍有结果列表，只是不在正文里画命中标记。悬浮在命中上会出现一个小的关闭按钮，逐条去掉标记。
           </p>
         </Group>
 

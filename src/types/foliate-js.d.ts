@@ -48,6 +48,12 @@ type FoliateOverlayer = {
     options?: Record<string, unknown>,
   ): void;
   remove(key: string): void;
+  /**
+   * The run under a point (section-document coordinates), as
+   * `[key, range, firstRect]` — `[]` when nothing is hit. This is how a
+   * hover finds a search hit to offer its dismiss button.
+   */
+  hitTest(point: { x: number; y: number }): [string, Range, FoliateOverlayerRect] | [];
 };
 
 /** Payload of the `relocate` event: where the reader is right now. */
@@ -85,8 +91,9 @@ declare module "foliate-js/view.js" {
      *  applied when the renderer is the paginator, which exports the same
      *  `filter` part and would invert the whole night page back to light. */
     isFixedLayout: boolean;
-    open(book: FoliateBookDoc): Promise<void>;
-    /** `lastLocation` is a CFI string captured from `relocate`. */
+    open(
+      book: FoliateBookDoc,
+    ): Promise<void>; /** `lastLocation` is a CFI string captured from `relocate`. */
     init(options?: { lastLocation?: string | null; showTextStart?: boolean }): Promise<void>;
     goTo(target: string | number): Promise<void>;
     goToFraction(fraction: number): Promise<void>;
@@ -111,6 +118,21 @@ declare module "foliate-js/view.js" {
       remove?: boolean,
     ): Promise<void>;
     deleteAnnotation(annotation: { value: string }): Promise<void>;
+    /** Whether search hits paint a marker at all (see `searchMarkDraw`). */
+    searchMarkVisible: boolean;
+    /**
+     * How a hit paints: `{ draw, options }` handed to the overlayer's `add`.
+     * `null` keeps foliate's own outline. A draw closure reading live settings
+     * at paint time is what lets a restyle be a redraw rather than a re-search.
+     */
+    searchMarkDraw: { draw: FoliateOverlayerDraw; options?: Record<string, unknown> } | null;
+    /** Redraws every stored hit with the draw settings now on the view. */
+    repaintSearch(): void;
+    /** Removes the ink but keeps the hit list (a repaint restores it). */
+    hideSearch(): void;
+    hasSearchResults(): boolean;
+    /** Drops one hit from the overlayer and the stored list. */
+    deleteSearchHit(value: string): void;
     /** `value.startsWith('foliate-search:')` marks a transient search highlight. */
     clearSearch(): void;
     /**

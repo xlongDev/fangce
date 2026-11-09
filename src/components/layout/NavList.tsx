@@ -342,7 +342,7 @@ function Footer({ compact }: { compact?: boolean } = {}) {
   const storeCollapsed = useSettings((s) => s.sidebarCollapsed);
   const collapsed = compact ?? storeCollapsed;
   const toggle = useSettings((s) => s.toggleSidebar);
-  const openPalette = useCommandPalette((s) => s.setOpen);
+  const openPalette = useCommandPalette((s) => s.openWith);
   const navigate = useNavigate();
   const reduce = useReducedMotion();
 
@@ -393,7 +393,7 @@ function Footer({ compact }: { compact?: boolean } = {}) {
       key: "palette",
       label: "打开命令面板",
       icon: <span className="font-mono text-[11px]">⌘K</span>,
-      on: () => openPalette(true),
+      on: () => openPalette("command"),
     },
     {
       key: "settings",

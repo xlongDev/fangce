@@ -118,6 +118,9 @@ export function ReaderPanels({
     onFoliateSearch: (query: string) => Promise<FoliateSearchHit[]>;
     onFoliatePick: (cfi: string) => void;
     onPick: (hit: SearchHit, needle: string) => void;
+    /** Every keystroke, reported back: the PDF's hit markers paint live off
+     *  the query, and the page is not where the panel keeps its state. */
+    onNeedleChange: (needle: string) => void;
   };
   annotations: {
     items: Annotation[];
@@ -199,7 +202,12 @@ export function ReaderPanels({
                   onPick={search.onFoliatePick}
                 />
               ) : (
-                <SearchPanel bookId={bookId} initialQuery={search.seed} onPick={search.onPick} />
+                <SearchPanel
+                  bookId={bookId}
+                  initialQuery={search.seed}
+                  onPick={search.onPick}
+                  onNeedleChange={search.onNeedleChange}
+                />
               ))}
             {panel === "graph" && (
               <GraphPanel

@@ -15,6 +15,7 @@ export interface SplitReaderProps {
    *  saved position, which is what a reader resuming a translation wants. */
   initialChapter?: number | null;
   initialQuery?: string;
+  initialSnippet?: string;
   initialOffset?: number | null;
   initialAnnotation?: string | null;
   /** Opens the companion-book picker (the pair bar's 更换对照书 button). */
@@ -50,6 +51,7 @@ export function SplitReader({
   partnerId,
   initialChapter = null,
   initialQuery = "",
+  initialSnippet = "",
   initialOffset = null,
   initialAnnotation = null,
   onOpenPair,
@@ -125,6 +127,7 @@ export function SplitReader({
               pair={{ active: activeId === bookId, onActivate: activatePrimary }}
               initialChapter={initialChapter}
               initialQuery={initialQuery}
+              initialSnippet={initialSnippet}
               initialOffset={initialOffset}
               initialAnnotation={initialAnnotation}
               onOpenPair={onOpenPair}

@@ -16,6 +16,7 @@ export function AnnotationNote({
   note,
   disabled,
   onEdit,
+  revealOnHover = false,
 }: {
   /** The saved note, or `null` when there is none. */
   note: string | null;
@@ -23,6 +24,10 @@ export function AnnotationNote({
   disabled?: boolean;
   /** Opens the editor. */
   onEdit: () => void;
+  /** The notes page reveals row actions on hover; the reader's own lists do
+   *  not, so this is opt-in. Only the 添加笔记 affordance is affected — a
+   *  note somebody already wrote is content, and must never be hidden. */
+  revealOnHover?: boolean;
 }) {
   if (note === null) {
     return (
@@ -30,7 +35,10 @@ export function AnnotationNote({
         type="button"
         disabled={disabled}
         onClick={onEdit}
-        className="focus-visible:focus-ring text-text-3 hover:text-text-1 inline-flex items-center gap-1.5 text-[12px] transition-colors disabled:opacity-50"
+        className={cn(
+          "focus-visible:focus-ring text-text-3 hover:text-text-1 inline-flex items-center gap-1.5 text-[12px] transition-colors disabled:opacity-50",
+          revealOnHover && "note-row-actions",
+        )}
       >
         <NotePencil size={12} />
         添加笔记
@@ -242,15 +250,26 @@ export function NoteCell({
   editing,
   onEditingChange,
   onSave,
+  revealOnHover = false,
 }: {
   note: string | null;
   disabled?: boolean;
   editing: boolean;
   onEditingChange: (editing: boolean) => void;
   onSave: (note: string | null) => void;
+  /** Only the 添加笔记 affordance follows the row's hover; a saved note is
+   *  content and stays visible. */
+  revealOnHover?: boolean;
 }) {
   if (!editing) {
-    return <AnnotationNote note={note} disabled={disabled} onEdit={() => onEditingChange(true)} />;
+    return (
+      <AnnotationNote
+        note={note}
+        disabled={disabled}
+        revealOnHover={revealOnHover && note === null}
+        onEdit={() => onEditingChange(true)}
+      />
+    );
   }
   return (
     <NoteEditor

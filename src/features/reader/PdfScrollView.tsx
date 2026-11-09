@@ -5,6 +5,7 @@ import { loadPageAspect } from "@/lib/pdf";
 import type { Annotation } from "@/types/ipc";
 
 import { PdfPageView } from "./PdfPageView";
+import type { PdfSearchMark } from "./pdfTextSelection";
 import type { TextRange } from "./selection";
 
 /** Assumed page height/width ratio until page 1 has been measured (A4-ish). */
@@ -30,6 +31,10 @@ export function PdfScrollView({
   annotationsByPage,
   ttsPage,
   ttsWash,
+  searchMarksByPage,
+  searchFocusKey,
+  searchInk,
+  onSearchFocusConsumed,
   onSelection,
   onAnnotationClick,
   onLayout,
@@ -52,6 +57,11 @@ export function PdfScrollView({
    *  text plus the span to paint). Only that page receives it. */
   ttsPage?: number | null;
   ttsWash?: { text: string; from: number; to: number } | null;
+  /** Search hits grouped by 0-based page (see `PdfPageView.searchMarks`). */
+  searchMarksByPage?: Map<number, PdfSearchMark[]>;
+  searchFocusKey?: string | null;
+  searchInk?: string | null;
+  onSearchFocusConsumed?: () => void;
   /** A completed text-layer selection on some page; `bottom` is the lowest
    *  line that carries text (see `selectionBottom`). */
   onSelection?: (range: TextRange, rect: DOMRect, pageNumber: number, bottom: number) => void;
@@ -149,6 +159,10 @@ export function PdfScrollView({
                 invertImages={invertImages}
                 annotations={annotationsByPage?.get(index)}
                 ttsWash={ttsPage === index ? ttsWash : null}
+                searchMarks={searchMarksByPage?.get(index)}
+                searchFocusKey={searchFocusKey}
+                searchInk={searchInk}
+                onSearchFocusConsumed={onSearchFocusConsumed}
                 onSelection={(range, rect, bottom) => onSelection?.(range, rect, index + 1, bottom)}
                 onAnnotationClick={(annotation, x, y) =>
                   onAnnotationClick?.(annotation, x, y, index + 1)

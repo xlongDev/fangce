@@ -18,13 +18,16 @@ import {
 import { installNightContext } from "./pdfNightContext";
 import {
   clearPageHighlights,
+  clearPageSearchHits,
   clearTtsWash,
   layerOffsetAtPoint,
   paintPageHighlights,
+  paintPageSearchHits,
   paintTtsWash,
   locateLayerText,
   resolveLayerSelection,
 } from "./pdfTextSelection";
+import type { PdfSearchMark } from "./pdfTextSelection";
 import type { TextRange } from "./selection";
 import { selectionBottom } from "./selection";
 
@@ -36,6 +39,7 @@ type RenderState = "loading" | "ready" | "error";
 
 /** Stable empty default so the paint effect's deps stay identity-safe. */
 const EMPTY: Annotation[] = [];
+const EMPTY_MARKS: PdfSearchMark[] = [];
 
 /** How long a zoom must rest before the page is re-rasterised at the new
     scale. Long enough that a pinch — or a held zoom key — costs one render,
@@ -80,6 +84,10 @@ export function PdfPageView({
   invertImages = false,
   annotations = EMPTY,
   ttsWash = null,
+  searchMarks = EMPTY_MARKS,
+  searchFocusKey = null,
+  searchInk = null,
+  onSearchFocusConsumed,
   onSelection,
   onAnnotationClick,
 }: {
@@ -105,6 +113,15 @@ export function PdfPageView({
    *  paint (word-narrowed). Only the page whose chapter the voice is on
    *  receives it; `null` on every other page. */
   ttsWash?: { text: string; from: number; to: number } | null;
+  /** This page's search hits, as needles to locate in the text layer. Must
+   *  arrive reference-stable (the parent builds them inside a memo). */
+  searchMarks?: PdfSearchMark[];
+  /** The hit the reader just clicked; painting brings it into view once. */
+  searchFocusKey?: string | null;
+  /** The marker ink the reader picked, or `null` for the accent. */
+  searchInk?: string | null;
+  /** Consumes the focus request once it has been honoured. */
+  onSearchFocusConsumed?: () => void;
   /** A completed text-layer selection, with its viewport rect for the pill.
    *  `bottom` is the lowest line that really carries text — see
    *  `selectionBottom` for why the rect's own bottom can be a line too low. */
@@ -459,6 +476,7 @@ export function PdfPageView({
       if (prefetchTimer !== null) window.clearTimeout(prefetchTimer);
       prefetchSlot.task?.cancel();
       clearPageHighlights(pageNumber);
+      clearPageSearchHits(pageNumber);
       if (washPainted.current) {
         clearTtsWash();
         washPainted.current = false;
@@ -499,6 +517,22 @@ export function PdfPageView({
     paintTtsWash(layer, hit.start, hit.end);
     washPainted.current = true;
   }, [ttsWash, textReady]);
+
+  // Search-hit markers: located in the layer like the read-aloud wash, then
+  // painted as one highlight union. A click's focus request is honoured here
+  // exactly once and reported back — without consuming it, every zoom
+  // re-render would yank the reader back to the hit.
+  useEffect(() => {
+    const layer = layerRef.current;
+    if (!layer || !textReady) return;
+    if (searchMarks.length === 0) {
+      clearPageSearchHits(pageNumber);
+      return;
+    }
+    const focused = paintPageSearchHits(pageNumber, layer, searchMarks, searchFocusKey, searchInk);
+    if (focused) onSearchFocusConsumed?.();
+    return () => clearPageSearchHits(pageNumber);
+  }, [searchMarks, searchFocusKey, searchInk, textReady, pageNumber, onSearchFocusConsumed]);
 
   // Selection and annotation-click handling for the text layer, attached
   // imperatively for the same reason the prose mouseup is: a selection

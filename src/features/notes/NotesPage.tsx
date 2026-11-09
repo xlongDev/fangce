@@ -724,7 +724,7 @@ function NoteRow({
   return (
     <li
       className={cn(
-        "relative flex gap-2.5 rounded-lg px-2 py-2.5 transition-colors",
+        "note-row relative flex gap-2.5 rounded-lg px-2 py-2.5 transition-colors",
         selected ? "bg-surface-2" : "hover:bg-surface-1",
       )}
     >
@@ -768,7 +768,11 @@ function NoteRow({
           {managing ? (
             <CheckMark selected={selected} />
           ) : (
-            <>
+            // `.note-row-actions` is the row's hover reveal, shared with the
+            // 添加笔记 button below — see globals.css. It is a wrapper so all
+            // three icons arrive and leave as one gesture rather than three
+            // separate fades.
+            <div className="note-row-actions flex items-center gap-1">
               {/* An explicit way into the note. Clicking the note's own text has
                   always opened the editor, but nothing said so — a pencil next
                   to the other two row actions is the affordance the text could
@@ -803,7 +807,7 @@ function NoteRow({
               >
                 <Trash size={13} />
               </button>
-            </>
+            </div>
           )}
         </div>
 
@@ -822,6 +826,7 @@ function NoteRow({
               note={annotation.note}
               disabled={busy}
               editing={editing}
+              revealOnHover
               onEditingChange={setEditing}
               onSave={(note) => setNote.mutate({ id: annotation.id, note })}
             />

@@ -32,6 +32,8 @@ import { applyPosition, columnPitch, flipPage } from "@/features/reader/paging";
 import { usePdfReading } from "@/features/reader/usePdfReading";
 import { useProseReading } from "@/features/reader/useProseReading";
 import { setTtsWashRule } from "@/features/reader/pdfTextSelection";
+import type { PdfSearchMark } from "@/features/reader/pdfTextSelection";
+import { searchHitNeedle } from "@/features/search/snippet";
 import type { CurlTurn } from "@/features/reader/pdfCurl";
 import { ImageLightbox } from "@/features/reader/ImageLightbox";
 import {
@@ -100,6 +102,7 @@ import { useBookImages, useChapter, useSetProgress } from "@/hooks/useReader";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useImageLightbox } from "@/hooks/useImageLightbox";
 import { useHitJumps } from "@/hooks/useHitJumps";
+import { useSearch } from "@/hooks/useSearch";
 import { usePageCounter } from "@/hooks/usePageCounter";
 import { useReadAloud } from "@/hooks/useReadAloud";
 import { useReadingClock, useReadingPace } from "@/hooks/useReading";
@@ -206,6 +209,8 @@ interface ReaderViewProps {
   initialChapter: number | null;
   /** Search term carried over from a result, highlighted in the chapter. */
   initialQuery: string;
+  /** The hit's snippet; how a foliate book finds the occurrence to land on. */
+  initialSnippet: string;
   /** Character offset of a search hit, scrolled into view once rendered. */
   initialOffset: number | null;
   /**
@@ -258,6 +263,7 @@ export function ReaderView({
   initialCfi,
   initialChapter,
   initialQuery,
+  initialSnippet,
   initialOffset,
   initialAnnotation,
   backLabel,
@@ -405,8 +411,13 @@ export function ReaderView({
     x: number;
     y: number;
   } | null>(null);
-  // Query the search panel opens with (the toolbar's 搜索 action).
+  // Query the search panel opens with (the toolbar's 搜索 action). The panel
+  // reports every keystroke back — the PDF's hit markers paint live off it,
+  // the same ink-as-you-type the foliate path draws.
   const [searchSeed, setSearchSeed] = useState("");
+  /** The search hit the reader just clicked on a PDF page, as
+   *  `chapterIdx:offset`; consumed by the page view after one reveal. */
+  const [pdfFocusKey, setPdfFocusKey] = useState<string | null>(null);
   /** Pre-filled question for the assistant, from a character card. */
   const [aiQuestion, setAiQuestion] = useState("");
 
@@ -502,7 +513,18 @@ export function ReaderView({
     search,
     setSearch,
     close: closePanel,
-  } = useReaderPanels(initialQuery, clearPaintedMatches);
+  } = useReaderPanels(initialQuery);
+  // 清空输入框 = 查询退场，墨水跟着退：foliate 的整书命中由此收掉（PDF 侧
+  // 由查询数据自己退场驱动各页清除）。关闭抽屉不清——墨水和查询是读者的
+  // 上下文，合上面板读命中的那一页不该看着墨水一起消失。
+  const prevSeedRef = useRef("");
+  useEffect(() => {
+    if (searchSeed === "" && prevSeedRef.current !== "") {
+      clearPaintedMatches();
+      setPdfFocusKey(null);
+    }
+    prevSeedRef.current = searchSeed;
+  }, [searchSeed, clearPaintedMatches]);
   /**
    * A panel belongs to the book being read. Handing the window to the other
    * book closes this one's drawer: left open, it kept dimming a page nobody
@@ -1828,6 +1850,33 @@ export function ReaderView({
     scrollRef,
   });
 
+  // PDF 命中标记. A PDF page is a canvas with a text layer over it — no
+  // paragraphs for `useHitJumps` to scroll by — so the layer paints each hit
+  // itself, located from the hit's own snippet (the words are the only
+  // coordinates the extraction pipeline and pdf.js's layer share). Live off
+  // the drawer's query, the same ink-as-you-type the foliate path draws;
+  // gated by 搜索命中标记 like every other renderer.
+  const pdfSearchQuery = useSearch(isPdf ? searchSeed : "", bookId);
+  const pdfSearchMarks = useMemo(() => {
+    if (!isPdf || !settings.searchMark) return [] as (PdfSearchMark & { chapterIdx: number })[];
+    return (pdfSearchQuery.data ?? []).flatMap((hit) => {
+      const needle = searchHitNeedle(hit.snippet);
+      return needle
+        ? [{ key: `${hit.chapterIdx}:${hit.offset}`, chapterIdx: hit.chapterIdx, ...needle }]
+        : [];
+    });
+  }, [isPdf, settings.searchMark, pdfSearchQuery.data]);
+  const pdfSearchMarksByPage = useMemo(() => {
+    const byPage = new Map<number, PdfSearchMark[]>();
+    for (const mark of pdfSearchMarks) {
+      const list = byPage.get(mark.chapterIdx) ?? [];
+      list.push({ key: mark.key, text: mark.text, from: mark.from, to: mark.to });
+      byPage.set(mark.chapterIdx, list);
+    }
+    return byPage;
+  }, [pdfSearchMarks]);
+  const consumePdfSearchFocus = useCallback(() => setPdfFocusKey(null), []);
+
   const total = chapters.length;
   const chapterTitle = chapterData?.title ?? "";
   // Each appearance keeps its own reading surface: a dark shell starts on the
@@ -2421,12 +2470,18 @@ export function ReaderView({
               invertImages: pdfInvertImages,
               annotationsByPage,
               wash: readAloud.pdfWash,
+              searchMarks: pdfSearchMarksByPage.get(chapterIdx) ?? NO_PDF_MARKS,
+              searchFocusKey: pdfFocusKey,
+              searchInk: settings.searchMarkColor,
+              onSearchFocusConsumed: consumePdfSearchFocus,
               onSelection: onPdfSelection,
               onAnnotationClick: onPdfAnnotationClick,
               onLayout: handlePdfLayout,
             }}
             foliate={{
               format,
+              initialQuery,
+              initialSnippet,
               startCfi,
               startFraction: startCfi ? null : initialProgress,
               layout: layoutMode,
@@ -2685,8 +2740,17 @@ export function ReaderView({
               setPanel("none");
               foliateRef.current?.goToCfi(cfi);
             },
+            onNeedleChange: setSearchSeed,
             onPick: (hit, needle) => {
               setSearch(needle);
+              if (isPdf) {
+                // A PDF page has no paragraphs to scroll by (`useHitJumps`'s
+                // offsets are prose coordinates); the page view paints the
+                // hit into its text layer and brings it into view instead.
+                setPdfFocusKey(`${hit.chapterIdx}:${hit.offset}`);
+                if (hit.chapterIdx !== chapterIdx) goTo(hit.chapterIdx);
+                return;
+              }
               pickHit(hit);
             },
           }}
@@ -2864,6 +2928,9 @@ export function ReaderView({
 }
 
 /** A non-negative integer query parameter, or `null` when absent or malformed. */
+/** Stable empty default so the per-page paint effects stay identity-safe. */
+const NO_PDF_MARKS: PdfSearchMark[] = [];
+
 function readOffset(value: string | null): number | null {
   if (value === null) return null;
   const parsed = Number(value);
@@ -2886,6 +2953,9 @@ export function ReaderPage() {
   const initialChapter = readOffset(searchParams.get("chapter"));
   const initialOffset = readOffset(searchParams.get("at"));
   const initialQuery = searchParams.get("q") ?? "";
+  // The hit's own snippet, for the foliate renderer to land on (see
+  // `pickFoliateHit`); the prose path instead uses `at` and never reads it.
+  const initialSnippet = searchParams.get("s") ?? "";
   // A `fangce://` link lands here as a plain query parameter, so the deep
   // link and a search result reach the reader the same way.
   const initialAnnotation = searchParams.get("annotation");
@@ -2974,6 +3044,7 @@ export function ReaderPage() {
           partnerId={pairedId}
           initialChapter={initialChapter}
           initialQuery={initialQuery}
+          initialSnippet={initialSnippet}
           initialOffset={initialOffset}
           initialAnnotation={initialAnnotation}
           onOpenPair={() => setPicking(true)}
@@ -2990,6 +3061,7 @@ export function ReaderPage() {
         bookId={bookId}
         initialChapter={initialChapter}
         initialQuery={initialQuery}
+        initialSnippet={initialSnippet}
         initialOffset={initialOffset}
         initialAnnotation={initialAnnotation}
         onOpenPair={() => setPicking(true)}

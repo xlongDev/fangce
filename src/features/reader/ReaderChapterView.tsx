@@ -11,7 +11,10 @@ import type { TextRange } from "@/features/reader/selection";
 import type { FoliateStyle } from "@/features/reader/foliateStyle";
 import type { LayoutMode, PageTransition } from "@/features/reader/theme";
 import type { TtsWashStyle } from "@/features/reader/ttsWash";
+import { washCss } from "@/features/reader/ttsWash";
+import type { PdfSearchMark } from "@/features/reader/pdfTextSelection";
 import { cn } from "@/lib/cn";
+import { useReaderSettings } from "@/stores/reader";
 import type { Annotation, AnnotationStyle, BookFormat, BookImage } from "@/types/ipc";
 
 /** pdf.js is ~1 MB; it only ever ships inside its own lazy chunk, loaded the
@@ -100,12 +103,24 @@ export function ReaderChapterView({
     annotationsByPage: Map<number, Annotation[]>;
     /** The read-aloud wash for the page the voice is on. */
     wash: { text: string; from: number; to: number } | null;
+    /** This page's search hits as needles, plus the clicked one to bring into
+     *  view. Empty unless the query has results on this page. */
+    searchMarks: PdfSearchMark[];
+    searchFocusKey: string | null;
+    searchInk: string | null;
+    onSearchFocusConsumed: () => void;
+    /** Scroll layout only: the same hits, grouped by 0-based page. */
+    searchMarksByPage?: Map<number, PdfSearchMark[]>;
     onSelection: (range: TextRange, rect: DOMRect, pageNumber: number, bottom: number) => void;
     onAnnotationClick: (annotation: Annotation, x: number, y: number, pageNumber: number) => void;
     onLayout: (slotHeight: number) => void;
   };
   foliate: {
     format: BookFormat;
+    /** `q` from a library-wide hit, painted into the book once it is open. */
+    initialQuery: string;
+    /** The hit's snippet; the occurrence the reader should land on. */
+    initialSnippet: string;
     startCfi: string | null;
     startFraction: number | null;
     layout: LayoutMode;
@@ -149,6 +164,20 @@ export function ReaderChapterView({
     ttsWash: CSSProperties;
   };
 }) {
+  // 搜索命中标记, prose half. The foliate half is gated inside the vendor's
+  // `addAnnotation`; here the matched run simply renders as plain text when
+  // the reader turns the marker off — the jump and the hit list still work.
+  // The ink follows the same shape and colour the foliate marker wears, drawn
+  // by the same `washCss` the read-aloud wash uses; the default (荧光笔 on the
+  // accent) stays the `.search-hit` class, which the results list also wears.
+  const searchMark = useReaderSettings((s) => s.searchMark);
+  const searchMarkStyle = useReaderSettings((s) => s.searchMarkStyle);
+  const searchMarkColor = useReaderSettings((s) => s.searchMarkColor);
+  const searchMarkCustom =
+    searchMark && (searchMarkStyle !== "highlight" || searchMarkColor !== null);
+  const searchMarkCss = searchMarkCustom
+    ? washCss(searchMarkStyle, searchMarkColor, prose.darkSurface)
+    : null;
   if (isPdf) {
     // One page per chapter, drawn by pdf.js: fixed layout, real fonts
     // and illustrations. Deliberately outside the multicol prose
@@ -190,6 +219,10 @@ export function ReaderChapterView({
               invertImages={pdf.invertImages}
               annotations={pdf.annotationsByPage.get(chapterIdx)}
               ttsWash={pdf.wash}
+              searchMarks={pdf.searchMarks}
+              searchFocusKey={pdf.searchFocusKey}
+              searchInk={pdf.searchInk}
+              onSearchFocusConsumed={pdf.onSearchFocusConsumed}
               onSelection={(range, rect, bottom) =>
                 pdf.onSelection(range, rect, chapterIdx + 1, bottom)
               }
@@ -239,6 +272,10 @@ export function ReaderChapterView({
           annotationsByPage={pdf.annotationsByPage}
           ttsPage={chapterIdx}
           ttsWash={pdf.wash}
+          searchMarksByPage={pdf.searchMarksByPage}
+          searchFocusKey={pdf.searchFocusKey}
+          searchInk={pdf.searchInk}
+          onSearchFocusConsumed={pdf.onSearchFocusConsumed}
           onSelection={pdf.onSelection}
           onAnnotationClick={pdf.onAnnotationClick}
           onLayout={pdf.onLayout}
@@ -254,6 +291,8 @@ export function ReaderChapterView({
           ref={foliateRef}
           bookId={bookId}
           format={foliate.format}
+          initialQuery={foliate.initialQuery}
+          initialSnippet={foliate.initialSnippet}
           startCfi={foliate.startCfi}
           startFraction={foliate.startFraction}
           layout={foliate.layout}
@@ -416,10 +455,19 @@ export function ReaderChapterView({
                         {segment.text}
                       </mark>
                     </a>
-                  ) : (
-                    <mark key={segment.key} className="bg-accent-soft rounded-[2px] text-inherit">
+                  ) : searchMark ? (
+                    <mark
+                      key={segment.key}
+                      data-search-hit
+                      className={searchMarkCss ? undefined : "search-hit"}
+                      style={searchMarkCss ?? undefined}
+                    >
                       {segment.text}
                     </mark>
+                  ) : (
+                    <span key={segment.key} data-search-hit>
+                      {segment.text}
+                    </span>
                   )
                 ) : (
                   segment.text

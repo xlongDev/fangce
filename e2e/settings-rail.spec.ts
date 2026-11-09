@@ -223,3 +223,12 @@ test("the AI settings are several groups behind one rail entry", async ({ page }
   expect(Math.round(group.y - pane.y), "AI 助手 lands at the top").toBeLessThan(60);
   await expect(rail.locator('[aria-current="true"]')).toHaveText("AI 助手");
 });
+
+test("关于 carries the app mark, the author and the full repository URL", async ({ page }) => {
+  await openSettings(page);
+  const about = page.locator('[data-section="about"]');
+
+  await expect(about.getByRole("img", { name: "方册应用图标" })).toBeVisible();
+  await expect(about).toContainText("xlongDev");
+  await expect(about.getByRole("button", { name: /github\.com\/xlongDev\/fangce/ })).toBeVisible();
+});

@@ -1,21 +1,14 @@
 import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { SearchPanel } from "@/features/search/SearchPanel";
+import { readerPathForHit } from "@/features/search/snippet";
 import type { SearchHit } from "@/types/ipc";
 
 /** Library-wide search: every hit opens the reader at the matching chapter. */
 export function SearchPage() {
   const navigate = useNavigate();
 
-  const onPick = (hit: SearchHit, needle: string) => {
-    const params = new URLSearchParams({
-      book: hit.bookId,
-      chapter: String(hit.chapterIdx),
-      q: needle,
-      at: String(hit.offset),
-    });
-    navigate(`/reader?${params.toString()}`);
-  };
+  const onPick = (hit: SearchHit, needle: string) => navigate(readerPathForHit(hit, needle));
 
   return (
     <div className="flex h-full flex-col">

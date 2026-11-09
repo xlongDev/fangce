@@ -204,3 +204,25 @@ test("the row's edit button opens the note field", async ({ page }) => {
   await expect(row.getByText("改过一遍的想法")).toBeVisible();
   await expect(row.getByText(/全书的主线/)).toHaveCount(0);
 });
+
+test("row actions ease in on hover and stay reachable without one", async ({ page }) => {
+  const notes = await openNotes(page);
+  const row = notes.locator("li.note-row").first();
+  const actions = row.locator(".note-row-actions").first();
+  await expect(actions).toBeVisible();
+
+  // The animation is part of the request: a hard cut would report 0s.
+  const duration = await actions.evaluate((el) => getComputedStyle(el).transitionDuration);
+  expect(duration).toContain("0.15s");
+
+  // Headless engines report (hover: hover) as a desktop does. A device that
+  // cannot hover is meant to keep the actions on screen instead of hiding
+  // them, so the pre-hover assertion only applies where hover exists.
+  const hoverable = await page.evaluate(() => matchMedia("(hover: hover)").matches);
+  if (hoverable) await expect(actions).toHaveCSS("opacity", "0");
+  await row.hover();
+  await expect(actions).toHaveCSS("opacity", "1");
+
+  const add = notes.getByRole("button", { name: "添加笔记" }).first();
+  if (await add.count()) await expect(add).toHaveClass(/note-row-actions/);
+});

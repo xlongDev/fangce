@@ -290,6 +290,56 @@ button {
   font-family: inherit;
 }
 
+/* A search hit — the same word in the results list and in the chapter it came
+   from. One device, not two: the earlier wash + solid underline + weight stack
+   read as a muddy block the eye snagged on rather than a marked run, so the
+   underline is gone and the wash sits between the too-faint `--accent-soft`
+   and the too-heavy 38%. `color: inherit` is deliberate: the list wants the
+   shell's ink, the chapter wants the reading paper's. */
+.search-hit {
+  background-color: color-mix(in srgb, var(--accent) 25%, transparent);
+  color: inherit;
+  font-weight: 600;
+  border-radius: 2px;
+}
+
+/* In the chapter the ink must not change the measure: a bold word reflows the
+   line, and justified prose would jump as the matches are painted. */
+[data-reading-content] .search-hit {
+  font-weight: inherit;
+}
+
+/* The notes page keeps a row's actions quiet until that row is the one under
+   the pointer. One class rather than a stack of hover utilities because the
+   icon strip and the 添加笔记 button are in different components and have to
+   reveal together; and the hiding is inside `(hover: hover)` so a touch device,
+   which never sends a hover, keeps them on screen. `:focus-within` is the
+   keyboard's way in — an invisible button is still in the tab order. */
+.note-row-actions {
+  transition:
+    opacity 150ms ease-out,
+    transform 150ms ease-out;
+}
+
+@media (hover: hover) {
+  .note-row-actions {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  .note-row:hover .note-row-actions,
+  .note-row:focus-within .note-row-actions {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .note-row-actions {
+    transition: none;
+  }
+}
+
 /* Form controls follow the text around them. This lives in @layer base on
    purpose: unlayered, it outranks every layered utility, so a textarea with
    .text-text-1 inherited the SHELL's ink instead of the reading surface's —
@@ -886,6 +936,13 @@ input[type="range"].range-hue::-moz-range-thumb {
    serves every mounted page; the ranges come and go from JS. */
 ::highlight(pdf-notes) {
   background-color: var(--accent-soft);
+}
+
+/* Search hits on a PDF page: the same 25% accent wash the results list and
+   the prose body paint with. A custom ink gets its own dynamic rule — see
+   `pdfTextSelection.ts::ensureSearchRule`. */
+::highlight(pdf-search) {
+  background-color: color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 /* The read-aloud wash. Its rule is built at runtime from the reader's own

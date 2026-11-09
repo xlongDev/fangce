@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import { motion } from "motion/react";
 import { ArrowUDownLeft, MagnifyingGlass } from "@phosphor-icons/react";
 
 import { effectiveKeys, formatShortcut, scoreCommand, type Command } from "@/lib/commands";
 import { useBookCommands } from "@/features/command/useBookCommands";
+import { SearchPanel } from "@/features/search/SearchPanel";
+import { readerPathForHit } from "@/features/search/snippet";
 import { useCommandStore } from "@/stores/commands";
 import { useCommandPalette } from "@/stores/command-palette";
 import { useSettings } from "@/stores/settings";
@@ -28,22 +31,76 @@ interface Scored {
  */
 const POINTER_CURSOR = { duration: 0.12, ease: EASE_OUT } as const;
 
+/**
+ * ⌘K and ⌘F open the same shell with different bodies.
+ *
+ * One dialog, not two: both are a centred field over a scrim, both are opened
+ * by a global hotkey from wherever the reader is, and both hand the keyboard
+ * back on Escape. A second dialog would have been a second centring rule, a
+ * second entry animation and a second thing that can be open at the same time.
+ */
 export function CommandPalette() {
   const open = useCommandPalette((s) => s.open);
+  const mode = useCommandPalette((s) => s.mode);
   const setOpen = useCommandPalette((s) => s.setOpen);
   const session = useCommandPalette((s) => s.session);
+  const searching = mode === "search";
 
   return (
     <GlassDialog
       open={open}
       onOpenChange={setOpen}
-      title="命令面板"
-      description="输入命令，或直接搜书名 / 作者打开一本书。"
+      title={searching ? "全局搜索" : "命令面板"}
+      description={
+        searching ? "在所有已导入的书籍正文里查找。" : "输入命令，或直接搜书名 / 作者打开一本书。"
+      }
       widthClass="w-[min(94vw,620px)]"
     >
-      {/* Remount per open: the query and the selection reset without an effect. */}
-      <PaletteBody key={session} onClose={() => setOpen(false)} />
+      {/* Remount per open *and* per mode: the query and the selection reset
+          without a state-syncing effect. */}
+      {searching ? (
+        <GlobalSearchBody key={session} onClose={() => setOpen(false)} />
+      ) : (
+        <PaletteBody key={session} onClose={() => setOpen(false)} />
+      )}
     </GlassDialog>
+  );
+}
+
+/**
+ * The library-wide search panel inside the palette shell.
+ *
+ * `SearchPanel` is the one on the 搜索 page — same debounce, same grouping,
+ * same history, same hit rendering. `-mx-4` cancels the panel's own padding so
+ * its field lines up with the palette's field; the page keeps that padding
+ * because it sits in a wider pane.
+ */
+function GlobalSearchBody({ onClose }: { onClose: () => void }) {
+  const navigate = useNavigate();
+
+  return (
+    <div className="flex h-[min(60vh,420px)] flex-col">
+      {/* `flex min-h-0` on this wrapper is load-bearing: `SearchPanel`'s own
+          `flex-1` chain only works under a flex parent, and as a plain block
+          it grew with its results and spilled past the dialog, with nothing
+          left to scroll. */}
+      <div className="-mx-4 flex min-h-0 flex-1 flex-col">
+        <SearchPanel
+          focusOnMount
+          selectFirst
+          onPick={(hit, needle) => {
+            onClose();
+            navigate(readerPathForHit(hit, needle));
+          }}
+        />
+      </div>
+      <footer className="text-text-3 mt-3 flex items-center justify-between text-[11px]">
+        <span className="inline-flex items-center gap-1">
+          <ArrowUDownLeft size={12} /> 回车跳到书里
+        </span>
+        <span>↑↓ 选择 · Esc 关闭</span>
+      </footer>
+    </div>
   );
 }
 

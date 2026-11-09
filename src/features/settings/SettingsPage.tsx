@@ -50,6 +50,10 @@ import { AiSection } from "@/features/settings/ai/AiForm";
 import { KeymapSection } from "@/features/settings/KeymapSection";
 import { SecretsNotice } from "@/features/settings/SecretsNotice";
 import type { SyncChange, SyncConfig, SyncReport, SyncTally } from "@/types/ipc";
+// The app icon's one source of truth is the Tauri bundle; importing it rather
+// than copying a second PNG into `public/` keeps the About card and the Dock in
+// step. Vite emits it as a same-origin asset, which the CSP already allows.
+import appIcon from "../../../src-tauri/icons/128x128.png?url";
 import { cn } from "@/lib/cn";
 import { SPRING } from "@/lib/motion";
 
@@ -674,6 +678,27 @@ function AboutSection() {
 
   return (
     <SettingsGroup id="about" icon={Info} title="关于">
+      {/* The mark, then the person behind it, then the machine facts. A logo
+          in the group header would sit next to the 关于 icon as a second badge;
+          as its own row it reads as the app being introduced. */}
+      <div className="flex items-center gap-4 px-5 py-4">
+        <img
+          src={appIcon}
+          alt="方册应用图标"
+          className="border-hairline h-14 w-14 shrink-0 rounded-xl border"
+        />
+        <div className="min-w-0">
+          <p className="text-text-1 text-[15px] font-semibold">
+            方册 <span className="text-text-3 ml-1 text-[12px] font-normal">Colophon</span>
+          </p>
+          <p className="text-text-3 mt-1 text-[12px] leading-relaxed">本地优先的电子书阅读器</p>
+        </div>
+      </div>
+
+      <Row label="作者">
+        <span className="text-text-2 text-[12.5px]">xlongDev</span>
+      </Row>
+
       {facts.map(([label, value]) => (
         <Row key={label} label={label}>
           <span
@@ -691,7 +716,7 @@ function AboutSection() {
           onClick={() => void openUrl(REPO_URL).catch(() => {})}
           className="text-accent focus-visible:focus-ring inline-flex items-center gap-1 text-[12.5px] transition-opacity hover:opacity-80"
         >
-          xlongDev/fangce <ArrowSquareOut size={12} />
+          https://github.com/xlongDev/fangce <ArrowSquareOut size={12} />
         </button>
       </Row>
 
