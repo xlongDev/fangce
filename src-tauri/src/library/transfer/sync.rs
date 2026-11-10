@@ -253,9 +253,13 @@ pub fn merge(
 }
 
 /// Reads every book the user has actually opened.
+///
+/// `books_live`, not `books`: pushing the position of a book that is in the
+/// trash would resurrect it on the other device, which is the one thing a
+/// device-local delete must not do.
 pub fn local_books(conn: &rusqlite::Connection) -> AppResult<Vec<LocalBook>> {
     let mut stmt = conn.prepare(
-        "SELECT content_hash, title, progress, last_read_at FROM books
+        "SELECT content_hash, title, progress, last_read_at FROM books_live
           WHERE last_read_at IS NOT NULL ORDER BY title",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -309,6 +313,9 @@ pub struct SyncReport {
 }
 
 /// Every `content_hash` this device has imported.
+///
+/// The table, not the view: a trashed book still occupies its hash, and the
+/// merge uses this set to decide which remote entries can be applied at all.
 pub fn local_hashes(conn: &rusqlite::Connection) -> AppResult<BTreeSet<String>> {
     let mut stmt = conn.prepare("SELECT content_hash FROM books")?;
     let rows = stmt.query_map([], |row| row.get(0))?;

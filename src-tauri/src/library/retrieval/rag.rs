@@ -189,7 +189,7 @@ pub fn search(
     let dims = query.len() as i64;
     let mut stmt = conn.prepare(
         "SELECT c.book_id, b.title, c.chapter_idx, c.start_char, c.text, c.embedding
-           FROM chunks c JOIN books b ON b.id = c.book_id
+           FROM chunks c JOIN books_live b ON b.id = c.book_id
           WHERE c.model = ?1 AND c.dims = ?2
             AND (?3 IS NULL OR c.book_id = ?3)
             AND (?4 IS NULL OR c.chapter_idx <= ?4)",

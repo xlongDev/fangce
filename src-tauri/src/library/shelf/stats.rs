@@ -204,7 +204,7 @@ fn top_books(
         .unwrap_or_default();
     let mut stmt = conn.prepare(
         "SELECT rs.book_id, b.title, SUM(rs.seconds) AS seconds
-         FROM reading_sessions rs JOIN books b ON b.id = rs.book_id
+         FROM reading_sessions rs JOIN books_live b ON b.id = rs.book_id
          WHERE rs.day >= ?1
          GROUP BY rs.book_id ORDER BY seconds DESC LIMIT ?2",
     )?;

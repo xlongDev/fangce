@@ -103,7 +103,7 @@ fn select(
     let mut stmt = conn.prepare(
         "SELECT c.book_id, b.title, c.idx
            FROM chapters c
-           JOIN books b ON b.id = c.book_id
+           JOIN books_live b ON b.id = c.book_id
           WHERE c.content LIKE ?1 ESCAPE '\\' AND (?2 IS NULL OR c.book_id = ?2)",
     )?;
     let mut rows = stmt.query(params![pattern, book_id])?;

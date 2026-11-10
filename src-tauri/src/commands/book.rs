@@ -13,7 +13,7 @@ use crate::db::Library;
 use crate::error::{AppError, AppResult};
 use crate::library::chapters;
 use crate::library::import::{self, ImportOutcome};
-use crate::library::repository::{self, BookQuery, BookSummary, LibraryStats};
+use crate::library::repository::{self, BookQuery, BookSummary, LibraryFacets, LibraryStats};
 use crate::library::{self};
 use crate::state::AppState;
 
@@ -43,6 +43,16 @@ pub fn book_get(state: State<'_, AppState>, id: String) -> AppResult<Option<Book
 #[specta::specta]
 pub fn book_stats(state: State<'_, AppState>) -> AppResult<LibraryStats> {
     state.library.with(crate::library::repository::stats)
+}
+
+/// `book.facets` — the counts behind the shelf's filter panel.
+///
+/// Takes the same `BookQuery` the shelf is showing, because a facet is only
+/// honest next to the filters it is counted against.
+#[tauri::command]
+#[specta::specta]
+pub fn book_facets(state: State<'_, AppState>, query: BookQuery) -> AppResult<LibraryFacets> {
+    state.library.with(|conn| crate::library::repository::facets(conn, &query))
 }
 
 /// `book.images` — every image in the book, in reading order, with the
@@ -357,6 +367,61 @@ pub async fn book_delete_many(
     })
     .await
     .map_err(|err| AppError::Message(format!("删除任务被中断：{err}")))?
+}
+
+/// `book.restore` — takes books back out of the trash.
+///
+/// One command for one book and for a batch: a restore writes a timestamp and
+/// cannot fail half-way through, so there is no progress to report and no
+/// all-or-nothing question worth a second command.
+#[tauri::command]
+#[specta::specta]
+pub fn book_restore(state: State<'_, AppState>, ids: Vec<String>) -> AppResult<()> {
+    library::restore_books(&state.library, &ids)
+}
+
+/// `book.purge` — deletes one book and its files, for good.
+///
+/// Only reachable from the bin. `book.delete` is the reversible half.
+#[tauri::command]
+#[specta::specta]
+pub async fn book_purge(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || library::purge_book(&library, &id))
+        .await
+        .map_err(|err| AppError::Message(format!("彻底删除任务被中断：{err}")))?
+}
+
+/// `book.purgeMany` — the bin's batch bar. Same contract as
+/// [`book_delete_many`], including the progress event.
+#[tauri::command]
+#[specta::specta]
+pub async fn book_purge_many(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> AppResult<()> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        library::purge_books(&library, &ids, &mut |done, total, path| {
+            let _ = app.emit(
+                DELETE_PROGRESS_EVENT,
+                DeleteProgress { done, total, path: path.to_string() },
+            );
+        })
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("彻底删除任务被中断：{err}")))?
+}
+
+/// `book.emptyTrash` — everything in the bin, gone. Returns how many books went.
+#[tauri::command]
+#[specta::specta]
+pub async fn book_empty_trash(state: State<'_, AppState>) -> AppResult<usize> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || library::empty_trash(&library))
+        .await
+        .map_err(|err| AppError::Message(format!("清空回收站被中断：{err}")))?
 }
 
 /// `book.setFavorite`

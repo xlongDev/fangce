@@ -283,6 +283,13 @@ export const commands = {
   /**  `book.stats` */
   bookStats: () => __TAURI_INVOKE<LibraryStats>("book_stats"),
   /**
+   *  `book.facets` — the counts behind the shelf's filter panel.
+   *
+   *  Takes the same `BookQuery` the shelf is showing, because a facet is only
+   *  honest next to the filters it is counted against.
+   */
+  bookFacets: (query: BookQuery) => __TAURI_INVOKE<LibraryFacets>("book_facets", { query }),
+  /**
    *  `book.images` — every image in the book, in reading order, with the
    *  chapter each one sits in. Powers the lightbox's book-wide browsing.
    */
@@ -368,6 +375,27 @@ export const commands = {
    *  pending state on the confirm button.
    */
   bookDeleteMany: (ids: string[]) => __TAURI_INVOKE<null>("book_delete_many", { ids }),
+  /**
+   *  `book.restore` — takes books back out of the trash.
+   *
+   *  One command for one book and for a batch: a restore writes a timestamp and
+   *  cannot fail half-way through, so there is no progress to report and no
+   *  all-or-nothing question worth a second command.
+   */
+  bookRestore: (ids: string[]) => __TAURI_INVOKE<null>("book_restore", { ids }),
+  /**
+   *  `book.purge` — deletes one book and its files, for good.
+   *
+   *  Only reachable from the bin. `book.delete` is the reversible half.
+   */
+  bookPurge: (id: string) => __TAURI_INVOKE<null>("book_purge", { id }),
+  /**
+   *  `book.purgeMany` — the bin's batch bar. Same contract as
+   *  [`book_delete_many`], including the progress event.
+   */
+  bookPurgeMany: (ids: string[]) => __TAURI_INVOKE<null>("book_purge_many", { ids }),
+  /**  `book.emptyTrash` — everything in the bin, gone. Returns how many books went. */
+  bookEmptyTrash: () => __TAURI_INVOKE<number>("book_empty_trash"),
   /**  `book.setFavorite` */
   bookSetFavorite: (id: string, favorite: boolean) =>
     __TAURI_INVOKE<null>("book_set_favorite", { id, favorite }),
@@ -1091,7 +1119,13 @@ export type BookOutcome = {
   unlocated: number;
 };
 
-/**  Parsed list request coming from the frontend. */
+/**
+ *  Parsed list request coming from the frontend.
+ *
+ *  Every narrowing field is `#[serde(default)]`: a caller that knows nothing
+ *  about filters (the web build's own shelf, an older renderer) keeps sending
+ *  the four original fields and gets the same shelf it always got.
+ */
 export type BookQuery = {
   filter?: LibraryFilter;
   sort?: LibrarySort;
@@ -1103,6 +1137,29 @@ export type BookQuery = {
    *  could ask for a tag inside 收藏 without a second query type.
    */
   tag?: string | null;
+  /**  Empty means every format. */
+  formats?: BookFormat[];
+  /**
+   *  `books.language` values. The renderer only ever sends values that
+   *  [`facets`] reported, so they match the column byte for byte and the
+   *  comparison needs no collation.
+   */
+  languages?: string[];
+  /**  `books.publisher` values, same provenance as `languages`. */
+  publishers?: string[];
+  status?: ReadingStatus;
+  /**  `Some(true)` = only books with a cover, `Some(false)` = only without. */
+  hasCover?: boolean | null;
+  /**
+   *  Reads the bin instead of the shelf.
+   *
+   *  One flag on the one query type, rather than a second `trash.list`
+   *  command: the bin is the same books with the same columns, and giving it
+   *  its own query would mean two SQL builders and two facet counters to keep
+   *  in step. Every other filter still applies inside it, which is what makes
+   *  "find the copy I deleted last week" a search rather than a scroll.
+   */
+  trash?: boolean;
 };
 
 /**  How one book-detail call reads the metadata. */
@@ -1379,6 +1436,19 @@ export type EdgeWord = {
   text: string;
 };
 
+/**
+ *  One value of a facet, and how many books the current query would leave if
+ *  that value were picked.
+ */
+export type Facet = {
+  /**
+   *  As stored: a format name, a language tag, a publisher name, or one of
+   *  the fixed `status` / `covers` keys.
+   */
+  value: string;
+  count: number;
+};
+
 /**  One imported font, as the settings document and the UI hold it. */
 export type Font = Font_Serialize | Font_Deserialize;
 
@@ -1520,6 +1590,17 @@ export type ImportProgress = {
   path: string;
 };
 
+/**  Counts for the shelf's filter panel, one list per dimension. */
+export type LibraryFacets = {
+  formats: Facet[];
+  languages: Facet[];
+  publishers: Facet[];
+  /**  `unread` / `reading` / `finished`, always all three, in that order. */
+  status: Facet[];
+  /**  `has` / `none`. */
+  covers: Facet[];
+};
+
 /**  Which shelf the user is looking at. */
 export type LibraryFilter = "all" | "recent" | "favorites";
 
@@ -1548,6 +1629,12 @@ export type LibraryStats = {
    */
   reading: number;
   finished: number;
+  /**
+   *  Books in the bin. Counted separately from `total`, which is the shelf the
+   *  reader sees: a header that said 42 while the grid showed 39 would make
+   *  the reader hunt for three books that are not there.
+   */
+  trashed: number;
 };
 
 /**  A local runtime that answered, and the models worth pointing embeddings at. */
@@ -1738,6 +1825,16 @@ export type ReadingStats = {
   /**  Most-read books over the trailing `top_window` days, busiest first. */
   topBooks: TopBook[];
 };
+
+/**
+ *  Which slice of its own reading history a book is in.
+ *
+ *  The thresholds are [`stats`]'s: a book counts as finished at 99.9% because
+ *  the last page of a real book is often an index or a colophon nobody turns
+ *  to. A filter that disagreed with the count printed above it would look like
+ *  a broken filter rather than a different definition.
+ */
+export type ReadingStatus = "any" | "unread" | "reading" | "finished";
 
 export type Role = "system" | "user" | "assistant" | "tool";
 

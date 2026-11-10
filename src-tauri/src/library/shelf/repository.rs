@@ -129,7 +129,27 @@ impl LibrarySort {
     }
 }
 
+/// Which slice of its own reading history a book is in.
+///
+/// The thresholds are [`stats`]'s: a book counts as finished at 99.9% because
+/// the last page of a real book is often an index or a colophon nobody turns
+/// to. A filter that disagreed with the count printed above it would look like
+/// a broken filter rather than a different definition.
+#[derive(specta::Type, Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReadingStatus {
+    #[default]
+    Any,
+    Unread,
+    Reading,
+    Finished,
+}
+
 /// Parsed list request coming from the frontend.
+///
+/// Every narrowing field is `#[serde(default)]`: a caller that knows nothing
+/// about filters (the web build's own shelf, an older renderer) keeps sending
+/// the four original fields and gets the same shelf it always got.
 #[derive(specta::Type, Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BookQuery {
@@ -145,6 +165,68 @@ pub struct BookQuery {
     /// could ask for a tag inside 收藏 without a second query type.
     #[serde(default)]
     pub tag: Option<String>,
+    /// Empty means every format.
+    #[serde(default)]
+    pub formats: Vec<BookFormat>,
+    /// `books.language` values. The renderer only ever sends values that
+    /// [`facets`] reported, so they match the column byte for byte and the
+    /// comparison needs no collation.
+    #[serde(default)]
+    pub languages: Vec<String>,
+    /// `books.publisher` values, same provenance as `languages`.
+    #[serde(default)]
+    pub publishers: Vec<String>,
+    #[serde(default)]
+    pub status: ReadingStatus,
+    /// `Some(true)` = only books with a cover, `Some(false)` = only without.
+    #[serde(default)]
+    pub has_cover: Option<bool>,
+    /// Reads the bin instead of the shelf.
+    ///
+    /// One flag on the one query type, rather than a second `trash.list`
+    /// command: the bin is the same books with the same columns, and giving it
+    /// its own query would mean two SQL builders and two facet counters to keep
+    /// in step. Every other filter still applies inside it, which is what makes
+    /// "find the copy I deleted last week" a search rather than a scroll.
+    #[serde(default)]
+    pub trash: bool,
+}
+
+/// A dimension the shelf can be narrowed by.
+///
+/// Only [`conditions`] reads these: they name which clause to leave out when
+/// counting a facet.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Dimension {
+    Format,
+    Language,
+    Publisher,
+    Status,
+    Cover,
+}
+
+/// One value of a facet, and how many books the current query would leave if
+/// that value were picked.
+#[derive(specta::Type, Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Facet {
+    /// As stored: a format name, a language tag, a publisher name, or one of
+    /// the fixed `status` / `covers` keys.
+    pub value: String,
+    pub count: i64,
+}
+
+/// Counts for the shelf's filter panel, one list per dimension.
+#[derive(specta::Type, Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryFacets {
+    pub formats: Vec<Facet>,
+    pub languages: Vec<Facet>,
+    pub publishers: Vec<Facet>,
+    /// `unread` / `reading` / `finished`, always all three, in that order.
+    pub status: Vec<Facet>,
+    /// `has` / `none`.
+    pub covers: Vec<Facet>,
 }
 
 /// Aggregate counts shown above the shelf.
@@ -161,6 +243,10 @@ pub struct LibraryStats {
     /// 「在读」, which is not what the word means.
     pub reading: i64,
     pub finished: i64,
+    /// Books in the bin. Counted separately from `total`, which is the shelf the
+    /// reader sees: a header that said 42 while the grid showed 39 would make
+    /// the reader hunt for three books that are not there.
+    pub trashed: i64,
 }
 
 pub fn stats(conn: &Connection) -> AppResult<LibraryStats> {
@@ -169,11 +255,15 @@ pub fn stats(conn: &Connection) -> AppResult<LibraryStats> {
                 COALESCE(SUM(favorite), 0),
                 COALESCE(SUM(last_read_at IS NOT NULL AND progress > 0 AND progress < 0.999), 0),
                 COALESCE(SUM(progress >= 0.999), 0)
-           FROM books",
+           FROM books_live",
         [],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
     )?;
-    Ok(LibraryStats { total, favorites, reading, finished })
+    let trashed =
+        conn.query_row("SELECT COUNT(*) FROM books WHERE deleted_at IS NOT NULL", [], |row| {
+            row.get(0)
+        })?;
+    Ok(LibraryStats { total, favorites, reading, finished, trashed })
 }
 
 /// Absolute cover path for `id`, or `None` when the book has no cover.
@@ -191,21 +281,34 @@ const SELECT_COLUMNS: &str = "b.id, b.title, b.subtitle, b.description, b.langua
      b.format, b.file_size, b.cover_path, b.added_at, b.updated_at, b.last_read_at, b.progress, \
      b.location, b.favorite";
 
-/// Loads the shelf for the given query.
-pub fn list(conn: &Connection, query: &BookQuery) -> AppResult<Vec<BookSummary>> {
-    let mut sql = format!("SELECT {SELECT_COLUMNS} FROM books b");
-    // Every added clause is a literal from this file; user input only ever
-    // arrives as a bound parameter.
-    let mut conditions: Vec<&str> = Vec::new();
+/// SQL conditions and their bound parameters for one shelf query.
+///
+/// `skip` leaves exactly one dimension out. That is what facet counting needs:
+/// every other filter stays applied, so the count printed beside a value is the
+/// count the reader gets after clicking it — a count computed against the whole
+/// library would offer values that lead straight to an empty grid.
+///
+/// Every clause here is a literal from this file; user input only ever arrives
+/// as a bound parameter.
+fn conditions(query: &BookQuery, skip: Option<Dimension>) -> (Vec<String>, Vec<String>) {
+    let mut conditions: Vec<String> = Vec::new();
     let mut binds: Vec<String> = Vec::new();
+    let keep = |dimension: Dimension| skip != Some(dimension);
+
+    // Never skipped: the bin is a different set of rows, not a filter on the
+    // same set, so a facet counted without it would count the shelf.
+    if query.trash {
+        conditions.push("b.deleted_at IS NOT NULL".to_string());
+    }
 
     if let Some(predicate) = query.filter.predicate() {
-        conditions.push(predicate);
+        conditions.push(predicate.to_string());
     }
     if let Some(tag) = query.tag.as_deref().map(str::trim).filter(|tag| !tag.is_empty()) {
         conditions.push(
             "EXISTS (SELECT 1 FROM book_tags bt JOIN tags t ON t.id = bt.tag_id \
-              WHERE bt.book_id = b.id AND t.name = ? COLLATE NOCASE)",
+              WHERE bt.book_id = b.id AND t.name = ? COLLATE NOCASE)"
+                .to_string(),
         );
         binds.push(tag.to_string());
     }
@@ -213,16 +316,85 @@ pub fn list(conn: &Connection, query: &BookQuery) -> AppResult<Vec<BookSummary>>
         conditions.push(
             "(b.title LIKE ? ESCAPE '\\' OR b.sort_title LIKE ? ESCAPE '\\' OR EXISTS (\
                SELECT 1 FROM book_authors ba JOIN authors a ON a.id = ba.author_id \
-                WHERE ba.book_id = b.id AND a.name LIKE ? ESCAPE '\\'))",
+                WHERE ba.book_id = b.id AND a.name LIKE ? ESCAPE '\\'))"
+                .to_string(),
         );
         // One needle, three placeholders.
         binds.extend([needle.clone(), needle.clone(), needle]);
     }
 
-    if !conditions.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&conditions.join(" AND "));
+    if keep(Dimension::Format) && !query.formats.is_empty() {
+        conditions.push(in_list("b.format", query.formats.len()));
+        binds.extend(query.formats.iter().map(|format| format.as_str().to_string()));
     }
+    if keep(Dimension::Language) {
+        push_in(&mut conditions, &mut binds, "b.language", &query.languages);
+    }
+    if keep(Dimension::Publisher) {
+        push_in(&mut conditions, &mut binds, "b.publisher", &query.publishers);
+    }
+    if keep(Dimension::Status)
+        && let Some(predicate) = status_predicate(query.status)
+    {
+        conditions.push(predicate.to_string());
+    }
+    if keep(Dimension::Cover) {
+        match query.has_cover {
+            Some(true) => conditions.push("b.cover_path IS NOT NULL".to_string()),
+            Some(false) => conditions.push("b.cover_path IS NULL".to_string()),
+            None => {}
+        }
+    }
+
+    (conditions, binds)
+}
+
+/// `WHERE a AND b`, or nothing at all when there is no condition.
+fn where_clause(conditions: &[String]) -> String {
+    if conditions.is_empty() {
+        return String::new();
+    }
+    format!(" WHERE {}", conditions.join(" AND "))
+}
+
+/// Which relation a query reads.
+///
+/// The shelf reads the `books_live` view and the bin reads the table behind it;
+/// everything else about the query is identical, which is the whole reason the
+/// soft delete lives in a view rather than in thirteen `WHERE` clauses.
+fn relation(query: &BookQuery) -> &'static str {
+    if query.trash { "books" } else { "books_live" }
+}
+
+/// `column IN (?, ?, …)` — one placeholder per value.
+fn in_list(column: &str, len: usize) -> String {
+    format!("{column} IN ({})", vec!["?"; len].join(", "))
+}
+
+/// Pushes an `IN` condition for a text column, skipping an empty selection.
+fn push_in(conditions: &mut Vec<String>, binds: &mut Vec<String>, column: &str, values: &[String]) {
+    let values: Vec<&String> = values.iter().filter(|value| !value.trim().is_empty()).collect();
+    if values.is_empty() {
+        return;
+    }
+    conditions.push(in_list(column, values.len()));
+    binds.extend(values.into_iter().cloned());
+}
+
+fn status_predicate(status: ReadingStatus) -> Option<&'static str> {
+    match status {
+        ReadingStatus::Any => None,
+        ReadingStatus::Unread => Some("b.progress <= 0"),
+        ReadingStatus::Reading => Some("b.progress > 0 AND b.progress < 0.999"),
+        ReadingStatus::Finished => Some("b.progress >= 0.999"),
+    }
+}
+
+/// Loads the shelf for the given query.
+pub fn list(conn: &Connection, query: &BookQuery) -> AppResult<Vec<BookSummary>> {
+    let (conditions, binds) = conditions(query, None);
+    let mut sql = format!("SELECT {SELECT_COLUMNS} FROM {} b", relation(query));
+    sql.push_str(&where_clause(&conditions));
     sql.push_str(" ORDER BY ");
     sql.push_str(query.sort.order_by());
 
@@ -240,10 +412,97 @@ pub fn list(conn: &Connection, query: &BookQuery) -> AppResult<Vec<BookSummary>>
     Ok(books)
 }
 
-/// A single book by id, for the reader header. `None` when unknown.
+/// Counts for the shelf's filter panel.
+///
+/// One `GROUP BY` per text dimension rather than one query per value: a shelf
+/// of two thousand books asks this on every filter change, and the alternative
+/// is a dozen round trips through the same table scan.
+pub fn facets(conn: &Connection, query: &BookQuery) -> AppResult<LibraryFacets> {
+    Ok(LibraryFacets {
+        formats: facet_counts(conn, query, Dimension::Format, "b.format")?,
+        languages: facet_counts(conn, query, Dimension::Language, "b.language")?,
+        publishers: facet_counts(conn, query, Dimension::Publisher, "b.publisher")?,
+        status: status_counts(conn, query)?,
+        covers: cover_counts(conn, query)?,
+    })
+}
+
+/// `GROUP BY` over one text column, with that dimension's own filter cleared.
+fn facet_counts(
+    conn: &Connection,
+    query: &BookQuery,
+    dimension: Dimension,
+    column: &str,
+) -> AppResult<Vec<Facet>> {
+    let (conditions, binds) = conditions(query, Some(dimension));
+    let sql = format!(
+        "SELECT {column}, COUNT(*) FROM {} b {} \
+          GROUP BY {column} ORDER BY COUNT(*) DESC, {column} COLLATE NOCASE",
+        relation(query),
+        where_clause(&conditions)
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(rusqlite::params_from_iter(binds.iter()))?;
+
+    let mut facets = Vec::new();
+    while let Some(row) = rows.next()? {
+        // A book with no publisher is not a publisher: an unnamed bucket in the
+        // panel would be a filter that means "empty", which is a different
+        // question (and `has_cover`-style booleans are where that belongs).
+        let Some(value) = row.get::<_, Option<String>>(0)?.filter(|value| !value.trim().is_empty())
+        else {
+            continue;
+        };
+        facets.push(Facet { value, count: row.get(1)? });
+    }
+    Ok(facets)
+}
+
+fn status_counts(conn: &Connection, query: &BookQuery) -> AppResult<Vec<Facet>> {
+    let (conditions, binds) = conditions(query, Some(Dimension::Status));
+    let sql = format!(
+        "SELECT COALESCE(SUM(b.progress <= 0), 0), \
+                COALESCE(SUM(b.progress > 0 AND b.progress < 0.999), 0), \
+                COALESCE(SUM(b.progress >= 0.999), 0) \
+           FROM {} b {}",
+        relation(query),
+        where_clause(&conditions)
+    );
+    let (unread, reading, finished) =
+        conn.query_row(&sql, rusqlite::params_from_iter(binds.iter()), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+        })?;
+    Ok(vec![
+        Facet { value: "unread".to_string(), count: unread },
+        Facet { value: "reading".to_string(), count: reading },
+        Facet { value: "finished".to_string(), count: finished },
+    ])
+}
+
+fn cover_counts(conn: &Connection, query: &BookQuery) -> AppResult<Vec<Facet>> {
+    let (conditions, binds) = conditions(query, Some(Dimension::Cover));
+    let sql = format!(
+        "SELECT COALESCE(SUM(b.cover_path IS NOT NULL), 0), \
+                COALESCE(SUM(b.cover_path IS NULL), 0) \
+           FROM {} b {}",
+        relation(query),
+        where_clause(&conditions)
+    );
+    let (has, none) = conn.query_row(&sql, rusqlite::params_from_iter(binds.iter()), |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    Ok(vec![
+        Facet { value: "has".to_string(), count: has },
+        Facet { value: "none".to_string(), count: none },
+    ])
+}
+
+/// A single book by id, for the reader header. `None` when unknown — or when it
+/// is in the trash, which is the same answer: the reader cannot open what the
+/// shelf cannot show, and restoring it is what brings it back.
 pub fn get(conn: &Connection, id: &str) -> AppResult<Option<BookSummary>> {
     let mut stmt =
-        conn.prepare(&format!("SELECT {SELECT_COLUMNS} FROM books b WHERE b.id = ?1"))?;
+        conn.prepare(&format!("SELECT {SELECT_COLUMNS} FROM books_live b WHERE b.id = ?1"))?;
     let mut rows = stmt.query(params![id])?;
     let Some(row) = rows.next()? else { return Ok(None) };
     let mut book = summary_from_row(row)?;
@@ -305,7 +564,7 @@ pub fn like_pattern(term: &str) -> String {
 /// on the search path if the background pass never finished.
 pub fn books_needing_chapters(conn: &Connection, book_id: Option<&str>) -> AppResult<Vec<String>> {
     let mut stmt = conn.prepare(
-        "SELECT b.id FROM books b
+        "SELECT b.id FROM books_live b
           WHERE (b.chapters_pending = 1
                  OR NOT EXISTS (SELECT 1 FROM chapters c WHERE c.book_id = b.id))
             AND (?1 IS NULL OR b.id = ?1)
@@ -323,7 +582,7 @@ pub fn books_needing_chapters(conn: &Connection, book_id: Option<&str>) -> AppRe
 /// into an import-triggered job would be a surprise, not a fix.
 pub fn pending_chapters(conn: &Connection) -> AppResult<Vec<String>> {
     let mut stmt =
-        conn.prepare("SELECT id FROM books WHERE chapters_pending = 1 ORDER BY added_at, id")?;
+        conn.prepare("SELECT id FROM books_live WHERE chapters_pending = 1 ORDER BY added_at, id")?;
     let rows = stmt.query_map([], |row| row.get(0))?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
@@ -461,10 +720,13 @@ pub struct DeletedFiles {
     pub cover: Option<PathBuf>,
 }
 
-/// Deletes one book and reports which files the caller should unlink.
+/// Deletes one book **for good** and reports which files the caller should
+/// unlink.
 ///
-/// Returns `NotFound` when the id does not exist so the UI can say so.
-fn delete_one(conn: &Connection, id: &str) -> AppResult<DeletedFiles> {
+/// This is the irreversible half of the two-step delete: `trash` moves a book
+/// out of sight, this is what runs when the reader empties the bin. Returns
+/// `NotFound` when the id does not exist so the UI can say so.
+fn purge_one(conn: &Connection, id: &str) -> AppResult<DeletedFiles> {
     let (book_path, cover_path): (String, Option<String>) = conn
         .query_row("SELECT file_path, cover_path FROM books WHERE id = ?1", params![id], |row| {
             Ok((row.get(0)?, row.get(1)?))
@@ -476,14 +738,14 @@ fn delete_one(conn: &Connection, id: &str) -> AppResult<DeletedFiles> {
     Ok(DeletedFiles { book: Some(PathBuf::from(book_path)), cover: cover_path.map(PathBuf::from) })
 }
 
-/// [`delete_one`], for a single id.
-pub fn delete(conn: &Connection, id: &str) -> AppResult<DeletedFiles> {
-    delete_one(conn, id)
+/// [`purge_one`], for a single id.
+pub fn purge(conn: &Connection, id: &str) -> AppResult<DeletedFiles> {
+    purge_one(conn, id)
 }
 
-/// Deletes a batch, inside the caller's transaction.
+/// Purges a batch, inside the caller's transaction.
 ///
-/// The shelf's batch bar hands over every selected id at once; one `delete`
+/// The shelf's batch bar hands over every selected id at once; one `purge`
 /// per id meant one transaction, and one fsync, per book. All or nothing: an
 /// unknown id fails the batch and `with_tx` rolls the earlier deletes back,
 /// rather than leaving the shelf half-deleted.
@@ -493,14 +755,14 @@ pub fn delete(conn: &Connection, id: &str) -> AppResult<DeletedFiles> {
 /// place a count can come from; the caller pre-checks every id
 /// ([`ensure_existing`]) so a rollback after a reported book is not reachable
 /// through the shelf's own ids.
-pub fn delete_many(
+pub fn purge_many(
     tx: &Transaction<'_>,
     ids: &[String],
     on_progress: &mut dyn FnMut(usize, usize, &str),
 ) -> AppResult<Vec<DeletedFiles>> {
     let mut files = Vec::with_capacity(ids.len());
     for (index, id) in ids.iter().enumerate() {
-        let deleted = delete_one(tx, id)?;
+        let deleted = purge_one(tx, id)?;
         let path = deleted.book.as_deref().map(|p| p.to_string_lossy()).unwrap_or_default();
         on_progress(index + 1, ids.len(), &path);
         files.push(deleted);
@@ -508,10 +770,83 @@ pub fn delete_many(
     Ok(files)
 }
 
+/// Moves one book to the trash.
+///
+/// The row, the file, the cover, the chapters, the highlights and the reading
+/// position all stay exactly where they are — only `deleted_at` changes, and
+/// `books_live` stops answering for it. That is what makes the operation
+/// reversible, and it is also why the delete no longer has to be scary.
+///
+/// Returns `NotFound` for an unknown id, and is a no-op for one that is already
+/// in the trash (trashing twice is what a double-click does).
+pub fn trash(conn: &Connection, id: &str) -> AppResult<()> {
+    let changed = conn.execute(
+        "UPDATE books SET deleted_at = ?2 WHERE id = ?1 AND deleted_at IS NULL",
+        params![id, crate::library::now_seconds()],
+    )?;
+    if changed == 0 {
+        // Either it never existed or it is already trashed; both answer the
+        // same way, because the shelf is already showing the state the caller
+        // asked for.
+        let exists: Option<i64> = conn
+            .query_row("SELECT 1 FROM books WHERE id = ?1", params![id], |row| row.get(0))
+            .optional()?;
+        if exists.is_none() {
+            return Err(AppError::NotFound(id.to_string()));
+        }
+    }
+    Ok(())
+}
+
+/// [`trash`] for a batch, in one transaction.
+pub fn trash_many(
+    tx: &Transaction<'_>,
+    ids: &[String],
+    on_progress: &mut dyn FnMut(usize, usize, &str),
+) -> AppResult<()> {
+    for (index, id) in ids.iter().enumerate() {
+        trash(tx, id)?;
+        on_progress(index + 1, ids.len(), id);
+    }
+    Ok(())
+}
+
+/// Brings a book back out of the trash. Idempotent: restoring a live book is a
+/// no-op rather than an error, because "make sure this is on the shelf" is the
+/// thing every caller actually means.
+pub fn restore(conn: &Connection, id: &str) -> AppResult<()> {
+    conn.execute(
+        "UPDATE books SET deleted_at = NULL, updated_at = ?2 WHERE id = ?1",
+        params![id, crate::library::now_seconds()],
+    )?;
+    Ok(())
+}
+
+/// [`restore`] for a batch, in one transaction.
+pub fn restore_many(tx: &Transaction<'_>, ids: &[String]) -> AppResult<()> {
+    for id in ids {
+        restore(tx, id)?;
+    }
+    Ok(())
+}
+
+/// Empties the bin: purges every trashed book and reports the files to unlink.
+pub fn empty_trash(tx: &Transaction<'_>) -> AppResult<Vec<DeletedFiles>> {
+    let ids: Vec<String> = tx
+        .prepare("SELECT id FROM books WHERE deleted_at IS NOT NULL")?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut files = Vec::with_capacity(ids.len());
+    for id in &ids {
+        files.push(purge_one(tx, id)?);
+    }
+    Ok(files)
+}
+
 /// Fails with `NotFound` unless every id is on the shelf.
 ///
 /// One `IN` query rather than a failure half-way through the batch's
-/// transaction: `delete_many` reports progress as it goes, and a batch that
+/// transaction: `purge_many` reports progress as it goes, and a batch that
 /// starts deleting and then rolls back would have shown the reader books as
 /// deleted that are all still there. Pre-flighting keeps the all-or-nothing
 /// guarantee and the progress honest at the cost of one indexed lookup.
@@ -953,7 +1288,7 @@ mod tests {
         let conn = seed();
         add(&conn, "b1", "三体", &["刘慈欣"], "h1");
 
-        let deleted = delete(&conn, "b1").expect("delete");
+        let deleted = &purge(&conn, "b1").expect("delete");
         assert_eq!(deleted.book.as_deref(), Some(Path::new("/books/b1.epub")));
         assert!(find_by_hash(&conn, "h1").expect("query").is_none());
     }
@@ -961,7 +1296,7 @@ mod tests {
     #[test]
     fn deleting_an_unknown_id_is_not_found() {
         let conn = seed();
-        assert!(matches!(delete(&conn, "nope"), Err(AppError::NotFound(_))));
+        assert!(matches!(&purge(&conn, "nope"), Err(AppError::NotFound(_))));
         assert!(matches!(set_favorite(&conn, "nope", true), Err(AppError::NotFound(_))));
     }
 
@@ -974,7 +1309,7 @@ mod tests {
 
         let mut seen: Vec<(usize, usize)> = Vec::new();
         let tx = conn.unchecked_transaction().expect("transaction");
-        let files = delete_many(&tx, &["b1".into(), "b2".into()], &mut |done, total, _| {
+        let files = &purge_many(&tx, &["b1".into(), "b2".into()], &mut |done, total, _| {
             seen.push((done, total));
         })
         .expect("delete many");
@@ -1000,7 +1335,7 @@ mod tests {
 
         let tx = conn.unchecked_transaction().expect("transaction");
         let outcome =
-            delete_many(&tx, &["b1".into(), "nope".into(), "b2".into()], &mut |_, _, _| {});
+            &purge_many(&tx, &["b1".into(), "nope".into(), "b2".into()], &mut |_, _, _| {});
         assert!(matches!(outcome, Err(AppError::NotFound(_))));
         drop(tx);
 
@@ -1052,7 +1387,7 @@ mod tests {
 
         assert_eq!(
             stats(&conn).expect("stats"),
-            LibraryStats { total: 3, favorites: 1, reading: 1, finished: 1 }
+            LibraryStats { total: 3, favorites: 1, reading: 1, finished: 1, trashed: 0 }
         );
 
         // Opening a book and closing it without turning a page is not 在读.
@@ -1064,7 +1399,7 @@ mod tests {
 
         assert_eq!(
             stats(&conn).expect("stats"),
-            LibraryStats { total: 4, favorites: 1, reading: 1, finished: 1 }
+            LibraryStats { total: 4, favorites: 1, reading: 1, finished: 1, trashed: 0 }
         );
     }
 
@@ -1246,5 +1581,205 @@ mod tests {
         let tx = conn.unchecked_transaction().expect("tx");
         let error = update_metadata(&tx, "nope", &draft("书", &[]));
         assert!(matches!(error, Err(AppError::NotFound(_))));
+    }
+
+    /// A shelf of three books that disagree on every facet dimension.
+    fn filtered_shelf() -> Connection {
+        let conn = seed();
+        add_as(&conn, "b1", "三体", &["刘慈欣"], "h1", BookFormat::Epub, 1024);
+        add_as(&conn, "b2", "Dune", &["Herbert"], "h2", BookFormat::Pdf, 2048);
+        add_as(&conn, "b3", "Piranesi", &["Clarke"], "h3", BookFormat::Epub, 4096);
+        conn.execute_batch(
+            "UPDATE books SET language = 'zh', publisher = '重庆出版社', progress = 0.0
+              WHERE id = 'b1';
+             UPDATE books SET language = 'en', publisher = 'Chilton', progress = 0.4,
+                              last_read_at = 1 WHERE id = 'b2';
+             UPDATE books SET language = 'en', publisher = NULL, progress = 0.999,
+                              last_read_at = 2, cover_path = '/covers/b3.jpg' WHERE id = 'b3';",
+        )
+        .expect("seed facets");
+        conn
+    }
+
+    #[test]
+    fn an_empty_query_is_the_whole_shelf() {
+        let conn = filtered_shelf();
+        let books = list(&conn, &BookQuery::default()).expect("list");
+        assert_eq!(books.len(), 3, "新字段默认值必须等于旧行为");
+    }
+
+    #[test]
+    fn formats_narrow_the_shelf_and_an_empty_list_does_not() {
+        let conn = filtered_shelf();
+        let epub = BookQuery { formats: vec![BookFormat::Epub], ..BookQuery::default() };
+        let titles: Vec<String> =
+            list(&conn, &epub).expect("list").into_iter().map(|b| b.title).collect();
+        assert_eq!(titles.len(), 2);
+        assert!(!titles.contains(&"Dune".to_string()));
+
+        let both =
+            BookQuery { formats: vec![BookFormat::Epub, BookFormat::Pdf], ..BookQuery::default() };
+        assert_eq!(list(&conn, &both).expect("list").len(), 3);
+    }
+
+    #[test]
+    fn status_uses_the_same_thresholds_as_the_header_count() {
+        let conn = filtered_shelf();
+        let count = |status| {
+            list(&conn, &BookQuery { status, ..BookQuery::default() }).expect("list").len()
+        };
+        assert_eq!(count(ReadingStatus::Unread), 1);
+        assert_eq!(count(ReadingStatus::Reading), 1);
+        // 0.999 is finished here because it is finished in `stats` — the two
+        // numbers sit one above the other on screen.
+        assert_eq!(count(ReadingStatus::Finished), 1);
+        assert_eq!(stats(&conn).expect("stats").finished, 1);
+        assert_eq!(count(ReadingStatus::Any), 3);
+    }
+
+    #[test]
+    fn a_language_filter_matches_the_stored_value_exactly() {
+        let conn = filtered_shelf();
+        let query = BookQuery { languages: vec!["en".into()], ..BookQuery::default() };
+        assert_eq!(list(&conn, &query).expect("list").len(), 2);
+
+        let unknown = BookQuery { languages: vec!["fr".into()], ..BookQuery::default() };
+        assert!(list(&conn, &unknown).expect("list").is_empty());
+    }
+
+    #[test]
+    fn the_cover_filter_splits_the_shelf_both_ways() {
+        let conn = filtered_shelf();
+        let with = BookQuery { has_cover: Some(true), ..BookQuery::default() };
+        let without = BookQuery { has_cover: Some(false), ..BookQuery::default() };
+        assert_eq!(list(&conn, &with).expect("list").len(), 1);
+        assert_eq!(list(&conn, &without).expect("list").len(), 2);
+    }
+
+    /// The property the panel depends on: a facet is counted with every *other*
+    /// filter applied and its own cleared. Otherwise picking 「epub」 would hide
+    /// 「pdf」 from the panel and the reader could never widen the selection
+    /// again without clearing the whole panel.
+    #[test]
+    fn a_facet_ignores_only_its_own_filter() {
+        let conn = filtered_shelf();
+        let query = BookQuery {
+            formats: vec![BookFormat::Epub],
+            languages: vec!["en".into()],
+            ..BookQuery::default()
+        };
+
+        let facets = facets(&conn, &query).expect("facets");
+        assert_eq!(list(&conn, &query).expect("list").len(), 1, "两个筛选同时生效只剩 Piranesi");
+
+        // 语言这一维不受语言筛选影响：`zh` 只剩 0 本也要留着，否则读者没有
+        // 路回到中文书 —— 面板上唯一还能点的就是当前值。
+        let languages: Vec<(String, i64)> =
+            facets.languages.iter().map(|f| (f.value.clone(), f.count)).collect();
+        assert_eq!(languages.len(), 2);
+        assert!(languages.contains(&("zh".to_string(), 1)), "epub 里的三体还在");
+        assert!(languages.contains(&("en".to_string(), 1)));
+
+        // 同理，`pdf` 必须还在格式列表里，即使当前只筛了 epub。
+        let formats: Vec<(String, i64)> =
+            facets.formats.iter().map(|f| (f.value.clone(), f.count)).collect();
+        assert!(formats.contains(&("pdf".to_string(), 1)), "Dune 是 en，pdf 仍在候选里");
+        assert!(formats.contains(&("epub".to_string(), 1)));
+    }
+
+    #[test]
+    fn books_without_a_publisher_are_not_a_publisher_facet() {
+        let conn = filtered_shelf();
+        let facets = facets(&conn, &BookQuery::default()).expect("facets");
+        let names: Vec<&str> = facets.publishers.iter().map(|f| f.value.as_str()).collect();
+        assert_eq!(names.len(), 2, "Piranesi 没有出版社，不该出现一个空名字的桶");
+        assert!(names.contains(&"重庆出版社"));
+        assert!(names.contains(&"Chilton"));
+    }
+
+    #[test]
+    fn facets_count_every_status_and_cover_bucket_even_at_zero() {
+        let conn = seed();
+        add(&conn, "b1", "只有一本", &[], "h1");
+
+        let facets = facets(&conn, &BookQuery::default()).expect("facets");
+        assert_eq!(facets.status.len(), 3, "三个状态始终都在，计数为 0 也要能点");
+        assert_eq!(facets.covers.len(), 2);
+        assert_eq!(facets.status[0].count, 1, "未读");
+        assert_eq!(facets.status[2].count, 0, "已读完");
+        assert_eq!(facets.covers[1].count, 1, "没有封面");
+    }
+
+    #[test]
+    fn a_trashed_book_leaves_the_shelf_and_the_header_count() {
+        let conn = filtered_shelf();
+        trash(&conn, "b2").expect("trash");
+
+        let books = list(&conn, &BookQuery::default()).expect("list");
+        assert_eq!(books.len(), 2, "书架少一本");
+        assert!(!books.iter().any(|b| b.id == "b2"));
+
+        let stats = stats(&conn).expect("stats");
+        assert_eq!(stats.total, 2, "表头数的是书架，不是表里的行");
+        assert_eq!(stats.trashed, 1, "回收站自己有一份计数");
+    }
+
+    #[test]
+    fn the_bin_holds_only_what_was_trashed_and_cannot_be_opened() {
+        let conn = filtered_shelf();
+        trash(&conn, "b2").expect("trash");
+
+        let bin = list(&conn, &BookQuery { trash: true, ..BookQuery::default() }).expect("bin");
+        assert_eq!(bin.len(), 1);
+        assert_eq!(bin[0].id, "b2");
+
+        // The reader asks for one book by id; a trashed one has to answer the
+        // same way a missing one does, or the shelf could open what it cannot
+        // show.
+        assert!(get(&conn, "b2").expect("get").is_none());
+    }
+
+    #[test]
+    fn the_bin_can_be_searched_like_any_other_shelf() {
+        let conn = filtered_shelf();
+        trash(&conn, "b2").expect("trash");
+
+        let query = BookQuery { trash: true, search: Some("Dune".into()), ..BookQuery::default() };
+        assert_eq!(list(&conn, &query).expect("list").len(), 1);
+
+        let miss = BookQuery { trash: true, search: Some("三体".into()), ..BookQuery::default() };
+        assert!(list(&conn, &miss).expect("list").is_empty(), "书架上的书不该出现在回收站里");
+    }
+
+    #[test]
+    fn facets_in_the_bin_count_only_the_bin() {
+        let conn = filtered_shelf();
+        trash(&conn, "b2").expect("trash");
+
+        let facets = facets(&conn, &BookQuery { trash: true, ..BookQuery::default() }).expect("f");
+        let formats: Vec<(String, i64)> =
+            facets.formats.iter().map(|f| (f.value.clone(), f.count)).collect();
+        assert_eq!(formats, vec![("pdf".to_string(), 1)], "回收站里只有那本 pdf");
+    }
+
+    #[test]
+    fn restoring_keeps_the_progress_the_book_had() {
+        let conn = filtered_shelf();
+        conn.execute("UPDATE books SET progress = 0.4, last_read_at = 7 WHERE id = 'b2'", [])
+            .expect("touch");
+        trash(&conn, "b2").expect("trash");
+        restore(&conn, "b2").expect("restore");
+
+        let book = get(&conn, "b2").expect("get").expect("b2 back");
+        assert_eq!(book.progress, 0.4, "恢复的是书，不是一本新书");
+        assert_eq!(stats(&conn).expect("stats").trashed, 0);
+    }
+
+    #[test]
+    fn trashing_twice_is_not_an_error_but_an_unknown_id_is() {
+        let conn = filtered_shelf();
+        trash(&conn, "b2").expect("first");
+        trash(&conn, "b2").expect("second — 双击不该报错");
+        assert!(matches!(trash(&conn, "nope"), Err(AppError::NotFound(_))));
     }
 }

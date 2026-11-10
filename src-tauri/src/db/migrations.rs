@@ -583,6 +583,33 @@ CREATE TABLE chapter_summaries (
 );
 "#,
     },
+    Migration {
+        version: 22,
+        name: "books_deleted_at",
+        // Deleting a book used to be a `DELETE`: one misclick and the file, the
+        // highlights, the notes and the reading position were gone together.
+        // A timestamp instead of a row removal makes that reversible, and the
+        // rows stay put so every foreign key below still points at something.
+        //
+        // `books_live` is the other half of the change, and it is not a
+        // convenience: `FROM books` appears in thirteen modules (search, RAG,
+        // sync, stats, chapter backfill), and a soft delete that only taught
+        // `list()` about it would leave deleted books surfacing in every one of
+        // them. Reads go through the view, writes go through the table, and a
+        // read path that forgets is a failing test rather than a ghost book.
+        //
+        // `SELECT *` here is expanded once, at creation: a column added to
+        // `books` later does not appear in the view. That is deliberate — the
+        // view is a *read* surface, and widening it silently would be a
+        // schema change nobody reviewed.
+        sql: r#"
+ALTER TABLE books ADD COLUMN deleted_at INTEGER;
+
+CREATE INDEX books_deleted_at ON books (deleted_at) WHERE deleted_at IS NOT NULL;
+
+CREATE VIEW books_live AS SELECT * FROM books WHERE deleted_at IS NULL;
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.

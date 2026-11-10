@@ -225,6 +225,12 @@ fn import_book(library: &Library, layout: &Layout, path: &Path) -> AppResult<Imp
     // data, and a parser fix (e.g. keeping images) must reach old books when
     // the user re-imports the same file.
     if let Some((id, title)) = library.with(|conn| repository::find_by_hash(conn, &hash))? {
+        // A trashed book still owns its `content_hash`, so re-importing the same
+        // file has to bring it back: the UNIQUE index would refuse a second row,
+        // and answering 「已在书架上」 about a book the shelf is not showing would
+        // be a lie. Restoring keeps the highlights and the position that made
+        // the trash worth having.
+        library.with(|conn| repository::restore(conn, &id))?;
         if format == BookFormat::Pdf {
             // The same deferral as the fresh-import path below, for the same
             // reason: re-extracting here would put the 974 ms back on the
@@ -328,6 +334,9 @@ fn import_book(library: &Library, layout: &Layout, path: &Path) -> AppResult<Imp
                 && let Some((existing, title)) =
                     library.with(|conn| repository::find_by_hash(conn, &hash))?
             {
+                // Same reason as the pre-check above: the row that won the race
+                // may be sitting in the trash.
+                library.with(|conn| repository::restore(conn, &existing))?;
                 return Ok(Imported::AlreadyPresent(existing, title));
             }
             Err(err)
@@ -966,8 +975,11 @@ mod tests {
         assert_eq!(harness.shelve().len(), 1);
     }
 
+    /// Deleting is the reversible half: the shelf stops listing the book, and
+    /// the bytes stay where they are until the bin is emptied. The files are
+    /// what a misclick used to cost, and the reason the delete became a move.
     #[test]
-    fn deleting_a_book_removes_its_files() {
+    fn deleting_a_book_keeps_its_files_until_the_bin_is_emptied() {
         let harness = Harness::new("import-delete");
         let source = epub(&harness.dir, "a.epub", "三体");
         harness.import(&[source]);
@@ -976,13 +988,38 @@ mod tests {
         let id = books[0].id.clone();
         let (book, cover) = crate::library::book_files(&harness.library, &id).expect("files");
         assert!(book.as_deref().map(Path::exists).unwrap_or(false));
-        assert!(cover.as_deref().map(Path::exists).unwrap_or(false));
 
-        crate::library::delete_book(&harness.library, &id).expect("delete");
+        crate::library::delete_book(&harness.library, &id).expect("trash");
 
-        assert!(!book.as_deref().map(Path::exists).unwrap_or(false), "书籍文件应被删除");
-        assert!(!cover.as_deref().map(Path::exists).unwrap_or(false), "封面文件应被删除");
+        assert!(harness.shelve().is_empty(), "书架不该再列出它");
+        assert!(book.as_deref().map(Path::exists).unwrap_or(false), "回收站里的书文件必须还在");
+        assert!(cover.as_deref().map(Path::exists).unwrap_or(false), "封面也必须还在");
+
+        crate::library::purge_book(&harness.library, &id).expect("purge");
+
+        assert!(!book.as_deref().map(Path::exists).unwrap_or(false), "彻底删除才动文件");
+        assert!(!cover.as_deref().map(Path::exists).unwrap_or(false), "封面也一样");
+    }
+
+    /// The UNIQUE index on `content_hash` still belongs to a trashed book, so a
+    /// re-import has to bring that row back rather than insert a second one.
+    #[test]
+    fn re_importing_a_trashed_book_restores_it() {
+        let harness = Harness::new("import-restore");
+        let first = epub(&harness.dir, "a.epub", "三体");
+        let second = epub(&harness.dir, "b.epub", "三体");
+        harness.import(&[first]);
+
+        let id = harness.shelve()[0].id.clone();
+        crate::library::delete_book(&harness.library, &id).expect("trash");
         assert!(harness.shelve().is_empty());
+
+        let outcomes = harness.import(&[second]);
+
+        assert!(matches!(&outcomes[0], ImportOutcome::Duplicate { .. }), "{:?}", outcomes[0]);
+        let back = harness.shelve();
+        assert_eq!(back.len(), 1, "重复导入不该多出一行");
+        assert_eq!(back[0].id, id, "回来的是原来那一本，不是新的一本");
     }
 
     #[test]
