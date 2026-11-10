@@ -5,8 +5,10 @@ import type {
   ChapterMeta,
   DayTotal,
   Facet,
+  Fill,
   LibraryFacets,
   LibraryStats,
+  Proposal,
   ReadingStats,
 } from "@/types/ipc";
 
@@ -91,6 +93,10 @@ const EPUB_ID = "demo-epub";
 
 const COUNT = shelfSize();
 
+/** 2023-11-14, fixed rather than `Date.now()` so the fixture is the same shelf
+ *  every run. */
+const DEMO_ADDED = 1_700_000_000;
+
 const shelf: BookSummary[] = Array.from({ length: COUNT }, (_, index) => ({
   id: `demo-${index + 1}`,
   // Beyond the three samples the shelf repeats them, numbered, so a locator that
@@ -113,8 +119,10 @@ const shelf: BookSummary[] = Array.from({ length: COUNT }, (_, index) => ({
     PALETTES[index % PALETTES.length]![0],
     PALETTES[index % PALETTES.length]![1],
   ),
-  addedAt: 0,
-  updatedAt: 0,
+  // A real date, not 0: the sheet prints 添加于, and 1970/01/01 on a demo shelf
+  // reads as a bug in the app rather than as a fixture.
+  addedAt: DEMO_ADDED - index * 86_400,
+  updatedAt: DEMO_ADDED - index * 86_400,
   // Two of the three samples carry a `lastReadAt` so the shelf's "continue
   // reading" card has something to point at on `?demo=1`. demo-2 is the
   // more recent of the two — so it, not the first book with progress, is
@@ -529,4 +537,42 @@ export function demoChapter(idx: number): ChapterContent | null {
   const paragraphs = CHAPTER_BODIES[idx];
   if (title === undefined || paragraphs === undefined) return null;
   return { idx, title, paragraphs };
+}
+
+/**
+ * Proposals for the batch-fill sheet on `?demo=1`.
+ *
+ * The sheet is otherwise unreachable without a desktop runtime and a network,
+ * which is exactly how a dialog that ran off both edges of the window shipped
+ * twice. A canned answer makes it openable in a browser, so a layout regression
+ * is something a test can see.
+ *
+ * Every third book is a miss (the sheet has to render 「没找到」 too), and the
+ * first one carries a full-length blurb — the value that broke the layout.
+ */
+export function demoProposals(ids: string[]): Proposal[] {
+  return ids.map((id, index) => {
+    const title = shelf.find((item) => item.id === id)?.title ?? "样书";
+    if (index % 3 === 2) {
+      return {
+        bookId: id,
+        bookTitle: title,
+        fills: [],
+        skipped: "没有找到相近的书",
+        matchScore: 0,
+      };
+    }
+    const fills: Fill[] = [
+      { field: "publisher", from: null, to: "演示出版社" },
+      { field: "language", from: null, to: "zh" },
+    ];
+    if (index % 3 === 0) {
+      fills.push({
+        field: "description",
+        from: null,
+        to: "这是一段演示用的简介，长度接近真实目录返回的那种营销文案。".repeat(60),
+      });
+    }
+    return { bookId: id, bookTitle: title, fills, skipped: null, matchScore: 0.92 };
+  });
 }

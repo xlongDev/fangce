@@ -277,6 +277,16 @@ export const commands = {
        */
       location: string | null;
       favorite: boolean;
+      /**
+       *  The edition's ISBN, when something actually said so.
+       *
+       *  Its own column rather than `identifier`: that one holds whatever the
+       *  file's `dc:identifier` claimed, which is sometimes an ISBN and sometimes
+       *  a UUID a converter invented.
+       */
+      isbn: string | null;
+      /**  The edition's publication year. */
+      publishedYear: number | null;
       authors: string[];
       tags: string[];
     } | null>("book_get", { id }),
@@ -386,6 +396,30 @@ export const commands = {
     __TAURI_INVOKE<number>("book_set_metadata_many", { ids, patch }),
   /**  `ops.list` — the newest changes, newest first. */
   opsList: (limit: number) => __TAURI_INVOKE<Operation[]>("ops_list", { limit }),
+  /**
+   *  `metadata.search` — what NeoDB knows about this book.
+   *
+   *  The book is read first and the network call comes after, so no database
+   *  guard is held across the await: the app's single connection serialises
+   *  everything, and a twelve-second HTTP timeout inside it would freeze the
+   *  shelf.
+   */
+  metadataSearch: (id: string) => __TAURI_INVOKE<Candidate[]>("metadata_search", { id }),
+  /**
+   *  `metadata.propose` — what a fill would add to these books, without writing.
+   *
+   *  Two requests at a time. NeoDB is a community instance, not a commercial API:
+   *  the cap is about being a good guest rather than finishing fastest, and two
+   *  still turns a forty-book batch into seconds rather than a minute.
+   */
+  metadataPropose: (ids: string[]) => __TAURI_INVOKE<Proposal[]>("metadata_propose", { ids }),
+  /**
+   *  `metadata.apply` — writes the proposals the reader accepted.
+   *
+   *  One transaction and one log entry for the whole batch, with before-images:
+   *  a fill is a bulk edit, and the reader has to be able to put it back.
+   */
+  metadataApply: (items: MetadataFill[]) => __TAURI_INVOKE<number>("metadata_apply", { items }),
   /**
    *  `ops.undo` — puts back what one call changed.
    *
@@ -1141,6 +1175,8 @@ export type BookMetadataPatch = {
   description: string | null;
   language: string | null;
   publisher: string | null;
+  isbn: string | null;
+  publishedYear: number | null;
   authors: string[];
 };
 
@@ -1242,6 +1278,16 @@ export type BookSummary = {
    */
   location: string | null;
   favorite: boolean;
+  /**
+   *  The edition's ISBN, when something actually said so.
+   *
+   *  Its own column rather than `identifier`: that one holds whatever the
+   *  file's `dc:identifier` claimed, which is sometimes an ISBN and sometimes
+   *  a UUID a converter invented.
+   */
+  isbn: string | null;
+  /**  The edition's publication year. */
+  publishedYear: number | null;
   authors: string[];
   tags: string[];
 };
@@ -1254,6 +1300,40 @@ export type Bookmark = {
   fraction: number | null;
   label: string;
   createdAt: number;
+};
+
+/**
+ *  One book as a provider described it, already normalised into the fields this
+ *  app stores.
+ */
+export type Candidate = {
+  /**
+   *  Which provider said so. The reader is entitled to know whose answer this
+   *  is before it becomes their book's metadata.
+   */
+  source: string;
+  title: string;
+  subtitle: string | null;
+  authors: string[];
+  publisher: string | null;
+  publishedYear: number | null;
+  /**  The catalogue's blurb, capped — see [`DESCRIPTION_LIMIT`]. */
+  description: string | null;
+  /**
+   *  A BCP-47-ish tag (`zh`, `en`), taken as the catalogue spells it — NeoDB
+   *  already speaks that language, unlike a MARC catalogue's `chi`/`eng`.
+   */
+  language: string | null;
+  isbn: string | null;
+  coverUrl: string | null;
+  /**
+   *  How well this matches the book that was looked up, 0..1.
+   *
+   *  A heuristic, and named for what it is: the UI says 匹配度 and never
+   *  「概率」, because a match is not a probability and a number with a percent
+   *  sign invites a trust it has not earned.
+   */
+  matchScore: number | null;
 };
 
 /**
@@ -1496,6 +1576,14 @@ export type Facet = {
   count: number;
 };
 
+/**  One field the fill would write. */
+export type Fill = {
+  /**  `publisher` or `language` — the two fields a batch can write. */
+  field: string;
+  from: string | null;
+  to: string;
+};
+
 /**  One imported font, as the settings document and the UI hold it. */
 export type Font = Font_Serialize | Font_Deserialize;
 
@@ -1728,6 +1816,21 @@ export type Lookup =
    */
   | { status: "unavailable" };
 
+/**  One book's share of a batch fill: the fields the reader accepted. */
+export type MetadataFill = {
+  id: string;
+  /**
+   *  `None` = leave it alone, which is what a proposal with nothing to say
+   *  for that field sends.
+   */
+  subtitle: string | null;
+  publisher: string | null;
+  language: string | null;
+  isbn: string | null;
+  publishedYear: number | null;
+  description: string | null;
+};
+
 /**  What one `book.migrate` carried across, for the dialog that asked for it. */
 export type Migrated = {
   annotations: number;
@@ -1833,6 +1936,20 @@ export type Outcome = {
   duplicates: number;
   books: BookOutcome[];
   unknownTitles: string[];
+};
+
+/**  What one book would gain, or why it would gain nothing. */
+export type Proposal = {
+  bookId: string;
+  bookTitle: string;
+  fills: Fill[];
+  /**
+   *  Why there is nothing to write. Shown to the reader rather than
+   *  swallowed: 「没找到」 and 「字段都已经有了」 are different answers, and a
+   *  silent skip reads as a bug.
+   */
+  skipped: string | null;
+  matchScore: number | null;
 };
 
 /**  One retrieved chunk, handed to the frontend and to the prompt builder. */

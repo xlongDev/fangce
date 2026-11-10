@@ -605,6 +605,10 @@ fn update_metadata(args: &Value, library: &Library) -> AppResult<Value> {
         description: field("description", current.description),
         language: field("language", current.language),
         publisher: field("publisher", current.publisher),
+        // Not editable through this tool yet, but they have to survive the
+        // round trip: `update_metadata` writes the whole record.
+        isbn: current.isbn,
+        published_year: current.published_year,
         authors,
     };
     library.with_tx(|tx| {

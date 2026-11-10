@@ -20,6 +20,8 @@ function book(id: string, title: string, authors: string[] = [], tags: string[] 
     progress: null,
     location: null,
     favorite: false,
+    isbn: null,
+    publishedYear: null,
     authors,
     tags,
   };

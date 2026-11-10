@@ -1,6 +1,13 @@
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowCounterClockwise, PencilSimple, Sparkle, Star, Tag } from "@phosphor-icons/react";
+import {
+  ArrowCounterClockwise,
+  PencilSimple,
+  Sparkle,
+  Star,
+  Tag,
+  MagicWand,
+} from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 
 import { GlassButton } from "@/components/glass/button";
@@ -10,7 +17,9 @@ import { AiErrorCard } from "@/components/common/AiErrorCard";
 import { useAiConfig } from "@/hooks/useAi";
 import { useSetMetadataMany } from "@/hooks/useLibrary";
 import { isDesktopRuntime, ipc } from "@/lib/ipc";
+import { demoEnabled } from "@/lib/demo";
 import { useGuideBatch } from "@/stores/guideBatch";
+import { BatchFillDialog } from "@/features/library/BatchFillDialog";
 import { BatchMetaDialog } from "@/features/library/BatchMetaDialog";
 import type { ShelfSelection } from "@/features/library/useShelfSelection";
 
@@ -44,6 +53,10 @@ export function ShelfBatchBar({
    *  per-book one: that sheet starts from one book's values, and a batch has
    *  no values to start from — only fields the reader may or may not fill. */
   const [metaOpen, setMetaOpen] = useState(false);
+  /** The catalogue fill sheet. It owns its own selection of ids, because the
+   *  batch it proposes for is fixed when it opens — a reader who ticks another
+   *  book behind the dialog is not asking for a new lookup. */
+  const [fillIds, setFillIds] = useState<string[] | null>(null);
   const setMetadataMany = useSetMetadataMany();
 
   /** Which books already have a cached guide, so the confirm dialog can skip
@@ -208,6 +221,20 @@ export function ShelfBatchBar({
                     >
                       <PencilSimple size={13} /> 编辑信息
                     </GlassButton>
+                    {/* Next to 编辑信息: the same question — "what does this
+                        book say about itself" — answered by a catalogue
+                        instead of by the reader. */}
+                    <GlassButton
+                      size="sm"
+                      variant="subtle"
+                      // Enabled in the demo build too: it serves canned
+                      // proposals, which is what lets a browser test open this
+                      // sheet at all.
+                      disabled={selection.count === 0 || (!isDesktopRuntime && !demoEnabled())}
+                      onClick={() => setFillIds(selection.selectedBooks.map((book) => book.id))}
+                    >
+                      <MagicWand size={13} /> 补全信息
+                    </GlassButton>
                     <GlassButton
                       size="sm"
                       variant="subtle"
@@ -286,6 +313,12 @@ export function ShelfBatchBar({
           </GlassButton>
         </div>
       </GlassDialog>
+
+      <BatchFillDialog
+        open={fillIds !== null}
+        ids={fillIds ?? []}
+        onClose={() => setFillIds(null)}
+      />
 
       <BatchMetaDialog
         open={metaOpen}

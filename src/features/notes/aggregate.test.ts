@@ -28,6 +28,8 @@ function book(id: string, overrides: Partial<BookSummary> = {}): BookSummary {
     progress: null,
     location: null,
     favorite: false,
+    isbn: null,
+    publishedYear: null,
     authors: [],
     tags: [],
     ...overrides,

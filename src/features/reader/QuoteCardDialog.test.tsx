@@ -56,6 +56,8 @@ const BOOK: BookSummary = {
   progress: 0.37,
   location: null,
   favorite: false,
+  isbn: null,
+  publishedYear: null,
   authors: ["刘慈欣"],
   tags: [],
 };

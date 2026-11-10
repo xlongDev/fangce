@@ -644,6 +644,25 @@ CREATE INDEX operations_book ON operations (book_id) WHERE book_id IS NOT NULL;
 CREATE INDEX operations_call ON operations (call_id);
 "#,
     },
+    Migration {
+        version: 24,
+        name: "books_isbn_and_published_year",
+        // Two fields the catalogue has and this app did not keep.
+        //
+        // `isbn` is its own column rather than a reuse of `identifier`:
+        // `identifier` is whatever the file's `dc:identifier` said, which is
+        // sometimes an ISBN and sometimes a UUID the converter invented.
+        // Storing a reader-entered ISBN in it would make 「这一列是 ISBN」 a
+        // claim that is true only sometimes.
+        //
+        // `published_year` is the edition's year, not the work's — the same
+        // distinction the provider makes, and the one a reader means when they
+        // ask when the book came out.
+        sql: r#"
+ALTER TABLE books ADD COLUMN isbn TEXT;
+ALTER TABLE books ADD COLUMN published_year INTEGER;
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.

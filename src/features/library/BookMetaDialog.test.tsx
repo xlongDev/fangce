@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -21,6 +22,8 @@ const book: BookSummary = {
   progress: null,
   location: null,
   favorite: false,
+  isbn: null,
+  publishedYear: null,
   authors: ["刘慈欣"],
   tags: [],
 };
@@ -28,7 +31,14 @@ const book: BookSummary = {
 function open(overrides: Partial<BookSummary> = {}) {
   const onSave = vi.fn();
   const onCancel = vi.fn();
-  render(<BookMetaDialog book={{ ...book, ...overrides }} onCancel={onCancel} onSave={onSave} />);
+  // The sheet holds a metadata-lookup mutation, which needs the same provider
+  // every page in the app is rendered under.
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <BookMetaDialog book={{ ...book, ...overrides }} onCancel={onCancel} onSave={onSave} />
+    </QueryClientProvider>,
+  );
   return { onSave, onCancel, user: userEvent.setup() };
 }
 
@@ -73,6 +83,8 @@ describe("BookMetaDialog — 元数据编辑表", () => {
       description: null,
       language: "zh",
       publisher: null,
+      isbn: null,
+      publishedYear: null,
       authors: ["刘慈欣"],
     });
   });

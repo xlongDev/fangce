@@ -36,6 +36,8 @@ const baseBook: BookSummary = {
   progress: null,
   location: null,
   favorite: false,
+  isbn: null,
+  publishedYear: null,
   authors: ["张三"],
   tags: [],
 };

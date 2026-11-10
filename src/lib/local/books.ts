@@ -103,6 +103,11 @@ async function importOne(file: File, seen: Set<string>): Promise<ImportOutcome> 
       description: parsed.description,
       language: parsed.language,
       publisher: parsed.publisher,
+      // The browser's importer reads what foliate gives it, which has no ISBN
+      // and no publication year. Left null rather than guessed at: a fill from
+      // the catalogue is what puts real values here.
+      isbn: null,
+      publishedYear: null,
       format: parsed.format,
       fileSize: file.size,
       addedAt: stamp,

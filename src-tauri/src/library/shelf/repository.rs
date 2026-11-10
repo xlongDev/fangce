@@ -59,6 +59,14 @@ pub struct BookSummary {
     /// other format, which restarts from `progress` alone.
     pub location: Option<String>,
     pub favorite: bool,
+    /// The edition's ISBN, when something actually said so.
+    ///
+    /// Its own column rather than `identifier`: that one holds whatever the
+    /// file's `dc:identifier` claimed, which is sometimes an ISBN and sometimes
+    /// a UUID a converter invented.
+    pub isbn: Option<String>,
+    /// The edition's publication year.
+    pub published_year: Option<i32>,
     pub authors: Vec<String>,
     pub tags: Vec<String>,
 }
@@ -295,7 +303,7 @@ pub fn cover_path(conn: &Connection, id: &str) -> AppResult<Option<PathBuf>> {
 
 const SELECT_COLUMNS: &str = "b.id, b.title, b.subtitle, b.description, b.language, b.publisher, \
      b.format, b.file_size, b.cover_path, b.added_at, b.updated_at, b.last_read_at, b.progress, \
-     b.location, b.favorite";
+     b.location, b.favorite, b.isbn, b.published_year";
 
 /// SQL conditions and their bound parameters for one shelf query.
 ///
@@ -584,6 +592,8 @@ fn summary_from_row(row: &rusqlite::Row<'_>) -> AppResult<BookSummary> {
         progress: row.get("progress")?,
         location: row.get("location")?,
         favorite: row.get::<_, i64>("favorite")? != 0,
+        isbn: row.get("isbn")?,
+        published_year: row.get("published_year")?,
         authors: Vec::new(),
         tags: Vec::new(),
     })
@@ -988,6 +998,8 @@ pub struct BookMetadataPatch {
     pub description: Option<String>,
     pub language: Option<String>,
     pub publisher: Option<String>,
+    pub isbn: Option<String>,
+    pub published_year: Option<i32>,
     pub authors: Vec<String>,
 }
 
@@ -1045,6 +1057,8 @@ pub fn update_fields_many(
             // turns it into "no value", which is how a batch clears a field.
             language: patch.language.clone().or(book.language),
             publisher: patch.publisher.clone().or(book.publisher),
+            isbn: book.isbn,
+            published_year: book.published_year,
             authors: book.authors,
         };
         update_metadata(tx, id, &merged)?;
@@ -1073,7 +1087,8 @@ pub fn update_metadata(tx: &Transaction<'_>, id: &str, patch: &BookMetadataPatch
 
     let changed = tx.execute(
         "UPDATE books SET title = ?1, sort_title = ?2, subtitle = ?3, description = ?4, \
-         language = ?5, publisher = ?6, updated_at = ?7 WHERE id = ?8",
+         language = ?5, publisher = ?6, isbn = ?7, published_year = ?8, updated_at = ?9 \
+         WHERE id = ?10",
         params![
             title,
             sort_key(title),
@@ -1081,6 +1096,8 @@ pub fn update_metadata(tx: &Transaction<'_>, id: &str, patch: &BookMetadataPatch
             blank_to_none(patch.description.as_deref()),
             blank_to_none(patch.language.as_deref()),
             blank_to_none(patch.publisher.as_deref()),
+            blank_to_none(patch.isbn.as_deref()),
+            patch.published_year,
             crate::library::now_seconds(),
             id,
         ],
@@ -1603,6 +1620,8 @@ mod tests {
             description: None,
             language: None,
             publisher: None,
+            isbn: None,
+            published_year: None,
             authors: authors.iter().map(|name| name.to_string()).collect(),
         }
     }

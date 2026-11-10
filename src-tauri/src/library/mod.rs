@@ -21,6 +21,13 @@ mod retrieval;
 mod shelf;
 mod transfer;
 
+/// Book metadata from the outside world.
+///
+/// Not under `io/`: it neither reads nor writes the library, it asks somebody
+/// else a question. The write, when the reader accepts an answer, is the same
+/// `repository::update_metadata` every other edit uses.
+pub mod metadata;
+
 /// The record of what changed.
 ///
 /// The one module that belongs to no subdirectory: every domain writes through
