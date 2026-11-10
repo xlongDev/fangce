@@ -136,6 +136,10 @@ export const DEFAULT_SETTINGS = {
     recent: shelfView("recentlyRead"),
     favorites: shelfView("recentlyAdded"),
     tags: shelfView("recentlyAdded"),
+    // The bin is read newest-deleted-first in spirit, and `recentlyAdded` is
+    // the closest order the shelf has; the bin's own order is the backend's
+    // (`deleted_at DESC`) until a reader picks something else.
+    trash: shelfView("recentlyAdded"),
   },
   notesView: { query: "", filter: "all" },
   lookupSources: { local: true, wiktionary: true, wikipedia: true, urban: false, ai: true },
@@ -144,6 +148,31 @@ export const DEFAULT_SETTINGS = {
   keyOverrides: {},
   downloadedFonts: [],
 } satisfies Partial<SettingsState>;
+
+/**
+ * Fills the keys a stored record does not have yet from the shipping default.
+ *
+ * `persist` merges the stored payload over the initial state **shallowly**, and
+ * that is only safe for additions at the top level: a payload written before
+ * `notesView` existed simply lacks the key, and the default stands. It is not
+ * safe for a key added *inside* a record — the stored `shelfViews` (four
+ * shelves) replaced the default (five), `shelfViews.trash` read as `undefined`,
+ * and 回收站 crashed on `const { search } = view`. Top-level shape changes get
+ * away with it; record-shape changes need this.
+ *
+ * `undefined` and `null` both fall back to the defaults, so a corrupted payload
+ * is a reset rather than a crash.
+ */
+export function withDefaults<T extends object>(
+  stored: Partial<T> | null | undefined,
+  defaults: T,
+): T {
+  // Normalised first rather than spread behind a `?? {}` guard: spreading
+  // `undefined` is already a no-op, and the lint is right that the guard is
+  // noise. Naming the value keeps the "no payload at all" case readable.
+  const extra: Partial<T> = stored ?? {};
+  return { ...defaults, ...extra };
+}
 
 export const useSettings = create<SettingsState>()(
   persist(
@@ -185,11 +214,25 @@ export const useSettings = create<SettingsState>()(
         set((state) => ({ downloadedFonts: state.downloadedFonts.filter((font) => font !== id) })),
     }),
     {
-      // Not bumped: the merge is shallow, so a payload written before
-      // `shelfViews` existed simply keeps the default above. Bumping without a
-      // `migrate` would instead throw every stored preference away.
+      // Not bumped: the merge below keeps whatever the stored payload has and
+      // fills the rest from the defaults, so a payload written before
+      // `shelfViews` existed — or before 回收站 was a shelf — still opens.
+      // Bumping without a `migrate` would instead throw every stored preference
+      // away.
       name: "fangce.settings",
       version: 1,
+      merge: (persisted, current) => {
+        const stored = (persisted ?? {}) as Partial<SettingsState>;
+        return {
+          ...current,
+          ...stored,
+          // One level deeper for the three records: these are the places a new
+          // key gets added, and the shallow spread above would leave it missing.
+          shelfViews: withDefaults(stored.shelfViews, current.shelfViews),
+          notesView: withDefaults(stored.notesView, current.notesView),
+          lookupSources: withDefaults(stored.lookupSources, current.lookupSources),
+        };
+      },
     },
   ),
 );

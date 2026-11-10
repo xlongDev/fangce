@@ -31,6 +31,8 @@ export function GlassMenu({
   trigger,
   align = "right",
   placement = "down",
+  widthClass = "w-56",
+  panelClassName = "glass backdrop-blur-xl",
   children,
 }: {
   /** Names the panel for assistive tech. */
@@ -40,6 +42,15 @@ export function GlassMenu({
   /** Which edge the panel hangs from. */
   align?: "left" | "right";
   placement?: "down" | "up";
+  /** The panel's width. A row of labels fits `w-56`; a panel of chips does
+   *  not, and stretching it from inside would fight this element's own. */
+  widthClass?: string;
+  /** Overrides the panel's material. Defaults to `glass`, which is the right
+   *  elevation when the panel opens over another pane (the reader's header,
+   *  the AI drawer). A panel that floats over *content* — a grid of covers —
+   *  needs a material that does not let that content read through the text,
+   *  and that is a decision only the caller can make. */
+  panelClassName?: string;
   /** Rows, normally a list of {@link GlassMenuItem}. */
   children: ReactNode;
 }) {
@@ -82,7 +93,9 @@ export function GlassMenu({
           role="menu"
           aria-label={label}
           className={cn(
-            "glass shadow-glass absolute z-50 w-56 rounded-[14px] border p-1.5 backdrop-blur-xl",
+            "shadow-glass absolute z-50 rounded-[14px] border p-1.5",
+            panelClassName,
+            widthClass,
             align === "right" ? "right-0" : "left-0",
             placement === "up" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]",
           )}

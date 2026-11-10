@@ -1,22 +1,21 @@
 import { expect, test, type Page } from "@playwright/test";
 
 /**
- * Batch delete on the browser build's own shelf — the IndexedDB one.
+ * The two-step delete on the browser build's own shelf — the IndexedDB one.
  *
- * What is pinned here is the part that used to be quadratic. `bookDeleteMany`
- * read the whole `chapters` / `annotations` / `bookmarks` stores once *per
- * book* — no store carries an index on `bookId` — so a batch out of a library
- * with rows in those stores paid one full scan of each per book, and each full
- * scan deserializes on the main thread. Fifty books out of a shelf with ten
- * thousand highlights read those ten thousand rows fifty times; that, not the
- * deleting, is what a frozen page looked like from the outside. The batch now
- * reads the library once and deletes each book's rows in a transaction per
- * store.
+ * Deleting used to be one irreversible write: the row, the bytes, the chapters,
+ * the highlights and the bookmarks all went, and a misclick cost the reader
+ * everything they had put into the book. It is now a timestamp, and the rows
+ * only leave when the bin is emptied — so this walks the whole round trip
+ * (delete → still there → restore → delete → purge → gone) and asserts the
+ * stores at every step.
+ *
+ * The rows are the point. A soft delete that forgot to teach `bookList` about
+ * the timestamp would leave the book on the shelf; one that deleted the child
+ * rows anyway would make the bin a list of books that cannot be read back.
  *
  * So the child rows are seeded straight into IndexedDB (no import writes
- * annotations), and the assertion is that they leave *with* the book: the cards
- * disappearing off the shelf is not enough on its own — an orphaned chapter row
- * would keep the book half alive, its search hits and its notes still there.
+ * annotations), and the assertions are on what each store still holds.
  */
 
 const FIXTURES = ["public/demo/short-column.epub", "public/demo/sparse-opener.epub"] as const;
@@ -180,7 +179,32 @@ async function importFixtures(page: Page): Promise<void> {
   }
 }
 
-test("a batch delete takes every book's rows with it", async ({ page }) => {
+/**
+ * Walks to another shelf and waits for the outgoing page to actually leave.
+ *
+ * The shell resolves the outlet itself and hands it to `AnimatePresence`, so
+ * the page being left keeps rendering through its exit animation — two grids,
+ * two headings and two batch bars in the DOM for a few hundred milliseconds.
+ * A locator that matches one of them would be a strict-mode violation at
+ * random, and worse, an assertion could read the shelf it is navigating *away*
+ * from. One scroller is the signal that the swap has landed — deliberately a
+ * plain CSS locator rather than a role query, because the leaving page is
+ * `aria-hidden` while it animates out and a role query would stop counting it
+ * before it has actually gone.
+ */
+async function go(page: Page, name: string): Promise<void> {
+  await page.getByRole("link", { name }).click();
+  // The destination's own heading, not just "one page is left": a click that
+  // landed on a node the previous render had already replaced leaves the old
+  // page in place, and a count of one would then pass on the page we meant to
+  // leave.
+  await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
+  await expect(page.locator("[data-shelf-scroller]")).toHaveCount(1);
+}
+
+test("a batch delete moves the books to the bin, and emptying it takes their rows", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   // No `?demo=1`: the real shelf, backed by IndexedDB.
   await page.goto("/");
@@ -219,10 +243,73 @@ test("a batch delete takes every book's rows with it", async ({ page }) => {
   // that assertion its meaning back.
   await expect(dialog).toBeHidden();
 
-  // The cards go, and the shelf comes back empty rather than half-deleted.
+  // The cards go…
   for (const title of TITLES) {
     await expect(page.getByRole("button", { name: title })).toHaveCount(0);
   }
+
+  // …but nothing else does. This is the half of the change that has to be
+  // proven from the outside: a delete that still took the rows would make the
+  // bin a list of books that cannot be read back.
+  expect(
+    await rowsLeftFor(page, ids),
+    "删除只是打时间戳，章节 / 高亮 / 书签 / 文件都得留着",
+  ).toEqual({
+    books: 2,
+    files: seeded.files,
+    chapters: seeded.chapters,
+    annotations: 2,
+    bookmarks: 2,
+  });
+
+  // Selection was spent; the mode stays open for the next batch.
+  await expect(bar).toContainText("已选 0 本");
+
+  // --- the bin ---------------------------------------------------------
+
+  await go(page, "回收站");
+  const bin = page.locator("[data-batch-bar]").filter({ hasText: "恢复" });
+  // The bin is always in selection mode: there is nothing to open there.
+  await expect(bin).toBeVisible();
+  for (const title of TITLES) {
+    await expect(page.getByRole("button", { name: title })).toBeVisible();
+  }
+
+  // Restoring is the whole point of the two-step delete, so it is walked
+  // through before the irreversible half is.
+  await bin.getByRole("button", { name: "全选" }).click();
+  await bin.getByRole("button", { name: "恢复" }).click();
+  // Waited on, not raced past: the restore is a mutation that refetches, and
+  // leaving before it lands would assert against a bin that still has books.
+  await expect(page.getByText("回收站是空的")).toBeVisible();
+
+  await go(page, "书库");
+  for (const title of TITLES) {
+    await expect(page.getByRole("button", { name: title })).toBeVisible();
+  }
+  expect(await rowsLeftFor(page, ids), "恢复之后一行都不能少").toEqual({
+    books: 2,
+    files: seeded.files,
+    chapters: seeded.chapters,
+    annotations: 2,
+    bookmarks: 2,
+  });
+
+  // Send them back and take the irreversible path.
+  await page.getByRole("button", { name: "选择", exact: true }).click();
+  const shelfBar = page.locator("[data-batch-bar]").filter({ hasText: "打标签" });
+  await shelfBar.getByRole("button", { name: "全选" }).click();
+  await shelfBar.getByRole("button", { name: "删除" }).click();
+  await dialog.getByRole("button", { name: "删除", exact: true }).click();
+  await expect(dialog).toBeHidden();
+
+  await go(page, "回收站");
+  const binBar = page.locator("[data-batch-bar]").filter({ hasText: "恢复" });
+  await binBar.getByRole("button", { name: "全选" }).click();
+  await binBar.getByRole("button", { name: "彻底删除" }).click();
+  await expect(dialog).toContainText("彻底删除选中的 2 本书？");
+  await dialog.getByRole("button", { name: "彻底删除" }).click();
+  await expect(dialog).toBeHidden();
 
   // The rows go with them — this is the assertion the old per-book scan could
   // fail: an orphaned chapter, highlight or bookmark row would keep a deleted
@@ -238,10 +325,11 @@ test("a batch delete takes every book's rows with it", async ({ page }) => {
   await expect
     .poll(() => rowsLeftFor(page, ids), {
       timeout: 15_000,
-      message: "删除后仍有书的子行残留（章节 / 高亮 / 书签 / 文件）",
+      message: "彻底删除后仍有书的子行残留（章节 / 高亮 / 书签 / 文件）",
     })
     .toEqual({ books: 0, files: 0, chapters: 0, annotations: 0, bookmarks: 0 });
 
-  // Selection was spent; the mode stays open for the next batch.
-  await expect(bar).toContainText("已选 0 本");
+  // And the bin says so, rather than showing the import prompt an empty shelf
+  // would: books do not arrive in the bin, they are sent there.
+  await expect(page.getByText("回收站是空的")).toBeVisible();
 });

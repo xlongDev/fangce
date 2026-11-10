@@ -11,6 +11,17 @@ interface ShelfSelectionOptions {
   onDelete: (ids: string[]) => void;
   /** Open the label sheet for a batch. */
   onRequestTags: (books: BookSummary[]) => void;
+  /** Take a batch back out of the bin. Only the bin passes this. */
+  onRestore?: (ids: string[]) => void;
+  /**
+   * Selection is the shelf's only interaction.
+   *
+   * The bin has no "read this book" action to offer — the file is still there
+   * but the book is not on the shelf — so a card that opened the reader would
+   * be a card that lies. It also has no way out of the mode: leaving would
+   * strand the reader on a grid where nothing responds.
+   */
+  alwaysManaging?: boolean;
 }
 
 /**
@@ -25,13 +36,16 @@ export function useShelfSelection({
   onFavorite,
   onDelete,
   onRequestTags,
+  onRestore,
+  alwaysManaging = false,
 }: ShelfSelectionOptions) {
-  const [managing, setManaging] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const managing = alwaysManaging || picking;
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const exit = useCallback(() => {
-    setManaging(false);
+    setPicking(false);
     setSelected(new Set());
     setDeleteOpen(false);
   }, []);
@@ -102,7 +116,7 @@ export function useShelfSelection({
 
   return {
     managing,
-    begin: () => setManaging(true),
+    begin: () => setPicking(true),
     exit,
     count: selected.size,
     selected,
@@ -115,6 +129,12 @@ export function useShelfSelection({
      *  sheet, the batch guide). */
     selectedBooks: list.filter((book) => selected.has(book.id)),
     favorite: (favorite: boolean) => onFavorite([...selected], favorite),
+    /** Back onto the shelf, and the selection goes with them: the rows they
+     *  pointed at are no longer in this list. */
+    restore: () => {
+      onRestore?.([...selected]);
+      setSelected(new Set());
+    },
     deleteOpen,
     openDelete: () => setDeleteOpen(true),
     closeDelete: () => setDeleteOpen(false),

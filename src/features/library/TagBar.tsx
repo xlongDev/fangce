@@ -15,10 +15,17 @@ import type { TagSummary } from "@/types/ipc";
  * about to click — and a stray click on a chip does the harmless thing.
  */
 
-const CHIP =
+/**
+ * The chip, shared with the shelf's 筛选 panel.
+ *
+ * Exported rather than copied: two filter surfaces sit one above the other on
+ * the same page, and a hover or pressed state that differs between them reads
+ * as one of the two being broken.
+ */
+export const CHIP =
   "press focus-visible:focus-ring flex h-8 items-center gap-1 rounded-full border px-3 text-xs";
-const IDLE = "glass text-text-2 hover:bg-surface-2 hover:text-text-1 cursor-pointer";
-const ON = "border-accent bg-accent-soft text-text-1";
+export const CHIP_IDLE = "glass text-text-2 hover:bg-surface-2 hover:text-text-1 cursor-pointer";
+export const CHIP_ON = "border-accent bg-accent-soft text-text-1";
 
 interface TagBarProps {
   tags: TagSummary[];
@@ -46,14 +53,14 @@ export function TagBar({ tags, selected, onSelect }: TagBarProps) {
           type="button"
           aria-pressed={selected === null}
           onClick={() => onSelect(null)}
-          className={cn(CHIP, selected === null ? ON : IDLE)}
+          className={cn(CHIP, selected === null ? CHIP_ON : CHIP_IDLE)}
         >
           全部
         </button>
 
         {tags.map((tag) =>
           tag.name === selected ? (
-            <span key={tag.id} className={cn(CHIP, ON, "pr-1.5")}>
+            <span key={tag.id} className={cn(CHIP, CHIP_ON, "pr-1.5")}>
               <span className="text-text-3">#</span>
               {tag.name}
               <span className="text-text-3 tabular-nums">{tag.count}</span>
@@ -72,7 +79,7 @@ export function TagBar({ tags, selected, onSelect }: TagBarProps) {
               type="button"
               aria-pressed={false}
               onClick={() => onSelect(tag.name)}
-              className={cn(CHIP, IDLE)}
+              className={cn(CHIP, CHIP_IDLE)}
             >
               <span className="text-text-3">#</span>
               {tag.name}

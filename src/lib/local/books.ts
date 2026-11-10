@@ -17,7 +17,9 @@ import type {
   BookSummary,
   ChapterContent,
   ChapterMeta,
+  Facet,
   ImportOutcome,
+  LibraryFacets,
   LibraryStats,
 } from "@/lib/bindings";
 import { filename } from "@/lib/filename";
@@ -211,26 +213,83 @@ async function describePdf(id: string): Promise<void> {
 }
 /* ------------------------------------------------------------------ library */
 
-/** The shelf, filtered and sorted the way the Rust query does it. */
-export async function bookList(query: BookQuery): Promise<BookSummary[]> {
-  const rows = await db.all<StoredBook>("books");
-  // The filter and the sort below read `authors` off the raw row, before
-  // `summaryOf` settles the shape — and a row written before `authorNames`
-  // existed can still hold foliate's contributor objects. The rows are fresh
-  // out of the store, so they are settled in place.
-  for (const row of rows) row.authors = authorNames(row.authors);
+/** One dimension of the shelf query, so a facet can be counted with its own
+ *  filter cleared. Mirrors `repository::Dimension` on the Rust side. */
+type Dimension = "format" | "language" | "publisher" | "status" | "cover";
+
+/** Which slice of its reading history a row is in. Same thresholds as Rust's
+ *  `ReadingStatus`: finished at 99.9%, because the last page of a real book is
+ *  often an index nobody turns to. */
+function statusOf(book: StoredBook): "unread" | "reading" | "finished" {
+  const progress = book.progress ?? 0;
+  if (progress >= 0.999) return "finished";
+  return progress > 0 ? "reading" : "unread";
+}
+
+/**
+ * Whether one row survives the shelf query.
+ *
+ * `skip` leaves one dimension out — the rule facet counting needs, and the
+ * reason this is a function rather than the inline filter `bookList` used to
+ * carry: two copies of these clauses would drift, and the shelf and its counts
+ * would disagree in a way nobody would think to test.
+ */
+function matches(
+  book: StoredBook,
+  query: BookQuery,
+  skip?: Dimension,
+  covered?: ReadonlySet<string>,
+): boolean {
+  // Which set of rows, not a narrowing of one: never skipped by `skip`, or a
+  // facet counted inside the bin would count the shelf.
+  const trashed = book.deletedAt !== undefined;
+  if (query.trash ? !trashed : trashed) return false;
+
   const needle = query.search?.trim().toLowerCase() ?? "";
   const tag = query.tag?.trim().toLowerCase() ?? "";
-  const kept = rows.filter((book) => {
-    if (query.filter === "favorites" && !book.favorite) return false;
-    if (query.filter === "recent" && book.lastReadAt === null) return false;
-    if (tag && !book.tags.some((name) => name.toLowerCase() === tag)) return false;
-    if (!needle) return true;
-    return (
-      book.title.toLowerCase().includes(needle) ||
-      book.authors.some((author) => author.toLowerCase().includes(needle))
-    );
-  });
+  if (query.filter === "favorites" && !book.favorite) return false;
+  if (query.filter === "recent" && book.lastReadAt === null) return false;
+  if (tag && !book.tags.some((name) => name.toLowerCase() === tag)) return false;
+  if (
+    needle &&
+    !book.title.toLowerCase().includes(needle) &&
+    !book.authors.some((author) => author.toLowerCase().includes(needle))
+  ) {
+    return false;
+  }
+  if (skip !== "format" && query.formats?.length && !query.formats.includes(book.format)) {
+    return false;
+  }
+  if (skip !== "language" && query.languages?.length) {
+    if (!book.language || !query.languages.includes(book.language)) return false;
+  }
+  if (skip !== "publisher" && query.publishers?.length) {
+    if (!book.publisher || !query.publishers.includes(book.publisher)) return false;
+  }
+  if (skip !== "status" && query.status && query.status !== "any") {
+    if (statusOf(book) !== query.status) return false;
+  }
+  if (skip !== "cover" && query.hasCover != null) {
+    if (covered?.has(book.id) !== query.hasCover) return false;
+  }
+  return true;
+}
+
+/** Every stored row with `authors` settled, which is what both readers below
+ *  want before they look at anything. */
+async function shelfRows(): Promise<StoredBook[]> {
+  const rows = await db.all<StoredBook>("books");
+  // A row written before `authorNames` existed can still hold foliate's
+  // contributor objects. The rows are fresh out of the store, so they are
+  // settled in place.
+  for (const row of rows) row.authors = authorNames(row.authors);
+  return rows;
+}
+
+/** The shelf, filtered and sorted the way the Rust query does it. */
+export async function bookList(query: BookQuery): Promise<BookSummary[]> {
+  const rows = await shelfRows();
+  const kept = rows.filter((book) => matches(book, query));
   const by: Record<string, (a: StoredBook, b: StoredBook) => number> = {
     recentlyAdded: (a, b) => b.addedAt - a.addedAt,
     recentlyRead: (a, b) => (b.lastReadAt ?? 0) - (a.lastReadAt ?? 0),
@@ -244,19 +303,74 @@ export async function bookList(query: BookQuery): Promise<BookSummary[]> {
   return Promise.all(kept.toSorted(compare).map(summaryOf));
 }
 
+/**
+ * Counts for the shelf's filter panel.
+ *
+ * The cover dimension is the one thing the row does not carry — the picture
+ * lives in its own store — so it is resolved once for the whole shelf. That is
+ * the same per-book read `bookList` already pays when it builds summaries, so
+ * the panel costs a second pass over a shelf the grid just walked.
+ */
+export async function bookFacets(query: BookQuery): Promise<LibraryFacets> {
+  const rows = await shelfRows();
+  const covered = new Set<string>();
+  await Promise.all(
+    rows.map(async (row) => {
+      if ((await summaryOf(row)).coverUrl) covered.add(row.id);
+    }),
+  );
+
+  const tally = (pick: (book: StoredBook) => string | null | undefined): Facet[] => {
+    const counts = new Map<string, number>();
+    for (const book of rows) {
+      if (!matches(book, query, undefined, covered)) continue;
+      const value = pick(book)?.trim();
+      if (!value) continue;
+      counts.set(value, (counts.get(value) ?? 0) + 1);
+    }
+    return [...counts]
+      .map(([value, count]) => ({ value, count }))
+      .toSorted((a, b) => b.count - a.count || a.value.localeCompare(b.value, "zh"));
+  };
+
+  // Each dimension is counted with its own filter cleared, exactly as
+  // `repository::facets` does — otherwise picking a value would hide it and
+  // leave the reader no way back.
+  const statusRows = rows.filter((book) => matches(book, query, "status", covered));
+  const coverRows = rows.filter((book) => matches(book, query, "cover", covered));
+
+  return {
+    formats: tally((book) => book.format),
+    languages: tally((book) => book.language),
+    publishers: tally((book) => book.publisher),
+    status: (["unread", "reading", "finished"] as const).map((value) => ({
+      value,
+      count: statusRows.filter((book) => statusOf(book) === value).length,
+    })),
+    covers: [
+      { value: "has", count: coverRows.filter((book) => covered.has(book.id)).length },
+      { value: "none", count: coverRows.filter((book) => !covered.has(book.id)).length },
+    ],
+  };
+}
+
 export async function bookStats(): Promise<LibraryStats> {
   const rows = await db.all<StoredBook>("books");
+  const live = rows.filter((book) => book.deletedAt === undefined);
   return {
-    total: rows.length,
-    favorites: rows.filter((book) => book.favorite).length,
-    reading: rows.filter((book) => book.lastReadAt !== null && (book.progress ?? 0) < 0.999).length,
-    finished: rows.filter((book) => (book.progress ?? 0) >= 0.999).length,
+    total: live.length,
+    favorites: live.filter((book) => book.favorite).length,
+    reading: live.filter((book) => book.lastReadAt !== null && (book.progress ?? 0) < 0.999).length,
+    finished: live.filter((book) => (book.progress ?? 0) >= 0.999).length,
+    trashed: rows.length - live.length,
   };
 }
 
 export async function bookGet(id: string): Promise<BookSummary | null> {
   const row = await bookRow(id);
-  return row ? summaryOf(row) : null;
+  // A trashed book answers the same way a missing one does — the shelf cannot
+  // show it, so the reader must not open it.
+  return row && row.deletedAt === undefined ? summaryOf(row) : null;
 }
 
 /** Everything a delete needs to know about a book's rows in the other stores.
@@ -332,28 +446,60 @@ async function deleteOneBook(id: string, context: DeleteContext): Promise<void> 
   }
 }
 
+/** Takes one book off the shelf — into the bin.
+ *
+ *  A timestamp, not a delete: the row, the bytes, the cover, the chapters and
+ *  every highlight stay, and `matches` stops answering for it. That is what
+ *  makes the undo one write.
+ */
 export async function bookDelete(id: string): Promise<void> {
-  const context = await loadDeleteContext([id]);
-  await deleteOneBook(id, context);
+  await patchBook(id, { deletedAt: now() });
 }
 
 /** The shelf's batch bar, on this side.
  *
- * One `bookDelete` per id was one full scan of three stores per book, and one
- * transaction per row: a batch of fifty books out of a large library spent
- * minutes re-reading rows it had already read, with the shelf showing nothing
- * the whole time. The batch now reads the library once, groups it in memory,
- * and deletes each book's rows in a transaction per store — the books
- * themselves in parallel.
- *
- * Still not atomic: this backend keeps its rows in separate object stores, so
- * there is no cross-store transaction to put the batch in. That is the honest
- * limit of the browser build, and the reason the desktop side gets a real one.
+ *  One write per book rather than the old per-book scan of three stores: a
+ *  trashed book keeps everything it owned, so there is nothing to collect and
+ *  nothing to unlink.
  */
 export async function bookDeleteMany(ids: string[]): Promise<void> {
+  const at = now();
+  for (const id of ids) await patchBook(id, { deletedAt: at });
+}
+
+/** Takes books back out of the bin, dropping the timestamp entirely rather
+ *  than setting it to `undefined` — an absent key is the shelf's own shape. */
+export async function bookRestore(ids: string[]): Promise<void> {
+  for (const id of ids) {
+    const row = await bookRow(id);
+    if (!row) continue;
+    const { deletedAt: _gone, ...live } = row;
+    await db.put("books", id, { ...live, updatedAt: now() });
+  }
+}
+
+/** Deletes one book and its files for good — only offered from the bin. */
+export async function bookPurge(id: string): Promise<void> {
+  const context = await loadDeleteContext([id]);
+  await deleteOneBook(id, context);
+}
+
+/** Same contract as [`bookDeleteMany`] used to have: one read of the library,
+ *  then each book's rows gone in a transaction per store. */
+export async function bookPurgeMany(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   const context = await loadDeleteContext(ids);
   await Promise.all(ids.map((id) => deleteOneBook(id, context)));
+}
+
+/** Empties the bin, returning how many books went. */
+export async function bookEmptyTrash(): Promise<number> {
+  const rows = await db.all<StoredBook>("books");
+  const ids = rows.filter((row) => row.deletedAt !== undefined).map((row) => row.id);
+  if (ids.length === 0) return 0;
+  const context = await loadDeleteContext(ids);
+  await Promise.all(ids.map((id) => deleteOneBook(id, context)));
+  return ids.length;
 }
 
 export async function bookSetFavorite(id: string, favorite: boolean): Promise<void> {

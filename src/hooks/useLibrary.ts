@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ipc, isDesktopRuntime, onDeleteProgress, onImportProgress } from "@/lib/ipc";
-import { demoBooks, demoEnabled, demoLibraryStats } from "@/lib/demo";
+import { demoBooks, demoEnabled, demoFacets, demoLibraryStats } from "@/lib/demo";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { renderFirstPagePng } from "@/lib/pdf";
 import type {
@@ -11,18 +11,56 @@ import type {
   BookSummary,
   DeleteProgress,
   ImportProgress,
+  LibraryFacets,
 } from "@/types/ipc";
 
 /** Shelf contents for one filter/sort/search combination. */
 export function useBooks(query: BookQuery) {
   return useQuery<BookSummary[]>({
-    queryKey: ["books", query.filter, query.sort, query.search ?? "", query.tag ?? ""],
+    // Every narrowing field is part of the key, or switching a filter would
+    // show the previous shelf until the next invalidation.
+    queryKey: [
+      "books",
+      query.filter,
+      query.sort,
+      query.search ?? "",
+      query.tag ?? "",
+      query.formats ?? [],
+      query.languages ?? [],
+      query.publishers ?? [],
+      query.status ?? "any",
+      query.hasCover ?? null,
+      query.trash ?? false,
+    ],
     queryFn: () => {
       // `?demo=1` is the sample shelf, and an explicit one: without it the web
       // build reads the books the reader imported here (IndexedDB), the same
       // way the desktop reads its own.
-      if (demoEnabled()) return Promise.resolve(demoBooks);
+      //
+      // The bin answers empty: the fixture is a shelf, and a demo that showed
+      // the whole library under 回收站 would be showing something the real one
+      // never would.
+      if (demoEnabled()) return Promise.resolve(query.trash ? [] : demoBooks);
       return ipc.bookList(query);
+    },
+    staleTime: 10_000,
+  });
+}
+
+/**
+ * The counts behind the shelf's 筛选 panel, for the query on screen.
+ *
+ * Takes the same `BookQuery` the shelf is showing rather than the shelf's
+ * unfiltered state: a facet is only honest next to the filters it is counted
+ * against. Shares the `["books"]` prefix, so every existing invalidation —
+ * import, edit, delete, tag change — refreshes it too.
+ */
+export function useBookFacets(query: BookQuery) {
+  return useQuery<LibraryFacets>({
+    queryKey: ["books", "facets", query],
+    queryFn: () => {
+      if (demoEnabled()) return Promise.resolve(demoFacets);
+      return ipc.bookFacets(query);
     },
     staleTime: 10_000,
   });
@@ -160,6 +198,42 @@ export function useDeleteBooks() {
   const invalidate = useInvalidateShelf();
   return useMutation({
     mutationFn: (ids: string[]) => ipc.bookDeleteMany(ids),
+    onSettled: invalidate,
+  });
+}
+
+/** Takes books back out of the bin. One command for one book and for many:
+ *  a restore cannot fail half-way through, so there is nothing to batch. */
+export function useRestoreBooks() {
+  const invalidate = useInvalidateShelf();
+  return useMutation({
+    mutationFn: (ids: string[]) => ipc.bookRestore(ids),
+    onSettled: invalidate,
+  });
+}
+
+/** Deletes one book and its files for good — only offered from the bin. */
+export function usePurgeBook() {
+  const invalidate = useInvalidateShelf();
+  return useMutation({
+    mutationFn: (id: string) => ipc.bookPurge(id),
+    onSettled: invalidate,
+  });
+}
+
+export function usePurgeBooks() {
+  const invalidate = useInvalidateShelf();
+  return useMutation({
+    mutationFn: (ids: string[]) => ipc.bookPurgeMany(ids),
+    onSettled: invalidate,
+  });
+}
+
+/** Empties the bin in one transaction, returning how many books went. */
+export function useEmptyTrash() {
+  const invalidate = useInvalidateShelf();
+  return useMutation({
+    mutationFn: () => ipc.bookEmptyTrash(),
     onSettled: invalidate,
   });
 }

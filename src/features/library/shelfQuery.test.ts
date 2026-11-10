@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { buildBookQuery, resolveTagFilter } from "@/features/library/shelfQuery";
+import {
+  NO_FILTERS,
+  activeFilterCount,
+  buildBookQuery,
+  resolveTagFilter,
+  toggleValue,
+  type ShelfFilters,
+} from "@/features/library/shelfQuery";
 
 describe("buildBookQuery", () => {
   it("forwards the sort unchanged on the `recent` filter", () => {
@@ -62,5 +69,65 @@ describe("resolveTagFilter", () => {
   it("stays on the whole shelf when nothing was remembered", () => {
     expect(resolveTagFilter(null, known)).toBeNull();
     expect(resolveTagFilter(null, undefined)).toBeNull();
+  });
+});
+
+describe("shelf filters", () => {
+  it("sends nothing the panel did not narrow", () => {
+    // An untouched panel must produce the request the shelf sent before it
+    // existed, or every reader pays for a filter they never opened.
+    const query = buildBookQuery("all", "recentlyAdded", "", null, NO_FILTERS);
+    expect(query.formats).toBeUndefined();
+    expect(query.languages).toBeUndefined();
+    expect(query.publishers).toBeUndefined();
+    expect(query.status).toBeUndefined();
+    expect(query.hasCover).toBeUndefined();
+  });
+
+  it("forwards a narrowed panel", () => {
+    const filters: ShelfFilters = {
+      formats: ["epub"],
+      languages: ["zh"],
+      publishers: [],
+      status: "reading",
+      hasCover: false,
+    };
+    expect(buildBookQuery("all", "recentlyAdded", "", null, filters)).toMatchObject({
+      formats: ["epub"],
+      languages: ["zh"],
+      publishers: undefined,
+      status: "reading",
+      hasCover: false,
+    });
+  });
+
+  it("counts dimensions, not values", () => {
+    // Two formats and one status is two things the reader switched on, and
+    // the badge has to agree with what 清空筛选 will undo.
+    expect(activeFilterCount(NO_FILTERS)).toBe(0);
+    expect(activeFilterCount({ ...NO_FILTERS, formats: ["epub", "pdf"], status: "finished" })).toBe(
+      2,
+    );
+    expect(activeFilterCount({ ...NO_FILTERS, hasCover: false })).toBe(1);
+  });
+
+  it("toggles a value without mutating the list it was given", () => {
+    const list = ["epub"];
+    expect(toggleValue(list, "pdf")).toEqual(["epub", "pdf"]);
+    expect(toggleValue(list, "epub")).toEqual([]);
+    expect(list).toEqual(["epub"]);
+  });
+
+  it("reads the bin instead of narrowing the shelf", () => {
+    // `trash` swaps the set of rows; `filter` stays `all` because 「最近」 and
+    // 「收藏」 are facts about the shelf, not about the bin.
+    const bin = buildBookQuery("trash", "recentlyAdded", "", null, NO_FILTERS);
+    expect(bin.trash).toBe(true);
+    expect(bin.filter).toBe("all");
+
+    // Every other shelf must not send it — an absent flag is what keeps an
+    // older caller's request byte-identical.
+    expect(buildBookQuery("all", "recentlyAdded", "", null).trash).toBeUndefined();
+    expect(buildBookQuery("favorites", "recentlyAdded", "", null).trash).toBeUndefined();
   });
 });

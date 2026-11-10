@@ -1,14 +1,55 @@
-import type { BookQuery, LibrarySort } from "@/types/ipc";
+import type { BookFormat, BookQuery, LibrarySort, ReadingStatus } from "@/types/ipc";
 
 /**
- * The four shelves, which are one page with a filter rather than four routes:
+ * The five shelves, which are one page with a filter rather than five routes:
  * the chrome is identical, so a route change would remount the whole grid for
  * a heading.
  *
  * `tags` is a shelf of its own because it carries a second selection (which
- * tag), which no other filter has.
+ * tag), which no other filter has. `trash` is one because it reads a different
+ * set of rows — the bin — rather than narrowing the same set.
  */
-export type LibraryFilter = "all" | "recent" | "favorites" | "tags";
+export type LibraryFilter = "all" | "recent" | "favorites" | "tags" | "trash";
+
+/**
+ * What the 筛选 panel narrows, on top of whichever shelf is open.
+ *
+ * A separate object from the shelf rather than more fields on the page state:
+ * 「清空筛选」 has to reset exactly this and nothing else, and the panel's
+ * count badge has to mean one thing.
+ */
+export interface ShelfFilters {
+  formats: BookFormat[];
+  languages: string[];
+  publishers: string[];
+  status: ReadingStatus;
+  /** `null` = don't care; `true` / `false` = has / has not. */
+  hasCover: boolean | null;
+}
+
+export const NO_FILTERS: ShelfFilters = {
+  formats: [],
+  languages: [],
+  publishers: [],
+  status: "any",
+  hasCover: null,
+};
+
+/** How many dimensions are in use — the number on the button. */
+export function activeFilterCount(filters: ShelfFilters): number {
+  return (
+    (filters.formats.length > 0 ? 1 : 0) +
+    (filters.languages.length > 0 ? 1 : 0) +
+    (filters.publishers.length > 0 ? 1 : 0) +
+    (filters.status !== "any" ? 1 : 0) +
+    (filters.hasCover !== null ? 1 : 0)
+  );
+}
+
+/** Adds `value` to the list, or takes it out when it is already there. */
+export function toggleValue<T>(list: readonly T[], value: T): T[] {
+  return list.includes(value) ? list.filter((entry) => entry !== value) : [...list, value];
+}
 
 /**
  * Build the `BookQuery` the shelf reads.
@@ -18,18 +59,33 @@ export type LibraryFilter = "all" | "recent" | "favorites" | "tags";
  * and picked, say, "文件大小" would see no change. The store's default is
  * still `recentlyRead`, so the shelf is unchanged for readers who never open
  * the dropdown; everyone else gets the sort they asked for.
+ *
+ * The narrowing fields are only sent when they are set, so an untouched panel
+ * produces the same request the shelf sent before it existed.
+ *
+ * `trash` is not a narrowing: it swaps the set of rows the query reads, and the
+ * `filter` enum is forced to `all` there because 「最近」 and 「收藏」 are facts
+ * about the shelf, not about the bin.
  */
 export function buildBookQuery(
   filter: LibraryFilter,
   sort: LibrarySort,
   search: string,
   tag: string | null,
+  filters: ShelfFilters = NO_FILTERS,
 ): BookQuery {
+  const trash = filter === "trash";
   return {
     filter: filter === "recent" || filter === "favorites" ? filter : "all",
     sort,
     search: search.trim() || undefined,
     tag: filter === "tags" ? (tag ?? undefined) : undefined,
+    formats: filters.formats.length > 0 ? filters.formats : undefined,
+    languages: filters.languages.length > 0 ? filters.languages : undefined,
+    publishers: filters.publishers.length > 0 ? filters.publishers : undefined,
+    status: filters.status === "any" ? undefined : filters.status,
+    hasCover: filters.hasCover ?? undefined,
+    trash: trash ? true : undefined,
   };
 }
 

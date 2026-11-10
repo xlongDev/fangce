@@ -13,7 +13,9 @@ import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { Trash, Upload } from "@phosphor-icons/react";
 
-import { OverlayPortal } from "@/components/glass/overlay";
+import { EmptyState } from "@/components/common/EmptyState";
+import { GlassButton } from "@/components/glass/button";
+import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
 import { ContinueReadingCard } from "@/features/library/ContinueReadingCard";
 import { DropImportOverlay } from "@/features/library/DropImportOverlay";
 import { ImportSummary } from "@/features/library/ImportSummary";
@@ -29,9 +31,11 @@ import { shelfSections } from "@/features/library/group";
 import { batchNeedsPassword } from "@/features/library/pack";
 import { editionTwins, type Edition } from "@/features/library/migrate";
 import {
+  NO_FILTERS,
   buildBookQuery,
   resolveTagFilter,
   type LibraryFilter,
+  type ShelfFilters,
 } from "@/features/library/shelfQuery";
 import { useShelfSelection } from "@/features/library/useShelfSelection";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
@@ -39,9 +43,11 @@ import { useShelfWindow } from "@/hooks/useShelfWindow";
 import { useAssignTags, useTags } from "@/hooks/useTags";
 import {
   useBooks,
+  useBookFacets,
   useDeleteBook,
   useDeleteBooks,
   useDeleteProgress,
+  useEmptyTrash,
   useExportBookFile,
   useExportPack,
   useImportBooks,
@@ -50,6 +56,8 @@ import {
   useImportShelfSync,
   useLibraryStats,
   usePdfCovers,
+  usePurgeBooks,
+  useRestoreBooks,
   useSetFavorite,
   useSetFavorites,
   useUpdateBook,
@@ -112,6 +120,9 @@ const NO_BOOKS: BookSummary[] = [];
 export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const navigate = useNavigate();
   const meta = titleForFilter(filter);
+  /** The bin: the same page reading a different set of rows. Declared first
+   *  because half of what follows asks it something. */
+  const trashed = filter === "trash";
   const scrollerRef = useRef<HTMLDivElement>(null);
   /** The card grid. Owned here and handed to `useShelfWindow`, which measures
    *  it: a ref returned by a hook cannot be told apart from the data beside it. */
@@ -176,13 +187,18 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   }, []);
 
   /** Leaving for the reader: the place is saved here, synchronously, because a
-   *  scroll listener only reports the last position it was told about. */
+   *  scroll listener only reports the last position it was told about.
+   *
+   *  A trashed book is not openable. The bin renders cards as checkboxes, so
+   *  this cannot be reached from the grid — it is the guard for the one path
+   *  that could: a card that was already mounted when the shelf changed. */
   const openBook = useCallback(
     (target: BookSummary) => {
+      if (trashed) return;
       remember();
       navigate(`/reader?book=${target.id}`);
     },
-    [navigate, remember],
+    [navigate, remember, trashed],
   );
 
   /**
@@ -237,6 +253,12 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
    *  be a queue of decisions the reader did not ask to make. */
   const [edition, setEdition] = useState<Edition | null>(null);
   const [editionError, setEditionError] = useState<string | null>(null);
+  /** The 筛选 panel's narrowing. Not persisted: it is a way of looking at the
+   *  shelf right now, and a saved one would be a shelf of its own (that is what
+   *  tags are for). */
+  const [filters, setFilters] = useState<ShelfFilters>(NO_FILTERS);
+  /** The 清空回收站 confirmation, which is the only irreversible action here. */
+  const [emptyTrashOpen, setEmptyTrashOpen] = useState(false);
 
   const tags = useTags();
   /** The label this shelf is narrowed to; see `resolveTagFilter` for why a
@@ -244,11 +266,12 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const tag = resolveTagFilter(view.tag, tags.data);
 
   const query: BookQuery = useMemo(
-    () => buildBookQuery(filter, sort, search, tag),
-    [filter, sort, search, tag],
+    () => buildBookQuery(filter, sort, search, tag, filters),
+    [filter, sort, search, tag, filters],
   );
 
   const books = useBooks(query);
+  const facets = useBookFacets(query);
   const stats = useLibraryStats();
   const assignTags = useAssignTags();
   const importBooks = useImportBooks();
@@ -260,6 +283,9 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const setFavorite = useSetFavorite();
   const setFavorites = useSetFavorites();
   const deleteBooks = useDeleteBooks();
+  const restoreBooks = useRestoreBooks();
+  const purgeBooks = usePurgeBooks();
+  const emptyTrash = useEmptyTrash();
   const updateBook = useUpdateBook();
   const progress = useImportProgress();
   const deleteProgress = useDeleteProgress();
@@ -267,7 +293,9 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   // whole batch, which on 75 books is most of a minute of a shelf that has
   // not changed.
   useImportShelfSync();
-  usePdfCovers(books.data ?? []);
+  // A trashed book needs no cover: nothing on the bin's grid opens, and the
+  // rasteriser is the expensive half of drawing a PDF tile.
+  usePdfCovers(trashed ? NO_BOOKS : (books.data ?? []));
 
   const list = useMemo(
     () => (reversed ? (books.data ?? NO_BOOKS).toReversed() : (books.data ?? NO_BOOKS)),
@@ -329,8 +357,14 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
     // books used to mean twenty IPC round trips, and each of those refreshed
     // the whole book list. The batch mutations refresh it once.
     onFavorite: (ids, favorite) => setFavorites.mutate({ ids, favorite }),
-    onDelete: (ids) => deleteBooks.mutate(ids),
+    // The bar's danger button means two different things, and the shelf knows
+    // which: on a shelf it moves books to the bin, in the bin it removes them.
+    onDelete: (ids) => (trashed ? purgeBooks.mutate(ids) : deleteBooks.mutate(ids)),
+    onRestore: (ids) => restoreBooks.mutate(ids),
     onRequestTags: setTagTarget,
+    // Nothing on a trashed book can be opened, tagged or favourited, so the
+    // bin is a selection surface and only a selection surface.
+    alwaysManaging: trashed,
   });
 
   // Native dialog picks and window drops both funnel into the same mutation.
@@ -456,6 +490,8 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         onClippings={() => setClippingsOpen(true)}
         onSource={() => setSourceOpen(true)}
         onImport={startImport}
+        trashEmpty={!stats.data || stats.data.trashed === 0}
+        onEmptyTrash={() => setEmptyTrashOpen(true)}
       />
 
       <div
@@ -482,10 +518,14 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           onDescending={(next) => update({ descending: next })}
           group={group}
           onGroup={(value) => update({ group: value })}
+          filters={filters}
+          onFilters={setFilters}
+          facets={facets.data}
           layout={shelfLayout}
           onLayout={setShelfLayout}
           managing={selection.managing}
           onToggleManaging={() => (selection.managing ? selection.exit() : selection.begin())}
+          trash={trashed}
           stats={stats.data}
         />
 
@@ -514,7 +554,9 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
             setFavorite.isPending ||
             setFavorites.isPending ||
             deleteBook.isPending ||
-            deleteBooks.isPending
+            deleteBooks.isPending ||
+            restoreBooks.isPending ||
+            purgeBooks.isPending
           }
           onToggleSelect={selection.toggle}
           onOpen={openBook}
@@ -538,13 +580,29 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           // that can help — a reader cannot retry by reloading, this is a
           // desktop app with no address bar.
           onRetry={() => void books.refetch()}
+          empty={
+            trashed ? (
+              // A bin with nothing in it must not offer the import button the
+              // empty shelf does: books do not arrive here, they are sent here.
+              <EmptyState
+                className="min-h-[40vh]"
+                icon={<Trash size={26} weight="duotone" />}
+                title="回收站是空的"
+                description="删掉的书会先放在这里，可以随时恢复。"
+              />
+            ) : undefined
+          }
         />
       </div>
 
       <ShelfBatchBar
         anchorRef={scrollerRef}
         selection={selection}
-        busy={{ favorite: setFavorites.isPending, delete: deleteBooks.isPending }}
+        busy={{
+          favorite: setFavorites.isPending,
+          delete: deleteBooks.isPending || purgeBooks.isPending,
+        }}
+        mode={trashed ? "trash" : "shelf"}
       />
 
       {sourceOpen && (
@@ -707,6 +765,42 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           })
         }
       />
+
+      {/* The one action in this page with no undo behind it, so it is the one
+          that asks. The count is in the sentence because "清空" alone does not
+          say how much is about to go. */}
+      <GlassDialog
+        open={emptyTrashOpen}
+        onOpenChange={setEmptyTrashOpen}
+        title="清空回收站？"
+        description={`回收站里的 ${stats.data?.trashed ?? 0} 本书会被彻底删除，书籍文件、封面、笔记和阅读进度会一并删除，此操作无法撤销。`}
+        widthClass="w-[min(92vw,440px)]"
+      >
+        <div className="flex justify-end gap-2">
+          <GlassButton
+            variant="subtle"
+            onClick={() => setEmptyTrashOpen(false)}
+            disabled={emptyTrash.isPending}
+          >
+            取消
+          </GlassButton>
+          <GlassButton
+            variant="ghost"
+            className="text-danger"
+            disabled={emptyTrash.isPending}
+            onClick={() =>
+              emptyTrash.mutate(undefined, {
+                onSuccess: () => {
+                  setEmptyTrashOpen(false);
+                  selection.exit();
+                },
+              })
+            }
+          >
+            清空
+          </GlassButton>
+        </div>
+      </GlassDialog>
     </div>
   );
 }

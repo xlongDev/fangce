@@ -32,6 +32,7 @@ const routes: RouteObject[] = [
       { path: "recent", element: <LibraryPage filter="recent" /> },
       { path: "favorites", element: <LibraryPage filter="favorites" /> },
       { path: "tags", element: <LibraryPage filter="tags" /> },
+      { path: "trash", element: <LibraryPage filter="trash" /> },
       { path: "notes", element: <NotesPage /> },
       { path: "reader", element: <ReaderPage /> },
       { path: "search", element: <SearchPage /> },

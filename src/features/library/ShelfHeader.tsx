@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { FilePlus, Globe, Highlighter } from "@phosphor-icons/react";
+import { FilePlus, Globe, Highlighter, Trash } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { DURATION, EASE_OUT, useMotion } from "@/lib/motion";
@@ -44,6 +44,8 @@ export function ShelfHeader({
   onClippings,
   onSource,
   onImport,
+  trashEmpty = true,
+  onEmptyTrash,
 }: {
   filter: LibraryFilter;
   meta: { title: string; subtitle: string };
@@ -51,6 +53,11 @@ export function ShelfHeader({
   onClippings: () => void;
   onSource: () => void;
   onImport: () => void;
+  /** Whether the bin is empty — the only state in which 清空回收站 has nothing
+   *  to do. Defaults to `true` so a caller that forgets cannot offer a button
+   *  that empties a bin it never measured. */
+  trashEmpty?: boolean;
+  onEmptyTrash?: () => void;
 }) {
   const m = useMotion();
   const now = useNow();
@@ -73,15 +80,33 @@ export function ShelfHeader({
           </motion.div>
         </AnimatePresence>
         <div className="flex items-center gap-2">
-          <GlassButton size="md" onClick={onClippings}>
-            <Highlighter size={15} /> 导入摘录
-          </GlassButton>
-          <GlassButton size="md" onClick={onSource}>
-            <Globe size={15} /> 在线找书
-          </GlassButton>
-          <GlassButton variant="primary" size="md" disabled={importing} onClick={onImport}>
-            <FilePlus size={15} /> 导入书籍
-          </GlassButton>
+          {/* The bin offers one action, and it is the one no other shelf has.
+              The three import buttons would be answering "how do I get a book
+              in here", which is the opposite question. */}
+          {filter === "trash" ? (
+            <GlassButton
+              size="md"
+              className="text-danger"
+              // Only one thing can make this button useless, and it is an empty
+              // bin — an import in flight has nothing to do with it.
+              disabled={trashEmpty}
+              onClick={onEmptyTrash}
+            >
+              <Trash size={15} /> 清空回收站
+            </GlassButton>
+          ) : (
+            <>
+              <GlassButton size="md" onClick={onClippings}>
+                <Highlighter size={15} /> 导入摘录
+              </GlassButton>
+              <GlassButton size="md" onClick={onSource}>
+                <Globe size={15} /> 在线找书
+              </GlassButton>
+              <GlassButton variant="primary" size="md" disabled={importing} onClick={onImport}>
+                <FilePlus size={15} /> 导入书籍
+              </GlassButton>
+            </>
+          )}
         </div>
       </div>
     </header>

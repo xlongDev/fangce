@@ -4,6 +4,8 @@ import type {
   ChapterContent,
   ChapterMeta,
   DayTotal,
+  Facet,
+  LibraryFacets,
   LibraryStats,
   ReadingStats,
 } from "@/types/ipc";
@@ -292,7 +294,51 @@ export const demoLibraryStats: LibraryStats = {
   favorites: 1,
   reading: 2,
   finished: 0,
-} as unknown as LibraryStats;
+  // The fixture has no bin: nothing in it was ever deleted.
+  trashed: 0,
+};
+
+/**
+ * Counts for the 筛选 panel in `?demo=1`.
+ *
+ * Tallying the fixture instead of calling into the browser backend: the sample
+ * shelf is a fixed array, and a demo that reaches for IndexedDB would show an
+ * empty panel the first time someone opens the page.
+ */
+/** Which slice of its reading history a sample book is in — the thresholds
+ *  `ReadingStatus` uses, so the demo panel counts what the real one would. */
+function demoStatusOf(book: BookSummary): "unread" | "reading" | "finished" {
+  const progress = book.progress ?? 0;
+  if (progress >= 0.999) return "finished";
+  return progress > 0 ? "reading" : "unread";
+}
+
+export const demoFacets: LibraryFacets = (() => {
+  const tally = (pick: (book: BookSummary) => string | null | undefined): Facet[] => {
+    const counts = new Map<string, number>();
+    for (const book of demoBooks) {
+      const value = pick(book)?.trim();
+      if (value) counts.set(value, (counts.get(value) ?? 0) + 1);
+    }
+    return [...counts]
+      .map(([value, count]) => ({ value, count }))
+      .toSorted((a, b) => b.count - a.count || a.value.localeCompare(b.value, "zh"));
+  };
+
+  return {
+    formats: tally((book) => book.format),
+    languages: tally((book) => book.language),
+    publishers: tally((book) => book.publisher),
+    status: (["unread", "reading", "finished"] as const).map((value) => ({
+      value,
+      count: demoBooks.filter((book) => demoStatusOf(book) === value).length,
+    })),
+    covers: [
+      { value: "has", count: demoBooks.filter((book) => book.coverUrl).length },
+      { value: "none", count: demoBooks.filter((book) => !book.coverUrl).length },
+    ],
+  };
+})();
 
 /**
  * Reading time for `?demo=1`: a half year with a life in it — busier weekends,

@@ -15,10 +15,12 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
 import { sortOptions } from "@/features/library/format";
 import { groupOptions, type ShelfGroup } from "@/features/library/group";
+import { ShelfFilterMenu } from "@/features/library/ShelfFilterMenu";
+import type { ShelfFilters } from "@/features/library/shelfQuery";
 import { DURATION, SPRING } from "@/lib/motion";
 import { cn } from "@/lib/cn";
 import type { useLibraryStats } from "@/hooks/useLibrary";
-import type { LibrarySort } from "@/types/ipc";
+import type { LibraryFacets, LibrarySort } from "@/types/ipc";
 
 /**
  * Search, sort, layout and the batch-manage switch — the one row of controls
@@ -33,10 +35,14 @@ export function ShelfToolbar({
   onDescending,
   group,
   onGroup,
+  filters,
+  onFilters,
+  facets,
   layout,
   onLayout,
   managing,
   onToggleManaging,
+  trash = false,
   stats,
 }: {
   search: string;
@@ -48,10 +54,16 @@ export function ShelfToolbar({
   onDescending: (value: boolean) => void;
   group: ShelfGroup;
   onGroup: (value: ShelfGroup) => void;
+  filters: ShelfFilters;
+  onFilters: (next: ShelfFilters) => void;
+  facets: LibraryFacets | undefined;
   layout: "grid" | "list";
   onLayout: (value: "grid" | "list") => void;
   managing: boolean;
   onToggleManaging: () => void;
+  /** The bin is always in selection mode — there is nothing else to do with a
+   *  trashed book — so the 选择 switch has no second state to offer. */
+  trash?: boolean;
   stats: ReturnType<typeof useLibraryStats>["data"];
 }) {
   const reduce = useReducedMotion();
@@ -208,6 +220,11 @@ export function ShelfToolbar({
         />
       </div>
 
+      {/* Narrowing. Beside 分组 because the two answer the same kind of
+          question — which books am I looking at — and apart from 排序, which
+          only decides the order they come in. */}
+      <ShelfFilterMenu filters={filters} onChange={onFilters} facets={facets} />
+
       {/* Shelf layout: grid tiles (cover-on-top) or single-column rows.
           Same `layoutId` highlight as the sidebar's theme pill: one
           stadium springs between the two cells instead of each cell
@@ -273,18 +290,28 @@ export function ShelfToolbar({
           15px the dashed frame and the arrow collapse into two brackets.
           Measured on screen, not guessed: it read as `[ ]`. A ticked box is
           the more common multi-select symbol anyway (Gmail, Notion), and the
-          word beside it now carries the meaning. */}
-      <GlassButton size="md" onClick={onToggleManaging}>
-        <CheckSquare size={15} /> {managing ? "完成" : "选择"}
-      </GlassButton>
+          word beside it now carries the meaning.
+
+          Absent in the bin, where selection is the only mode there is. */}
+      {!trash && (
+        <GlassButton size="md" onClick={onToggleManaging}>
+          <CheckSquare size={15} /> {managing ? "完成" : "选择"}
+        </GlassButton>
+      )}
 
       {/* Kept mounted and made invisible while selecting, rather than dropped:
           it is `ml-auto`, so removing it slid the button above 100px to the
           right at the exact moment the reader pressed it. */}
-      {stats && stats.total > 0 && (
+      {stats && (trash ? stats.trashed > 0 : stats.total > 0) && (
         <p className={cn("text-text-3 ml-auto text-xs", managing && "invisible")}>
-          共 {stats.total} 本{stats.reading > 0 && ` · 在读 ${stats.reading}`}
-          {stats.favorites > 0 && ` · 收藏 ${stats.favorites}`}
+          {trash ? (
+            <>共 {stats.trashed} 本</>
+          ) : (
+            <>
+              共 {stats.total} 本{stats.reading > 0 && ` · 在读 ${stats.reading}`}
+              {stats.favorites > 0 && ` · 收藏 ${stats.favorites}`}
+            </>
+          )}
         </p>
       )}
     </div>

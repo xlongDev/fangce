@@ -410,7 +410,12 @@ interface DeleteDialogProps {
   onConfirm: (book: BookSummary) => void;
 }
 
-/** Confirmation for removing a book and its files from the shelf. */
+/** Confirmation for taking a book off the shelf.
+ *
+ *  Says 「移到回收站」 and means it: the file, the highlights and the position all
+ *  survive, so the dialog no longer has to threaten the reader to be honest.
+ *  The irreversible copy lives on the bin's own confirm, where it is true.
+ */
 export function DeleteBookDialog({ book, busy, onCancel, onConfirm }: DeleteDialogProps) {
   return (
     <GlassDialog
@@ -419,7 +424,7 @@ export function DeleteBookDialog({ book, busy, onCancel, onConfirm }: DeleteDial
         if (!open) onCancel();
       }}
       title="删除这本书？"
-      description={`《${book?.title ?? ""}》会从书库中移除，对应的书籍文件和封面也会一并删除，此操作无法撤销。`}
+      description={`《${book?.title ?? ""}》会移到回收站，笔记和阅读进度都还在，可以随时恢复。`}
       widthClass="w-[min(92vw,420px)]"
     >
       <div className="flex justify-end gap-2">

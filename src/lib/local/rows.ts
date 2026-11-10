@@ -19,6 +19,12 @@ export type StoredBook = Omit<BookSummary, "coverUrl"> & {
   /** Every picture the book shows, collected at import. The lightbox walks it;
    *  the desktop keeps the same list in its own database. */
   images: BookImage[];
+  /** Unix seconds when it went to the bin; absent while it is on the shelf.
+   *
+   *  Deliberately not on `BookSummary`: the bin is a *query* here, the same way
+   *  it is on the desktop (`books_live` / `deleted_at`), and a field the shelf
+   *  renders would be a second place to keep that fact in sync. */
+  deletedAt?: number;
 };
 
 /**
@@ -30,9 +36,9 @@ export type StoredBook = Omit<BookSummary, "coverUrl"> & {
  */
 export type StoredImage = { type: string; bytes: ArrayBuffer };
 
-/** Row fields that never belong to a `BookSummary`: the table of contents and
- *  the picture list both stay in the row. */
-export const SUMMARY_KEYS = ["toc", "images"] as const;
+/** Row fields that never belong to a `BookSummary`: the table of contents, the
+ *  picture list, and when the book went to the bin. */
+export const SUMMARY_KEYS = ["toc", "images", "deletedAt"] as const;
 
 export const now = () => Math.floor(Date.now() / 1000);
 export const newId = () =>

@@ -1,7 +1,7 @@
 import type { BookFormat, BookSummary, ImportOutcome, LibrarySort } from "@/types/ipc";
 
-/** Page-level shelf filter; `tags` is still a Phase 9 placeholder. */
-export type ShelfFilter = "all" | "recent" | "favorites" | "tags";
+/** Page-level shelf filter; `trash` is the bin, which reads different rows. */
+export type ShelfFilter = "all" | "recent" | "favorites" | "tags" | "trash";
 
 const TITLES: Record<ShelfFilter, { title: string; subtitle: string }> = {
   all: { title: "书库", subtitle: "所有导入的书籍" },
@@ -13,6 +13,9 @@ const TITLES: Record<ShelfFilter, { title: string; subtitle: string }> = {
   recent: { title: "最近", subtitle: "最近读过的书" },
   favorites: { title: "收藏", subtitle: "标星的书" },
   tags: { title: "标签", subtitle: "按标签浏览" },
+  // Says the one thing that matters about the bin: the books in it can come
+  // back. 「已删除的书籍」 would be accurate and would still read as a threat.
+  trash: { title: "回收站", subtitle: "删掉的书还在，恢复即可" },
 };
 
 export function titleForFilter(filter: ShelfFilter): { title: string; subtitle: string } {

@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Sparkle, Star, Tag } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, Sparkle, Star, Tag } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 
 import { GlassButton } from "@/components/glass/button";
@@ -25,12 +25,17 @@ export function ShelfBatchBar({
   anchorRef,
   selection,
   busy,
+  mode = "shelf",
 }: {
   anchorRef: RefObject<HTMLElement | null>;
   selection: ShelfSelection;
   busy: { favorite: boolean; delete: boolean };
+  /** The bin's bar offers two actions, not six: nothing on a trashed book can
+   *  be labelled, favourited or summarised — it is not on the shelf. */
+  mode?: "shelf" | "trash";
 }) {
   const m = useMotion();
+  const trashed = mode === "trash";
   const barRef = useRef<HTMLDivElement>(null);
   const [guideConfirm, setGuideConfirm] = useState(false);
 
@@ -155,51 +160,75 @@ export function ShelfBatchBar({
                 <GlassButton size="sm" variant="subtle" onClick={selection.toggleAll}>
                   {selection.allSelected ? "取消全选" : "全选"}
                 </GlassButton>
-                <GlassButton
-                  size="sm"
-                  variant="subtle"
-                  disabled={selection.count === 0}
-                  onClick={selection.requestTags}
-                >
-                  <Tag size={13} /> 打标签
-                </GlassButton>
-                <GlassButton
-                  size="sm"
-                  variant="subtle"
-                  disabled={selection.count === 0 || busy.favorite}
-                  onClick={() => selection.favorite(true)}
-                >
-                  <Star size={13} /> 收藏
-                </GlassButton>
-                <GlassButton
-                  size="sm"
-                  variant="subtle"
-                  disabled={selection.count === 0 || busy.favorite}
-                  onClick={() => selection.favorite(false)}
-                >
-                  取消收藏
-                </GlassButton>
-                <GlassButton
-                  size="sm"
-                  variant="subtle"
-                  disabled={selection.count === 0 || inFlight || !isDesktopRuntime}
-                  onClick={openGuideConfirm}
-                >
-                  {/* Same mark as the reader's AI 导读 button. */}
-                  <Sparkle size={13} /> 生成导读
-                </GlassButton>
-                <GlassButton
-                  size="sm"
-                  variant="ghost"
-                  className="text-danger"
-                  disabled={selection.count === 0 || busy.delete}
-                  onClick={selection.openDelete}
-                >
-                  删除
-                </GlassButton>
-                <GlassButton size="sm" variant="primary" onClick={selection.exit}>
-                  完成
-                </GlassButton>
+                {trashed ? (
+                  <>
+                    <GlassButton
+                      size="sm"
+                      variant="subtle"
+                      disabled={selection.count === 0}
+                      onClick={selection.restore}
+                    >
+                      <ArrowCounterClockwise size={13} /> 恢复
+                    </GlassButton>
+                    <GlassButton
+                      size="sm"
+                      variant="ghost"
+                      className="text-danger"
+                      disabled={selection.count === 0 || busy.delete}
+                      onClick={selection.openDelete}
+                    >
+                      彻底删除
+                    </GlassButton>
+                  </>
+                ) : (
+                  <>
+                    <GlassButton
+                      size="sm"
+                      variant="subtle"
+                      disabled={selection.count === 0}
+                      onClick={selection.requestTags}
+                    >
+                      <Tag size={13} /> 打标签
+                    </GlassButton>
+                    <GlassButton
+                      size="sm"
+                      variant="subtle"
+                      disabled={selection.count === 0 || busy.favorite}
+                      onClick={() => selection.favorite(true)}
+                    >
+                      <Star size={13} /> 收藏
+                    </GlassButton>
+                    <GlassButton
+                      size="sm"
+                      variant="subtle"
+                      disabled={selection.count === 0 || busy.favorite}
+                      onClick={() => selection.favorite(false)}
+                    >
+                      取消收藏
+                    </GlassButton>
+                    <GlassButton
+                      size="sm"
+                      variant="subtle"
+                      disabled={selection.count === 0 || inFlight || !isDesktopRuntime}
+                      onClick={openGuideConfirm}
+                    >
+                      {/* Same mark as the reader's AI 导读 button. */}
+                      <Sparkle size={13} /> 生成导读
+                    </GlassButton>
+                    <GlassButton
+                      size="sm"
+                      variant="ghost"
+                      className="text-danger"
+                      disabled={selection.count === 0 || busy.delete}
+                      onClick={selection.openDelete}
+                    >
+                      删除
+                    </GlassButton>
+                    <GlassButton size="sm" variant="primary" onClick={selection.exit}>
+                      完成
+                    </GlassButton>
+                  </>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -211,8 +240,18 @@ export function ShelfBatchBar({
         onOpenChange={(next) => {
           if (!next) selection.closeDelete();
         }}
-        title={`删除选中的 ${selection.count} 本书？`}
-        description="选中的书籍会从书库中移除，对应的书籍文件和封面也会一并删除，此操作无法撤销。"
+        title={
+          trashed
+            ? `彻底删除选中的 ${selection.count} 本书？`
+            : `删除选中的 ${selection.count} 本书？`
+        }
+        // Two different sentences, because they are two different operations:
+        // one can be undone from the bin, the other cannot be undone at all.
+        description={
+          trashed
+            ? "书籍文件、封面、笔记和阅读进度会一并删除，此操作无法撤销。"
+            : "选中的书籍会移到回收站，可以随时恢复。"
+        }
         widthClass="w-[min(92vw,420px)]"
       >
         <div className="flex justify-end gap-2">
@@ -225,7 +264,7 @@ export function ShelfBatchBar({
             onClick={selection.confirmDelete}
             disabled={busy.delete}
           >
-            删除
+            {trashed ? "彻底删除" : "删除"}
           </GlassButton>
         </div>
       </GlassDialog>

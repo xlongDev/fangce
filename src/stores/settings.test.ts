@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { useCommandStore } from "@/stores/commands";
-import { DEFAULT_SETTINGS, useSettings } from "@/stores/settings";
+import { DEFAULT_SETTINGS, useSettings, withDefaults } from "@/stores/settings";
 import type { Command } from "@/lib/commands";
 
 const alpha: Command = { id: "a", title: "A", group: "g", run: () => {} };
@@ -121,5 +121,36 @@ describe("useSettings key overrides", () => {
     useSettings.getState().setKeyOverride("reader.chapter.next", [{ key: "n" }]);
     useSettings.getState().resetKeyOverrides();
     expect(useSettings.getState().keyOverrides).toEqual({});
+  });
+});
+
+describe("withDefaults", () => {
+  /** A payload written before 回收站 existed: four shelves, no `trash`. */
+  const stored = {
+    all: DEFAULT_SETTINGS.shelfViews.all,
+    recent: DEFAULT_SETTINGS.shelfViews.recent,
+    favorites: DEFAULT_SETTINGS.shelfViews.favorites,
+    tags: DEFAULT_SETTINGS.shelfViews.tags,
+  };
+
+  it("gives a record the key it was stored without", () => {
+    // The reported crash: `shelfViews.trash` was `undefined` on an existing
+    // install, and the shelf destructured it. `persist` merges shallowly, so
+    // the stored four-key record replaced the five-key default.
+    const merged = withDefaults(stored, DEFAULT_SETTINGS.shelfViews);
+    expect(merged.trash).toEqual(DEFAULT_SETTINGS.shelfViews.trash);
+    expect(merged.all).toEqual(DEFAULT_SETTINGS.shelfViews.all);
+  });
+
+  it("keeps what the reader had actually changed", () => {
+    const changed = { ...stored, all: { ...stored.all, sort: "titleAsc" as const } };
+    expect(withDefaults(changed, DEFAULT_SETTINGS.shelfViews).all.sort).toBe("titleAsc");
+  });
+
+  it("falls back to the defaults for a missing or broken record", () => {
+    expect(withDefaults(undefined, DEFAULT_SETTINGS.shelfViews)).toEqual(
+      DEFAULT_SETTINGS.shelfViews,
+    );
+    expect(withDefaults(null, DEFAULT_SETTINGS.shelfViews)).toEqual(DEFAULT_SETTINGS.shelfViews);
   });
 });

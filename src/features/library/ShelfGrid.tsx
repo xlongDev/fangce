@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 import { BookOpen, CaretDown, X } from "@phosphor-icons/react";
 
 import { EmptyState } from "@/components/common/EmptyState";
@@ -43,6 +43,7 @@ export function ShelfGrid({
   onImport,
   onClearSearch,
   onRetry,
+  empty,
 }: {
   pending: boolean;
   error: unknown;
@@ -70,6 +71,9 @@ export function ShelfGrid({
   onClearSearch: () => void;
   /** Ask the shelf's own query again, from the error state. */
   onRetry: () => void;
+  /** What an empty shelf says. Defaults to the import prompt, which is right
+   *  for every shelf that a book can arrive on and wrong for the bin. */
+  empty?: ReactNode;
 }) {
   const m = useMotion();
 
@@ -124,7 +128,7 @@ export function ShelfGrid({
   // formats the importer actually takes, and the import button — what a reader
   // who just installed this needs, which a generic empty state cannot say.
   if (list.length === 0) {
-    return <ShelfEmptyState className="min-h-[40vh]" onImport={onImport} />;
+    return empty ?? <ShelfEmptyState className="min-h-[40vh]" onImport={onImport} />;
   }
 
   return (
