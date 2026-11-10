@@ -115,6 +115,34 @@ impl Library {
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
+    /// Opens an existing database for **reading only**, without migrating it.
+    ///
+    /// The second-process path (`fangce --mcp`). The app owns this schema, and
+    /// a tool server that migrated the file out from under a running app would
+    /// be two writers agreeing on nothing — so this one refuses to be the
+    /// second writer at all: `query_only` is SQLite's own word for "I will only
+    /// read", which turns an accidental write into an error instead of a
+    /// corruption.
+    ///
+    /// `journal_mode` is not set here on purpose. WAL is a property of the file
+    /// once it has been set, and setting it again is a write.
+    pub fn open_existing(data_dir: &Path) -> AppResult<Self> {
+        let path = data_dir.join(DB_FILE);
+        if !path.exists() {
+            return Err(AppError::Message(format!(
+                "书库还没有建立：{} 不存在。先用方册打开一次，再启动工具服务。",
+                path.display()
+            )));
+        }
+        let conn = Connection::open(&path)?;
+        conn.execute_batch(
+            "PRAGMA query_only = ON;
+             PRAGMA busy_timeout = 5000;
+             PRAGMA temp_store = MEMORY;",
+        )?;
+        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
+    }
+
     /// Runs `f` with the shared connection.
     pub fn with<T>(&self, f: impl FnOnce(&Connection) -> AppResult<T>) -> AppResult<T> {
         let guard = self.lock()?;
@@ -134,6 +162,38 @@ impl Library {
     fn lock(&self) -> AppResult<MutexGuard<'_, Connection>> {
         self.conn.lock().map_err(|_| AppError::poisoned("library"))
     }
+}
+
+/// Where the app keeps its data, resolved without a running Tauri app.
+///
+/// `--mcp` runs in a bare process: no window, no webview, no `App` to ask.
+/// Tauri's `app_data_dir()` is `<OS data dir>/<bundle identifier>`, and that
+/// rule is reproduced here rather than guessed at — a tool server that read a
+/// different directory than the app writes would be worse than no tool server.
+///
+/// `FANGCE_DATA_DIR` overrides it, which is what a second library (a test one,
+/// a portable install) needs.
+pub fn data_dir() -> AppResult<PathBuf> {
+    if let Some(dir) = std::env::var_os("FANGCE_DATA_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+    // Must match `identifier` in `tauri.conf.json` — the same string
+    // `secrets.rs` keeps for the keychain entry, and for the same reason: it is
+    // this app's name on this machine.
+    const IDENTIFIER: &str = "dev.xlong.fangce";
+
+    #[cfg(target_os = "macos")]
+    let base = std::env::var_os("HOME")
+        .map(|home| PathBuf::from(home).join("Library").join("Application Support"));
+    #[cfg(target_os = "windows")]
+    let base = std::env::var_os("APPDATA").map(PathBuf::from);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let base = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| {
+        std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
+    });
+
+    let base = base.ok_or_else(|| AppError::Message("找不到用户数据目录".into()))?;
+    Ok(base.join(IDENTIFIER))
 }
 
 /// Rewrites the database when a large share of its file is free pages.

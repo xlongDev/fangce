@@ -42,6 +42,40 @@
 - **`book.emptyTrash` 有后端和测试，UI 没接按钮**：回收站里「全选 → 彻底删除」已经等价，多一个按钮只是同一条路径的第二个入口。
 - **视图用 `SELECT *`**：后续给 `books` 加列不会自动出现在视图里。这是刻意的——视图是读面，静默变宽是没人 review 过的 schema 变更。
 
+### Phase 3.1 / 3.2 — MCP 只读服务（stdio）✅
+
+| 层   | 文件                                          | 内容                                                                                                                                            |
+| ---- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| 传输 | `src-tauri/src/mcp.rs`                        | newline-delimited JSON-RPC 2.0 over stdin/stdout；`initialize` / `ping` / `tools/list` / `tools/call`；通知不回包；坏行回 `-32700` 且不中断会话 |
+| 入口 | `main.rs` + `lib.rs::run_mcp`                 | `fangce --mcp` 走一条**不启动 Tauri** 的路径（无窗口、无 webview、无事件循环）；日志强制走 stderr，stdout 只留协议                              |
+| 数据 | `db::Library::open_existing` + `db::data_dir` | 以 `PRAGMA query_only = ON` 打开已有库，**不迁移、不 VACUUM**；数据目录按 Tauri `app_data_dir` 的规则复刻，`FANGCE_DATA_DIR` 可覆盖             |
+| 工具 | `mcp.rs::run`                                 | `search_books` / `get_book` / `search_book_content` / `get_annotations` / `get_bookmarks`，全部调 `library::*`，**工具层没有自己的 SQL**        |
+| 文档 | `docs/mcp/MCP_SETUP.md`                       | 客户端配置、工具表、边界、自检命令                                                                                                              |
+
+**为什么是 stdio 不是 HTTP**：本仓目前一个监听端口都没有；stdio 天然只有启动它的进程能连，省掉 token 分发、端口冲突、防火墙例外三件事。HTTP 留到「需要多个客户端同时连」。
+
+**证据**：Rust 655 passed（`mcp::` 当时 9 个，加了 3.4/3.5 后共 17 个：握手、通知不回包、工具清单、检索不进回收站、正文检索带可定位偏移、标注/书签、缺书是 `isError` 而不是断连、未知工具是协议错误、坏行不中断）。**真实二进制跑过真实书库**：985 本书，`search_books` 返回 `total: 985`，`search_book_content("的")` 返回带 `chapterIdx` / `offset` / `chapterTitle` 的片段。
+
+**没做**：调用日志（3.1 的另一半）、`ask_library` / `export_notes`（3.3）、任务层（3.6）、设置页区块（3.7）。
+
+### Phase 3.4 / 3.5 — 权限层与第一批写工具 ✅
+
+| 层     | 位置                            | 内容                                                                                                                                                    |
+| ------ | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 权限   | `mcp.rs::Permission` / `Grants` | 四档：`read` / `search` / `write_metadata` / `delete`；**按连接**从 `FANGCE_MCP_PERMISSIONS` 读，默认 `read,search`；`all` 是简写；未知名字记日志后忽略 |
+| 暴露面 | `Server::catalogue`             | 未授予的工具**不出现在 `tools/list` 里**（能看见却调不动的工具，Agent 会一直去调）                                                                      |
+| 越权   | `Server::call_tool`             | 返回 `isError` 结果而不是协议错误，正文写明缺哪一档、当前有哪些、配置该写什么（建议值包含缺的那一档）                                                   |
+| 写工具 | `mcp.rs`                        | `update_metadata`（读—改—写，只覆盖给出的字段，空串=清空）、`manage_tags`（加/去）、`remove_books`（**移到回收站**，返回 `recoverable: true`）          |
+| 审计   | `mcp.rs::Server::record`        | 每次写追加一行 `mcp-audit.jsonl`（时间/工具/参数/结果）；读不留痕；写日志失败只记日志不报错                                                             |
+
+**为什么权限按连接而不是按应用**：读者可以给一个 Agent 只读、给另一个改元数据的权限，互不影响；而「当前这个连接能做什么」写在客户端配置里，是唯一能被看见的地方。应用级开关只会得到「我记得我关过」这类无法核对的记忆。
+
+**为什么 `search` 和 `read` 分开**：搜一次要扫所有书的正文。「只让它看我点名的那本」和「让它 grep 我整个书库」不是同一个同意。
+
+**证据**：Rust 663 passed（`mcp::` 17 个，新增：默认授予只列五个工具、越权调用给出可执行建议且不改库、单字段更新不动其它字段、空串清空、标签增删、`remove_books` 只进回收站、写留一行审计而读不留、grant 解析）。**真实二进制验证**：默认 `tools/list` 五个工具；`FANGCE_MCP_PERMISSIONS=all` 八个；越权调用真实库返回 `"read,search,delete"` 建议。
+
+**没做**：`suggest_metadata`（依赖 Phase 2 的 Provider）、`import_books`（按路径导入是另一个信任问题：路径必须落在授权目录内）、`export` / `manage_library` 两档权限（随对应工具再加——没有工具支撑的权限名是空话）。
+
 ## 1. 路线图
 
 顺序与迭代要求 §14 一致（书库 → 元数据 → MCP → 插件 → Calibre → AI 工作流），但**每阶段内部按「先数据安全、再能力」排**。
@@ -74,15 +108,15 @@
 
 **传输：先 stdio，不先 HTTP。** 理由：本仓目前零监听端口；stdio 天然只有启动它的那个 Agent 能连，省掉 token 分发、防火墙例外、端口冲突三件事。HTTP 留到「需要多个客户端同时连」时再说。
 
-| #   | 切片                                                                                                | 验收                                                                                                 |
-| --- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| 3.1 | 服务骨架 + 工具注册表 + 调用日志                                                                    | `fangce --mcp` 能被 Claude Code / Cursor 连上，`tools/list` 正确                                     |
-| 3.2 | 只读工具：`search_books` / `get_book` / `search_book_content` / `get_annotations` / `get_bookmarks` | 返回可定位的原文证据（book_id + chapter_idx + 字符区间），复用 `retrieval/search.rs`，**不新建索引** |
-| 3.3 | `ask_library`（RAG）+ `export_notes`                                                                | 回答里区分原文引用与模型推理                                                                         |
-| 3.4 | 权限层（read / search / export / write_metadata / manage_library / delete）                         | 默认只读；写权限显式开启；越权返回可读错误                                                           |
-| 3.5 | 写工具：`suggest_metadata` / `update_metadata` / `manage_tags` / `import_books` / `remove_books`    | 删除默认走软删除 + 显式确认                                                                          |
-| 3.6 | 任务层：`get_task_status` / `cancel_task`                                                           | 依赖 3.1 的任务注册表（**Phase 1.6 之前先建**）                                                      |
-| 3.7 | 设置页「开发者」区块                                                                                | 开关、状态、已连接客户端、调用历史、重置                                                             |
+| #   | 切片                                                                                                        | 验收                                                                                                 |
+| --- | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 3.1 | 服务骨架 + 工具注册表（**调用日志未做**）                                                                   | `fangce --mcp` 能被 Claude Code / Cursor 连上，`tools/list` 正确                                     |
+| 3.2 | 只读工具：`search_books` / `get_book` / `search_book_content` / `get_annotations` / `get_bookmarks` **✅**  | 返回可定位的原文证据（book_id + chapter_idx + 字符区间），复用 `retrieval/search.rs`，**不新建索引** |
+| 3.3 | `ask_library`（RAG）+ `export_notes`                                                                        | 回答里区分原文引用与模型推理                                                                         |
+| 3.4 | 权限层：`read` / `search` / `write_metadata` / `delete` **✅**                                              | 默认只读；按连接授予；越权返回可读错误（`export` / `manage_library` 随对应工具再加）                 |
+| 3.5 | 写工具：`update_metadata` / `manage_tags` / `remove_books` **✅**；`suggest_metadata` / `import_books` 未做 | 删除走软删除；每次写留一行审计                                                                       |
+| 3.6 | 任务层：`get_task_status` / `cancel_task`                                                                   | 依赖 3.1 的任务注册表（**Phase 1.6 之前先建**）                                                      |
+| 3.7 | 设置页「开发者」区块                                                                                        | 开关、状态、已连接客户端、调用历史、重置                                                             |
 
 **Phase 3 出口**：至少一个真实 MCP 客户端连上、查到真实书库、拿到可跳转的原文证据、越权被拒。
 

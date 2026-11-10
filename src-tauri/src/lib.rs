@@ -7,6 +7,7 @@ mod dictionary;
 mod document;
 mod error;
 mod library;
+mod mcp;
 mod net;
 mod resource;
 mod secrets;
@@ -22,6 +23,45 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::error::AppError;
 use crate::state::AppState;
+
+/// Run as an MCP tool server instead of a window (`fangce --mcp`).
+///
+/// Deliberately not a Tauri app: no window, no webview, no event loop. An agent
+/// that spawns this wants a pipe and an exit code, and anything else in the
+/// process is something that can print to stdout and corrupt the JSON-RPC
+/// stream. Logging still goes to stderr through `tracing`.
+pub fn run_mcp() -> i32 {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("fangce=info")),
+        )
+        // stdout is the protocol. A stray log line there is a parse error the
+        // client sees and the reader never does.
+        .with_writer(std::io::stderr)
+        .init();
+
+    let outcome = db::data_dir().and_then(|dir| {
+        let library = db::Library::open_existing(&dir)?;
+        // The grant is read once, at connect: an agent cannot widen its own
+        // permissions mid-session, and the reader changes them by editing the
+        // client's config — the only place the answer is visible.
+        let server =
+            mcp::Server::new(&library, mcp::Grants::from_env(), Some(mcp::audit_path(&dir)));
+        let stdin = std::io::stdin().lock();
+        let stdout = std::io::stdout().lock();
+        server.serve(stdin, stdout)
+    });
+
+    match outcome {
+        Ok(()) => 0,
+        Err(err) => {
+            tracing::error!(error = %err, "工具服务退出");
+            eprintln!("方册工具服务：{err}");
+            1
+        }
+    }
+}
 
 /// Boot the desktop shell.
 ///
