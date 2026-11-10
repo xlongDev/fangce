@@ -63,9 +63,9 @@ test("the fill sheet fits the window and its list scrolls", async ({ page }) => 
   // The whole blurb, not the 「将填入（N 字）」 summary.
   await expect(row).toContainText("这是一段演示用的简介");
 
-  // The rating names its source. A bare 9.2 would be read as Douban's, and
-  // Douban's is not something this app can fetch.
-  await expect(row).toContainText("NeoDB 9.2");
+  // The rating names its source. A bare number would be read as the other
+  // catalogue's — they are different numbers from different sets of people.
+  await expect(row).toContainText("豆瓣 9.1");
   await expect(row).toContainText("book.douban.com");
 
   // And it is bounded: a 1700-character blurb scrolls inside its own box.

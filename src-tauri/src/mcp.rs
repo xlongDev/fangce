@@ -611,6 +611,7 @@ fn update_metadata(args: &Value, library: &Library) -> AppResult<Value> {
         published_year: current.published_year,
         rating: current.rating,
         rating_count: current.rating_count,
+        rating_source: current.rating_source,
         douban_url: current.douban_url,
         authors,
     };

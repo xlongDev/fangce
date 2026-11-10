@@ -24,6 +24,7 @@ function book(id: string, title: string, authors: string[] = [], tags: string[] 
     publishedYear: null,
     rating: null,
     ratingCount: null,
+    ratingSource: null,
     doubanUrl: null,
     authors,
     tags,

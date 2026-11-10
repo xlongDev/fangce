@@ -16,6 +16,7 @@ function book(id: string, title: string, authors: string[] = []): BookSummary {
     publishedYear: null,
     rating: null,
     ratingCount: null,
+    ratingSource: null,
     doubanUrl: null,
   } as unknown as BookSummary;
 }

@@ -11,7 +11,15 @@ use crate::library::metadata::{self, Candidate, Lookup, Proposal, Target};
 use crate::library::{ops, repository};
 use crate::state::AppState;
 
-/// `metadata.search` — what NeoDB knows about this book.
+/// How many hits a single-book lookup opens up.
+///
+/// Three, because the reader is looking at a list and editions differ: the same
+/// title has a 2014 中信 printing and a 2017 one, and only they can say which
+/// copy is on their shelf. The batch below uses one — nobody reads forty rows
+/// of alternatives, and each one costs another request.
+const SEARCH_DEPTH: usize = 3;
+
+/// `metadata.search` — what the catalogues know about this book.
 ///
 /// The book is read first and the network call comes after, so no database
 /// guard is held across the await: the app's single connection serialises
@@ -26,10 +34,14 @@ pub async fn metadata_search(state: State<'_, AppState>, id: String) -> AppResul
         .ok_or_else(|| AppError::NotFound(id.clone()))?;
 
     let client = reqwest::Client::new();
-    metadata::search(
+    // A fresh record for a single lookup: there is no second book to spare a
+    // timeout on.
+    let attempts = metadata::Attempts::new();
+    metadata::find(
         &client,
-        metadata::NEODB,
         &Lookup { title: &book.title, authors: &book.authors },
+        SEARCH_DEPTH,
+        &attempts,
     )
     .await
 }
@@ -51,13 +63,18 @@ pub struct MetadataFill {
     pub rating: Option<f64>,
     pub rating_count: Option<i32>,
     pub douban_url: Option<String>,
+    /// `douban` or `neodb`. Stored with the number: they are different numbers
+    /// from different sets of people, and the sheet prints the source.
+    pub rating_source: Option<String>,
 }
 
 /// `metadata.propose` — what a fill would add to these books, without writing.
 ///
-/// Two requests at a time. NeoDB is a community instance, not a commercial API:
-/// the cap is about being a good guest rather than finishing fastest, and two
-/// still turns a forty-book batch into seconds rather than a minute.
+/// Four books at a time, and two requests each — Douban's autocomplete plus the
+/// record behind the hit. Measured at about 1.5 s per book end to end, so forty
+/// books land in the fifteen-second range rather than the minute it would take
+/// one at a time. Not higher: these are other people's servers, and the point of
+/// the cap is to stay welcome, not to finish first.
 #[tauri::command]
 #[specta::specta]
 pub async fn metadata_propose(
@@ -87,22 +104,27 @@ pub async fn metadata_propose(
     })?;
 
     let client = reqwest::Client::new();
+    // Shared by the whole batch: a provider that failed for book three is not
+    // asked again for book four, so forty books with the proxy off cost one
+    // timeout rather than forty.
+    let attempts = std::sync::Arc::new(metadata::Attempts::new());
     let mut proposals: Vec<Proposal> =
         futures_util::stream::iter(targets.into_iter().map(|target| {
             let client = client.clone();
+            let attempts = attempts.clone();
             async move {
                 let lookup = Lookup { title: &target.title, authors: &target.authors };
                 // A failure is reported per book, not swallowed into 「没有找到」:
                 // a reader whose network is down was being told to try a better
                 // title. One book failing still leaves the other twenty-nine
                 // worth asking about.
-                match metadata::search(&client, metadata::NEODB, &lookup).await {
+                match metadata::find(&client, &lookup, 1, &attempts).await {
                     Ok(found) => metadata::propose_for(&target, found.into_iter().next()),
                     Err(err) => metadata::propose_failed(&target, &err.to_string()),
                 }
             }
         }))
-        .buffer_unordered(2)
+        .buffer_unordered(4)
         .collect()
         .await;
 
@@ -152,6 +174,7 @@ pub fn metadata_apply(state: State<'_, AppState>, items: Vec<MetadataFill>) -> A
                 rating: None,
                 rating_count: None,
                 douban_url: None,
+                rating_source: None,
                 authors: Vec::new(),
             };
             if let Some(book) = repository::get(tx, &item.id)? {
@@ -166,6 +189,12 @@ pub fn metadata_apply(state: State<'_, AppState>, items: Vec<MetadataFill>) -> A
                 patch.rating = item.rating.or(book.rating);
                 patch.rating_count = item.rating_count.or(book.rating_count);
                 patch.douban_url = item.douban_url.clone().or(book.douban_url);
+                // The label travels with the number, or neither does: a rating
+                // whose source is unknown prints as a bare number, and a bare
+                // number gets read as Douban's.
+                patch.rating_source = item.rating_source.clone().or_else(|| {
+                    item.rating.is_some().then(|| book.rating_source.clone()).flatten()
+                });
             }
             repository::update_metadata(tx, &item.id, &patch)?;
         }
@@ -174,7 +203,7 @@ pub fn metadata_apply(state: State<'_, AppState>, items: Vec<MetadataFill>) -> A
             ops::Source::Ui,
             "fill_metadata",
             &befores,
-            &format!("从 NeoDB 补全了 {} 本", items.len()),
+            &format!("从目录补全了 {} 本", items.len()),
         )?;
         Ok(items.len())
     })

@@ -110,6 +110,7 @@ async function importOne(file: File, seen: Set<string>): Promise<ImportOutcome> 
       publishedYear: null,
       rating: null,
       ratingCount: null,
+      ratingSource: null,
       doubanUrl: null,
       format: parsed.format,
       fileSize: file.size,
@@ -526,6 +527,16 @@ export async function bookUpdate(id: string, patch: BookMetadataPatch): Promise<
     description: patch.description,
     language: patch.language,
     publisher: patch.publisher,
+    // Every field the sheet can write, not the six it used to. The rest were
+    // being dropped on the floor here: typing an ISBN in the browser build and
+    // pressing 保存 did nothing at all, and the same would have been true of a
+    // rating carried through the form.
+    isbn: patch.isbn,
+    publishedYear: patch.publishedYear,
+    rating: patch.rating,
+    ratingCount: patch.ratingCount,
+    ratingSource: patch.ratingSource,
+    doubanUrl: patch.doubanUrl,
     authors: patch.authors,
   });
 }

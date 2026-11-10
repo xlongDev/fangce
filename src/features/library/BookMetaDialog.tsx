@@ -5,6 +5,7 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
 import { useMetadataSearch } from "@/hooks/useMetadata";
+import { sourceLabel } from "@/lib/metadata";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { showToast } from "@/stores/toasts";
 import { isDesktopRuntime } from "@/lib/ipc";
@@ -105,10 +106,11 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
   const [year, setYear] = useState(book.publishedYear ? String(book.publishedYear) : "");
   /** The catalogue's snapshot: not editable, only carried. `null` when the
    *  book has none, which is also when a lookup would write it. */
-  const [rating, setRating] = useState<{ value: number | null; count: number | null }>({
-    value: book.rating,
-    count: book.ratingCount,
-  });
+  const [rating, setRating] = useState<{
+    value: number | null;
+    count: number | null;
+    source: string | null;
+  }>({ value: book.rating, count: book.ratingCount, source: book.ratingSource });
   const [douban, setDouban] = useState<string | null>(book.doubanUrl);
   /** Candidates from the last 查找, or `null` when the reader has not asked. */
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
@@ -128,6 +130,9 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
     // catalogue's rating every time the reader fixed a typo in the title.
     rating: rating.value,
     ratingCount: rating.count,
+    // The label travels with the number: it is stored, not derived, because
+    // 「豆瓣 9.2」 and 「NeoDB 9.2」 are different claims.
+    ratingSource: rating.source,
     doubanUrl: douban,
     authors: splitAuthors(authors),
   };
@@ -172,7 +177,7 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
               onClick={() => search.mutate(book.id, { onSuccess: setCandidates })}
             >
               <MagnifyingGlass size={13} />
-              {search.isPending ? "查找中…" : "从 NeoDB 查找"}
+              {search.isPending ? "查找中…" : "查找书目"}
             </GlassButton>
             {candidates !== null && (
               <span className="text-text-3 text-xs">
@@ -192,7 +197,7 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
 
         {candidates !== null && candidates.length === 0 && (
           <p className="text-text-3 text-xs leading-relaxed">
-            NeoDB 没有找到相近的书。可以换个书名再试，或者自己填。
+            目录里没有找到相近的书。可以换个书名再试，或者自己填。
           </p>
         )}
 
@@ -232,7 +237,11 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
                     // The catalogue's own rating and the Douban page it was
                     // linked from — shown read-only, saved with the form.
                     if (candidate.rating !== null) {
-                      setRating({ value: candidate.rating, count: candidate.ratingCount });
+                      setRating({
+                        value: candidate.rating,
+                        count: candidate.ratingCount,
+                        source: candidate.source,
+                      });
                     }
                     if (candidate.doubanUrl) setDouban(candidate.doubanUrl);
                     setCandidates(null);
@@ -346,15 +355,15 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
           />
         </Field>
 
-        {/* Read-only facts, and last. The rating is **NeoDB's**, never Douban's
-            — printing a bare number here would be a lie the reader has no way
-            to check, and Douban's own rating is not something this app can
-            fetch. The link is how a reader gets to the real one. */}
+        {/* Read-only facts, and last. The rating carries the name of the
+            catalogue it came from — the two have different numbers from
+            different people, and a bare number would be read as the other
+            one's. The link is how a reader gets to the page. */}
         <div className="text-text-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
           <span>添加于 {ADDED.format(new Date(book.addedAt * 1000))}</span>
           {rating.value !== null && (
             <span className="text-text-2">
-              NeoDB {rating.value.toFixed(1)}
+              {sourceLabel(rating.source)} {rating.value.toFixed(1)}
               {rating.count !== null && `（${rating.count} 人）`}
             </span>
           )}

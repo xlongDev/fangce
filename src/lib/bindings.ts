@@ -295,6 +295,14 @@ export const commands = {
        */
       rating: number | null;
       ratingCount: number | null;
+      /**
+       *  Which catalogue that rating came from: `douban` or `neodb`.
+       *
+       *  Stored rather than inferred. They are different numbers from different
+       *  sets of people, and the sheet prints the source — a label guessed at
+       *  render time would eventually print the wrong one.
+       */
+      ratingSource: string | null;
       /**  The Douban page this record was linked from, when there is one. */
       doubanUrl: string | null;
       authors: string[];
@@ -407,7 +415,7 @@ export const commands = {
   /**  `ops.list` — the newest changes, newest first. */
   opsList: (limit: number) => __TAURI_INVOKE<Operation[]>("ops_list", { limit }),
   /**
-   *  `metadata.search` — what NeoDB knows about this book.
+   *  `metadata.search` — what the catalogues know about this book.
    *
    *  The book is read first and the network call comes after, so no database
    *  guard is held across the await: the app's single connection serialises
@@ -418,9 +426,11 @@ export const commands = {
   /**
    *  `metadata.propose` — what a fill would add to these books, without writing.
    *
-   *  Two requests at a time. NeoDB is a community instance, not a commercial API:
-   *  the cap is about being a good guest rather than finishing fastest, and two
-   *  still turns a forty-book batch into seconds rather than a minute.
+   *  Four books at a time, and two requests each — Douban's autocomplete plus the
+   *  record behind the hit. Measured at about 1.5 s per book end to end, so forty
+   *  books land in the fifteen-second range rather than the minute it would take
+   *  one at a time. Not higher: these are other people's servers, and the point of
+   *  the cap is to stay welcome, not to finish first.
    */
   metadataPropose: (ids: string[]) => __TAURI_INVOKE<Proposal[]>("metadata_propose", { ids }),
   /**
@@ -1194,6 +1204,7 @@ export type BookMetadataPatch = {
    */
   rating: number | null;
   ratingCount: number | null;
+  ratingSource: string | null;
   doubanUrl: string | null;
   authors: string[];
 };
@@ -1314,6 +1325,14 @@ export type BookSummary = {
    */
   rating: number | null;
   ratingCount: number | null;
+  /**
+   *  Which catalogue that rating came from: `douban` or `neodb`.
+   *
+   *  Stored rather than inferred. They are different numbers from different
+   *  sets of people, and the sheet prints the source — a label guessed at
+   *  render time would eventually print the wrong one.
+   */
+  ratingSource: string | null;
   /**  The Douban page this record was linked from, when there is one. */
   doubanUrl: string | null;
   authors: string[];
@@ -1869,6 +1888,11 @@ export type MetadataFill = {
   rating: number | null;
   ratingCount: number | null;
   doubanUrl: string | null;
+  /**
+   *  `douban` or `neodb`. Stored with the number: they are different numbers
+   *  from different sets of people, and the sheet prints the source.
+   */
+  ratingSource: string | null;
 };
 
 /**  What one `book.migrate` carried across, for the dialog that asked for it. */
@@ -2001,6 +2025,12 @@ export type Proposal = {
   rating: number | null;
   ratingCount: number | null;
   doubanUrl: string | null;
+  /**
+   *  Which catalogue that rating came from — `douban` or `neodb`. Stored with
+   *  the number because they are different numbers from different people, and
+   *  a label that has to be guessed later is a label that will be wrong.
+   */
+  ratingSource: string | null;
 };
 
 /**  One retrieved chunk, handed to the frontend and to the prompt builder. */

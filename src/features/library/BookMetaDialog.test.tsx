@@ -26,6 +26,7 @@ const book: BookSummary = {
   publishedYear: null,
   rating: null,
   ratingCount: null,
+  ratingSource: null,
   doubanUrl: null,
   authors: ["刘慈欣"],
   tags: [],
@@ -90,6 +91,7 @@ describe("BookMetaDialog — 元数据编辑表", () => {
       publishedYear: null,
       rating: null,
       ratingCount: null,
+      ratingSource: null,
       doubanUrl: null,
       authors: ["刘慈欣"],
     });

@@ -562,6 +562,7 @@ export function demoProposals(ids: string[]): Proposal[] {
         matchScore: 0,
         rating: null,
         ratingCount: null,
+        ratingSource: null,
         doubanUrl: null,
       };
     }
@@ -583,9 +584,11 @@ export function demoProposals(ids: string[]): Proposal[] {
       skipped: null,
       matchScore: 0.92,
       // The demo shows the rating line and the Douban link, so the fixture
-      // carries them the way a real answer does.
-      rating: 9.2,
-      ratingCount: 995,
+      // carries them the way a real answer does — with 人类简史's actual Douban
+      // numbers, so the label and the page agree.
+      rating: 9.1,
+      ratingCount: 217634,
+      ratingSource: "douban",
       doubanUrl: "https://book.douban.com/subject/25985021/",
     };
   });

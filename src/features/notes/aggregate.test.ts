@@ -32,6 +32,7 @@ function book(id: string, overrides: Partial<BookSummary> = {}): BookSummary {
     publishedYear: null,
     rating: null,
     ratingCount: null,
+    ratingSource: null,
     doubanUrl: null,
     authors: [],
     tags: [],

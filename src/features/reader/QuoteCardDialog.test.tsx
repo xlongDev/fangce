@@ -60,6 +60,7 @@ const BOOK: BookSummary = {
   publishedYear: null,
   rating: null,
   ratingCount: null,
+  ratingSource: null,
   doubanUrl: null,
   authors: ["刘慈欣"],
   tags: [],

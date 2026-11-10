@@ -6,6 +6,7 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
 import { useMetadataApply, useMetadataPropose } from "@/hooks/useMetadata";
 import { cn } from "@/lib/cn";
+import { sourceLabel } from "@/lib/metadata";
 import { EASE_OUT, useMotion } from "@/lib/motion";
 import type { Fill, MetadataFill, Proposal } from "@/types/ipc";
 
@@ -39,7 +40,7 @@ const FIELD_LABELS: Record<string, string> = {
 /**
  * One run asks about this many books.
  *
- * NeoDB is a community instance rather than a commercial API, and a reader who
+ * These are other people's servers, not a commercial API, and a reader who
  * hits 全选 on a 985-book shelf would otherwise send 985 requests in one go.
  * Forty is a batch you can read the result of; the rest is another run.
  */
@@ -61,7 +62,7 @@ export function BatchFillDialog({
       onOpenChange={(next) => {
         if (!next) onClose();
       }}
-      title={`从 NeoDB 补全 ${count} 本`}
+      title={`从目录补全 ${count} 本`}
       description={
         ids.length > MAX_BATCH
           ? `只填空着的字段，不会覆盖你已经写过的内容。一次最多查 ${MAX_BATCH} 本，这次先查前 ${count} 本。`
@@ -104,9 +105,7 @@ function FillBody({ ids, onClose }: { ids: string[]; onClose: () => void }) {
 
   if (propose.isPending) {
     return (
-      <p className="text-text-2 py-6 text-center text-[13px]">
-        正在问 NeoDB…（{ids.length} 本，几秒钟）
-      </p>
+      <p className="text-text-2 py-6 text-center text-[13px]">正在查目录…（{ids.length} 本）</p>
     );
   }
 
@@ -273,7 +272,7 @@ function Row({
               {proposal.rating !== null && (
                 // Named, always: a bare number here would be read as Douban's.
                 <span className="text-text-3">
-                  NeoDB {proposal.rating.toFixed(1)}
+                  {sourceLabel(proposal.ratingSource)} {proposal.rating.toFixed(1)}
                   {proposal.ratingCount !== null && `（${proposal.ratingCount} 人）`}
                 </span>
               )}
@@ -376,6 +375,7 @@ function toFill(proposal: Proposal): MetadataFill {
     // The catalogue's snapshot travels with the fills rather than as a fill.
     rating: proposal.rating,
     ratingCount: proposal.ratingCount,
+    ratingSource: proposal.ratingSource,
     doubanUrl: proposal.doubanUrl,
   };
   for (const item of proposal.fills) {

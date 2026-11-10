@@ -685,6 +685,25 @@ ALTER TABLE books ADD COLUMN rating_count INTEGER;
 ALTER TABLE books ADD COLUMN douban_url TEXT;
 "#,
     },
+    Migration {
+        version: 26,
+        name: "books_rating_source",
+        // Which catalogue a rating came from, stored beside it.
+        //
+        // Douban and NeoDB both have ratings and they are different numbers
+        // from different sets of people — 《活着》 is 9.4 with 900k readers on
+        // Douban and 9.2 with 995 on NeoDB. The sheet prints the source, so a
+        // source that had to be guessed at render time would sometimes be
+        // wrong, and 「豆瓣 9.2」 when it is NeoDB's number is exactly the lie
+        // this column exists to prevent.
+        //
+        // Backfilled, because every rating in the database before this
+        // migration came from NeoDB — it was the only provider.
+        sql: r#"
+ALTER TABLE books ADD COLUMN rating_source TEXT;
+UPDATE books SET rating_source = 'neodb' WHERE rating IS NOT NULL;
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.
