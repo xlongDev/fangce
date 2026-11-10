@@ -2038,6 +2038,14 @@ export type Proposal = {
    *  a label that has to be guessed later is a label that will be wrong.
    */
   ratingSource: string | null;
+  /**
+   *  The fields this book already has, in the order the sheet shows them.
+   *
+   *  Shown beside what the fill would add, because 「只补了两项」 reads as a
+   *  catalogue with thin data unless the row also says the other four were
+   *  already there. Same vocabulary as [`Fill::field`].
+   */
+  existing: string[];
 };
 
 /**  One retrieved chunk, handed to the frontend and to the prompt builder. */

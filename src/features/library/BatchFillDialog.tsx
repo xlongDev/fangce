@@ -6,7 +6,7 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
 import { useMetadataApply, useMetadataPropose } from "@/hooks/useMetadata";
 import { cn } from "@/lib/cn";
-import { sourceLabel } from "@/lib/metadata";
+import { FIELD_LABELS, existingHint, sourceLabel } from "@/lib/metadata";
 import { EASE_OUT, useMotion } from "@/lib/motion";
 import type { Fill, MetadataFill, Proposal } from "@/types/ipc";
 
@@ -28,15 +28,6 @@ import type { Fill, MetadataFill, Proposal } from "@/types/ipc";
  * it could not help reads as a bug, and the reason — 没找到 / 匹配度太低 /
  * 字段都有 — is the only thing that tells the reader whether to try again.
  */
-const FIELD_LABELS: Record<string, string> = {
-  subtitle: "副标题",
-  publisher: "出版社",
-  language: "语言",
-  isbn: "ISBN",
-  publishedYear: "出版年",
-  description: "简介",
-};
-
 /**
  * One run asks about this many books.
  *
@@ -182,7 +173,12 @@ function Row({
   ticked: boolean;
   onToggle: () => void;
 }) {
-  const nothing = proposal.fills.length === 0;
+  // `hasSomething`, not `fills.length`: a book whose six fields are all there
+  // still gains a rating and a Douban link, and judging by `fills` alone made
+  // those rows render greyed out, untickable and — because the backend only
+  // sets `skipped` when there is genuinely nothing — with no reason line at
+  // all. That is the 「为什么这几行是灰的」 in the report.
+  const nothing = !hasSomething(proposal);
   /** Per-row, not per-sheet: opening one book's 简介 must not open the other
    *  twenty-four. */
   const [open, setOpen] = useState(false);
@@ -281,6 +277,11 @@ function Row({
                   {FIELD_LABELS[fill.field] ?? fill.field} → {preview(fill)}
                 </span>
               ))}
+              {/* What this book already has, so 「只补两项」 reads as 「另外四项
+                  本来就有」 rather than as a catalogue with thin data. */}
+              {existingHint(proposal.existing) && (
+                <span className="text-text-3">{existingHint(proposal.existing)}</span>
+              )}
             </span>
           )}
         </button>
@@ -310,6 +311,18 @@ function Row({
             className="overflow-hidden"
           >
             <dl className="mx-1.5 mb-2 ml-8 space-y-1.5">
+              {/* The rating is written too, so it belongs in the list of things
+                  that will happen. Without it, a book whose only gain is a
+                  rating expanded into an empty panel. */}
+              {typeof proposal.rating === "number" && (
+                <div className="flex gap-3">
+                  <dt className="text-text-3 w-12 shrink-0 text-[11px] leading-5">评分</dt>
+                  <dd className="text-text-1 min-w-0 flex-1 text-[12px] leading-5">
+                    {sourceLabel(proposal.ratingSource)} {proposal.rating.toFixed(1)}
+                    {typeof proposal.ratingCount === "number" && `（${proposal.ratingCount} 人）`}
+                  </dd>
+                </div>
+              )}
               {proposal.doubanUrl && (
                 <div className="flex gap-3">
                   <dt className="text-text-3 w-12 shrink-0 text-[11px] leading-5">豆瓣</dt>
@@ -322,7 +335,11 @@ function Row({
                 fill.field === "description" ? (
                   <div key={fill.field}>
                     <dt className="text-text-3 text-[11px]">简介</dt>
-                    <dd className="text-text-1 bg-surface-1 border-hairline mt-1 max-h-28 overflow-y-auto rounded-md border p-2 text-[12px] leading-relaxed whitespace-pre-wrap">
+                    {/* `surface-3`, not `surface-1`: this is a paragraph the
+                        reader is meant to read, and surface-1 is 58% opaque —
+                        saturated book covers showed straight through the
+                        words. The opaque step is what a reading surface gets. */}
+                    <dd className="text-text-1 bg-surface-3 border-hairline mt-1 max-h-28 overflow-y-auto rounded-md border p-2 text-[12px] leading-relaxed whitespace-pre-wrap">
                       {fill.to}
                     </dd>
                   </div>

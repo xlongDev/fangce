@@ -66,6 +66,11 @@ test("the fill sheet fits the window and its list scrolls", async ({ page }) => 
   // The rating names its source. A bare number would be read as the other
   // catalogue's — they are different numbers from different sets of people.
   await expect(row).toContainText("豆瓣 9.1");
+
+  // And it says what the fill is *not* touching: a row offering two fields
+  // reads as a catalogue with thin data unless it also says the other ones
+  // were already there.
+  await expect(row).toContainText("已有 ISBN、出版年");
   await expect(row).toContainText("book.douban.com");
 
   // And it is bounded: a 1700-character blurb scrolls inside its own box.

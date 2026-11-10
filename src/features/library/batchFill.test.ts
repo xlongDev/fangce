@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { preview } from "@/features/library/BatchFillDialog";
-import type { Fill } from "@/types/ipc";
+import { hasSomething, preview } from "@/features/library/BatchFillDialog";
+import { existingHint } from "@/lib/metadata";
+import type { Fill, Proposal } from "@/types/ipc";
 
 const fill = (field: string, to: string): Fill => ({ field, from: null, to });
 
@@ -24,5 +25,53 @@ describe("preview", () => {
 
   it("keeps the year readable", () => {
     expect(preview(fill("publishedYear", "2014"))).toBe("2014");
+  });
+});
+
+const proposal = (over: Partial<Proposal>): Proposal => ({
+  bookId: "b1",
+  bookTitle: "三体",
+  fills: [],
+  skipped: null,
+  matchScore: 0.95,
+  rating: null,
+  ratingCount: null,
+  ratingSource: null,
+  doubanUrl: null,
+  existing: [],
+  ...over,
+});
+
+describe("existingHint", () => {
+  it("names what the fill will not touch", () => {
+    expect(existingHint(["publisher", "language"])).toBe("已有 出版社、语言");
+  });
+
+  it("says nothing when the book has nothing", () => {
+    expect(existingHint([])).toBeNull();
+  });
+
+  // One row, one line: six names would push the summary onto three lines and
+  // bury the part that is actually changing.
+  it("summarises a long list", () => {
+    const hint = existingHint(["subtitle", "publisher", "language", "isbn", "publishedYear"]);
+    expect(hint).toBe("已有 副标题、出版社 等 5 项");
+  });
+});
+
+describe("hasSomething", () => {
+  // The regression this exists for: a book whose six fields are all filled
+  // still gains a rating, and judging by `fills` alone rendered it greyed out,
+  // untickable, with no reason line — 「为什么这几行是灰的」.
+  it("counts a rating with no fields as something to write", () => {
+    expect(hasSomething(proposal({ rating: 9.1, ratingCount: 217634 }))).toBe(true);
+  });
+
+  it("counts a Douban link on its own", () => {
+    expect(hasSomething(proposal({ doubanUrl: "https://book.douban.com/subject/1/" }))).toBe(true);
+  });
+
+  it("is false only when there is nothing at all", () => {
+    expect(hasSomething(proposal({}))).toBe(false);
   });
 });

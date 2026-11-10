@@ -296,6 +296,12 @@ pub struct Proposal {
     /// the number because they are different numbers from different people, and
     /// a label that has to be guessed later is a label that will be wrong.
     pub rating_source: Option<String>,
+    /// The fields this book already has, in the order the sheet shows them.
+    ///
+    /// Shown beside what the fill would add, because 「只补了两项」 reads as a
+    /// catalogue with thin data unless the row also says the other four were
+    /// already there. Same vocabulary as [`Fill::field`].
+    pub existing: Vec<String>,
 }
 
 /// Below this a candidate is not offered at all.
@@ -360,11 +366,27 @@ pub fn propose_failed(target: &Target, reason: &str) -> Proposal {
         rating_count: None,
         douban_url: None,
         rating_source: None,
+        existing: Vec::new(),
     }
 }
 
 /// Turns one book's best candidate into a proposal, or into a reason.
 pub fn propose_for(target: &Target, best: Option<Candidate>) -> Proposal {
+    // What the book already has, in the sheet's order. Computed before the
+    // match so an early return still reports it.
+    let existing: Vec<String> = [
+        ("subtitle", target.subtitle.is_some()),
+        ("publisher", target.publisher.is_some()),
+        ("language", target.language.is_some()),
+        ("isbn", target.isbn.is_some()),
+        ("publishedYear", target.published_year.is_some()),
+        ("description", target.description.is_some()),
+    ]
+    .into_iter()
+    .filter(|(_, has)| *has)
+    .map(|(field, _)| field.to_string())
+    .collect();
+
     let (fills, skipped, match_score, rating, rating_count, douban_url, rating_source) = match best
     {
         None => (Vec::new(), Some("没有找到相近的书".to_string()), 0.0, None, None, None, None),
@@ -402,6 +424,7 @@ pub fn propose_for(target: &Target, best: Option<Candidate>) -> Proposal {
         rating_count,
         douban_url,
         rating_source,
+        existing,
     }
 }
 
@@ -1663,6 +1686,36 @@ mod tests {
         assert_eq!(year_of(""), None);
         assert_eq!(year_of("201"), None);
         assert_eq!(year_of("再版"), None);
+    }
+
+    /// 「已有 …」 — what the row is not going to touch.
+    #[test]
+    fn a_proposal_says_what_the_book_already_has() {
+        let mut book = target(None, None);
+        book.subtitle = Some("从动物到上帝".into());
+        book.isbn = Some("9787508647357".into());
+        let proposal = propose_for(&book, Some(candidate(Some("中信出版社"), None, 0.95)));
+        assert_eq!(proposal.existing, ["subtitle", "isbn"], "按表单顺序，不是按有无");
+        // And the fill is still only the empty ones.
+        assert!(proposal.fills.iter().all(|fill| fill.field != "subtitle"));
+    }
+
+    /// A book with every field filled still gains a rating — so it is not
+    /// 「没事可做」, and the row has to stay tickable.
+    #[test]
+    fn a_book_with_every_field_but_no_rating_still_has_something_to_write() {
+        let mut book = target(Some("中信出版社"), Some("zh"));
+        book.subtitle = Some("从动物到上帝".into());
+        book.isbn = Some("9787508647357".into());
+        book.published_year = Some(2014);
+        book.description = Some("简介".into());
+        let mut found = candidate(None, None, 0.95);
+        found.rating = Some(9.1);
+        let proposal = propose_for(&book, Some(found));
+        assert!(proposal.fills.is_empty());
+        assert_eq!(proposal.rating, Some(9.1));
+        assert_eq!(proposal.skipped, None, "有评分可写，就不是「可补的字段都已经有了」");
+        assert_eq!(proposal.existing.len(), 6);
     }
 
     /// The label is only correct if it travels with the number.
