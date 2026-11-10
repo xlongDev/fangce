@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArrowsClockwise,
   ArrowSquareOut,
   BookOpenText,
+  ClockCounterClockwise,
   CloudArrowUp,
   Monitor,
   Moon,
@@ -35,6 +36,7 @@ import { useDownloadCatalogFont, useRemoveCatalogFont } from "@/hooks/useCatalog
 import { CATALOG_FONTS, catalogSheetBytes, type CatalogFont } from "@/lib/fontCatalog";
 import { useUpdater, type UpdateState } from "@/stores/updater";
 import { useExportBackup, useStageBackup } from "@/hooks/useBackup";
+import { useOperations, useUndoOperation } from "@/hooks/useLibrary";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { acceptOf, pickFiles as pickBrowserFiles } from "@/lib/pickFile";
 import { formatFileSize } from "@/features/library/format";
@@ -50,7 +52,7 @@ import {
 import { AiSection } from "@/features/settings/ai/AiForm";
 import { KeymapSection } from "@/features/settings/KeymapSection";
 import { SecretsNotice } from "@/features/settings/SecretsNotice";
-import type { SyncChange, SyncConfig, SyncReport, SyncTally } from "@/types/ipc";
+import type { Operation, SyncChange, SyncConfig, SyncReport, SyncTally } from "@/types/ipc";
 import { cn } from "@/lib/cn";
 import { SPRING } from "@/lib/motion";
 
@@ -369,6 +371,7 @@ export function SettingsPage() {
             <FontSection />
             <SyncSection />
             <BackupSection />
+            <OperationsSection />
             <ResetSection />
             <AboutSection />
           </div>
@@ -617,6 +620,134 @@ function stamp(): string {
  * in. "Restore" promises a state, not a list, and a reader who has spent an
  * evening tuning typography needs to know whether their books survive it.
  */
+/**
+ * 操作记录: what changed, when, and by whom.
+ *
+ * The answer to a question this app could not answer until an agent could
+ * write: 「昨天谁把这三十本的出版社改了」. Newest first, because that is how
+ * someone looks for what happened while they were away.
+ *
+ * The MCP badge is the only source marker. A row without one was the reader's
+ * own doing, which needs no label — a log that says 「你」 on every line of a
+ * page you just turned is noise.
+ */
+function OperationsSection() {
+  const { data, isPending, isError } = useOperations(50);
+  const undo = useUndoOperation();
+  const calls = useMemo(() => groupByCall(data ?? []), [data]);
+
+  return (
+    <SettingsGroup
+      id="operations"
+      icon={ClockCounterClockwise}
+      title="操作记录"
+      description="最近改过哪些书、什么时候、由谁改的。只记改动，不记阅读。"
+    >
+      {!isDesktopRuntime ? (
+        <p className="text-text-3 px-5 py-3 text-[13px]">操作记录只在桌面版里保存。</p>
+      ) : isPending ? (
+        <p className="text-text-3 px-5 py-3 text-[13px]">正在读取…</p>
+      ) : isError ? (
+        <p className="text-text-3 px-5 py-3 text-[13px]">
+          这次没有读出来，离开这一页再回来试一次。
+        </p>
+      ) : calls.length === 0 ? (
+        <p className="text-text-3 px-5 py-3 text-[13px]">
+          还没有记录。改一本书的信息、贴个标签、或者删一本书，都会记在这里。
+        </p>
+      ) : (
+        <ul className="divide-hairline divide-y">
+          {calls.map((call) => (
+            <li key={call.callId} className="flex items-center gap-3 px-5 py-2 text-[13px]">
+              <time className="text-text-3 w-24 shrink-0 tabular-nums">
+                {WHEN.format(new Date(call.at * 1000))}
+              </time>
+              <span className="text-text-1 min-w-0 flex-1 truncate">{call.summary}</span>
+              <span
+                className="text-text-2 max-w-36 shrink-0 truncate"
+                title={call.title ?? undefined}
+              >
+                {call.count > 1 ? `共 ${call.count} 本` : (call.title ?? "—")}
+              </span>
+              {call.source === "mcp" && (
+                <span className="border-hairline text-text-3 shrink-0 rounded-full border px-1.5 text-[11px]">
+                  MCP
+                </span>
+              )}
+              {/* Only for a change that stored what it replaced. A deleted book
+                  is not "undone" here — 回收站 is the way back from that, and
+                  two undos for one action would be one too many. */}
+              {call.undoable && (
+                <GlassButton
+                  size="sm"
+                  variant="subtle"
+                  disabled={undo.isPending}
+                  onClick={() => undo.mutate(call.callId)}
+                >
+                  撤销
+                </GlassButton>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </SettingsGroup>
+  );
+}
+
+/** One log entry per call, not per book.
+ *
+ * A batch of thirty books is thirty rows that share a `call_id`; listing them
+ * separately would bury the last week under one afternoon's tidy-up, and would
+ * offer thirty undo buttons for the one action the reader took.
+ *
+ * The rows arrive newest-first with each call's rows adjacent (they share `at`
+ * and are written in one pass), so a single walk is enough — no grouping map,
+ * no re-sorting.
+ */
+export interface OperationCall {
+  callId: string;
+  at: number;
+  summary: string;
+  source: string;
+  title: string | null;
+  count: number;
+  undoable: boolean;
+}
+
+export function groupByCall(rows: Operation[]): OperationCall[] {
+  const out: OperationCall[] = [];
+  for (const row of rows) {
+    const last = out.at(-1);
+    if (last && last.callId === row.callId) {
+      last.count += 1;
+      // One un-undoable book makes the whole call un-undoable: a half-restored
+      // batch is worse than an honest "this one cannot be put back".
+      last.undoable = last.undoable && row.undoable;
+      continue;
+    }
+    out.push({
+      callId: row.callId,
+      at: row.at,
+      summary: row.summary,
+      source: row.source,
+      title: row.bookTitle,
+      count: 1,
+      undoable: row.undoable,
+    });
+  }
+  return out;
+}
+
+/** Month and minute: the year is almost always this one, and a log that
+ *  repeats it on every line spends the widest column on the least useful part. */
+const WHEN = new Intl.DateTimeFormat("zh-CN", {
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
 function ResetSection() {
   const [asking, setAsking] = useState(false);
 

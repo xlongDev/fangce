@@ -14,7 +14,7 @@ use crate::error::{AppError, AppResult};
 use crate::library::chapters;
 use crate::library::import::{self, ImportOutcome};
 use crate::library::repository::{self, BookQuery, BookSummary, LibraryFacets, LibraryStats};
-use crate::library::{self};
+use crate::library::{self, ops};
 use crate::state::AppState;
 
 /// Emitted once per file while an import batch runs.
@@ -332,9 +332,14 @@ pub struct Migrated {
 #[specta::specta]
 pub async fn book_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     let library = state.library.clone();
-    tauri::async_runtime::spawn_blocking(move || library::delete_book(&library, &id))
-        .await
-        .map_err(|err| AppError::Message(format!("删除任务被中断：{err}")))?
+    tauri::async_runtime::spawn_blocking(move || {
+        library::delete_book(&library, &id)?;
+        library.with(|conn| {
+            ops::record(conn, ops::Source::Ui, "trash", std::slice::from_ref(&id), "移到回收站")
+        })
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("删除任务被中断：{err}")))?
 }
 
 /// `book.deleteMany` — the shelf's batch bar.
@@ -363,7 +368,8 @@ pub async fn book_delete_many(
                 DELETE_PROGRESS_EVENT,
                 DeleteProgress { done, total, path: path.to_string() },
             );
-        })
+        })?;
+        library.with(|conn| ops::record(conn, ops::Source::Ui, "trash", &ids, "移到回收站"))
     })
     .await
     .map_err(|err| AppError::Message(format!("删除任务被中断：{err}")))?
@@ -381,7 +387,31 @@ pub fn book_set_metadata_many(
     ids: Vec<String>,
     patch: crate::library::repository::BookFieldsPatch,
 ) -> AppResult<usize> {
-    library::set_metadata_fields(&state.library, &ids, &patch)
+    let summary = match (&patch.publisher, &patch.language) {
+        (Some(publisher), None) => format!("批量改出版社：{publisher}"),
+        (None, Some(language)) => format!("批量改语言：{language}"),
+        (Some(publisher), Some(language)) => format!("批量改出版社：{publisher}，语言：{language}"),
+        (None, None) => "批量改书籍信息".to_string(),
+    };
+    // Before the write, for the same reason as the single-book path.
+    let befores: Vec<ops::Before> = state.library.with(|conn| {
+        let mut out = Vec::new();
+        for id in &ids {
+            if let Some(book) = crate::library::repository::get(conn, id)? {
+                out.push(ops::Before {
+                    book_id: id.clone(),
+                    publisher: book.publisher,
+                    language: book.language,
+                });
+            }
+        }
+        Ok(out)
+    })?;
+    let written = library::set_metadata_fields(&state.library, &ids, &patch)?;
+    state.library.with(|conn| {
+        ops::record_before(conn, ops::Source::Ui, "batch_metadata", &befores, &summary)
+    })?;
+    Ok(written)
 }
 
 /// `book.restore` — takes books back out of the trash.
@@ -392,7 +422,8 @@ pub fn book_set_metadata_many(
 #[tauri::command]
 #[specta::specta]
 pub fn book_restore(state: State<'_, AppState>, ids: Vec<String>) -> AppResult<()> {
-    library::restore_books(&state.library, &ids)
+    library::restore_books(&state.library, &ids)?;
+    state.library.with(|conn| ops::record(conn, ops::Source::Ui, "restore", &ids, "从回收站恢复"))
 }
 
 /// `book.purge` — deletes one book and its files, for good.
@@ -402,9 +433,16 @@ pub fn book_restore(state: State<'_, AppState>, ids: Vec<String>) -> AppResult<(
 #[specta::specta]
 pub async fn book_purge(state: State<'_, AppState>, id: String) -> AppResult<()> {
     let library = state.library.clone();
-    tauri::async_runtime::spawn_blocking(move || library::purge_book(&library, &id))
-        .await
-        .map_err(|err| AppError::Message(format!("彻底删除任务被中断：{err}")))?
+    tauri::async_runtime::spawn_blocking(move || {
+        // Recorded before the row goes: the title is copied at write time, and
+        // after the purge there is nothing left to copy it from.
+        library.with(|conn| {
+            ops::record(conn, ops::Source::Ui, "purge", std::slice::from_ref(&id), "彻底删除")
+        })?;
+        library::purge_book(&library, &id)
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("彻底删除任务被中断：{err}")))?
 }
 
 /// `book.purgeMany` — the bin's batch bar. Same contract as
@@ -418,6 +456,7 @@ pub async fn book_purge_many(
 ) -> AppResult<()> {
     let library = state.library.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        library.with(|conn| ops::record(conn, ops::Source::Ui, "purge", &ids, "彻底删除"))?;
         library::purge_books(&library, &ids, &mut |done, total, path| {
             let _ = app.emit(
                 DELETE_PROGRESS_EVENT,
@@ -434,9 +473,14 @@ pub async fn book_purge_many(
 #[specta::specta]
 pub async fn book_empty_trash(state: State<'_, AppState>) -> AppResult<usize> {
     let library = state.library.clone();
-    tauri::async_runtime::spawn_blocking(move || library::empty_trash(&library))
-        .await
-        .map_err(|err| AppError::Message(format!("清空回收站被中断：{err}")))?
+    tauri::async_runtime::spawn_blocking(move || {
+        let ids = library::empty_trash(&library)?;
+        library
+            .with(|conn| ops::record(conn, ops::Source::Ui, "empty_trash", &ids, "清空回收站"))?;
+        Ok(ids.len())
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("清空回收站被中断：{err}")))?
 }
 
 /// `book.setFavorite`
@@ -469,7 +513,26 @@ pub fn book_update(
     id: String,
     patch: crate::library::repository::BookMetadataPatch,
 ) -> AppResult<()> {
-    state.library.with_tx(|tx| crate::library::repository::update_metadata(tx, &id, &patch))
+    state.library.with_tx(|tx| {
+        // Read first: the before-image is what makes the change undoable, and
+        // after the write there is nothing left to read it from.
+        let before = crate::library::repository::get(tx, &id)?;
+        crate::library::repository::update_metadata(tx, &id, &patch)?;
+        if let Some(book) = before {
+            ops::record_before(
+                tx,
+                ops::Source::Ui,
+                "update_metadata",
+                &[ops::Before {
+                    book_id: id.clone(),
+                    publisher: book.publisher,
+                    language: book.language,
+                }],
+                "改了书籍信息",
+            )?;
+        }
+        Ok(())
+    })
 }
 
 /// Progress payload for [`IMPORT_PROGRESS_EVENT`].

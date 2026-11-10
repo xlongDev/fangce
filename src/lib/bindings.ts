@@ -384,6 +384,15 @@ export const commands = {
    */
   bookSetMetadataMany: (ids: string[], patch: BookFieldsPatch) =>
     __TAURI_INVOKE<number>("book_set_metadata_many", { ids, patch }),
+  /**  `ops.list` — the newest changes, newest first. */
+  opsList: (limit: number) => __TAURI_INVOKE<Operation[]>("ops_list", { limit }),
+  /**
+   *  `ops.undo` — puts back what one call changed.
+   *
+   *  One transaction: the writes and the marker row that stops the page from
+   *  offering the same undo twice.
+   */
+  opsUndo: (callId: string) => __TAURI_INVOKE<Undo>("ops_undo", { callId }),
   /**
    *  `book.restore` — takes books back out of the trash.
    *
@@ -1777,6 +1786,31 @@ export type OcrScan = {
   pages: number[];
 };
 
+/**  One change, as the settings page prints it. */
+export type Operation = {
+  id: number;
+  at: number;
+  /**
+   *  `ui` or `mcp`; a string rather than an enum so an unknown future source
+   *  reads as itself instead of failing to deserialize.
+   */
+  source: string;
+  action: string;
+  /**
+   *  Every row written by one call shares this. A batch of thirty books is
+   *  thirty rows and one call, and undoing "that" means undoing the call.
+   */
+  callId: string;
+  bookId: string | null;
+  bookTitle: string | null;
+  summary: string;
+  /**
+   *  Whether this row can be put back: it carries a before-image and its
+   *  call has not already been undone.
+   */
+  undoable: boolean;
+};
+
 /**
  *  What the dialog renders: before the import as a preview, after it as the
  *  receipt. Both come out of the same run.
@@ -2147,6 +2181,16 @@ export type TopBook = {
 export type Translation = {
   text: string;
   detectedLang: string | null;
+};
+
+/**  How much of an undo actually landed. */
+export type Undo = {
+  undone: number;
+  /**
+   *  Books the undo could not reach — purged, or in the bin. Not an error:
+   *  the rest of the call is still worth putting back.
+   */
+  skipped: number;
 };
 
 /**

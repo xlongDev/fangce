@@ -610,6 +610,40 @@ CREATE INDEX books_deleted_at ON books (deleted_at) WHERE deleted_at IS NOT NULL
 CREATE VIEW books_live AS SELECT * FROM books WHERE deleted_at IS NULL;
 "#,
     },
+    Migration {
+        version: 23,
+        name: "operations",
+        // What changed, who changed it, and when — the table the reader can
+        // read. Two writers now share this library (the UI and an MCP agent),
+        // and "who changed this publisher" had no answer at all.
+        //
+        // **No foreign key to `books`, on purpose.** The row that matters most
+        // in a log is 「《三体》被彻底删除」, and a cascade would delete the
+        // record of the deletion along with the book. `book_title` is copied
+        // for the same reason: after a purge there is nothing left to join to.
+        //
+        // One row per book rather than one per call: the question this answers
+        // is "what happened to this book", and a batch stored as a single row
+        // would have to be unpicked to answer it. The call is still
+        // recoverable — every row of a batch shares `at` and `summary`.
+        sql: r#"
+CREATE TABLE operations (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         INTEGER NOT NULL,
+  source     TEXT NOT NULL CHECK (source IN ('ui', 'mcp')),
+  action     TEXT NOT NULL,
+  book_id    TEXT,
+  book_title TEXT,
+  summary    TEXT NOT NULL,
+  detail     TEXT,
+  call_id    TEXT NOT NULL
+);
+
+CREATE INDEX operations_at ON operations (at DESC);
+CREATE INDEX operations_book ON operations (book_id) WHERE book_id IS NOT NULL;
+CREATE INDEX operations_call ON operations (call_id);
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.

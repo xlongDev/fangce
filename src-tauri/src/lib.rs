@@ -50,7 +50,7 @@ pub fn run_mcp() -> i32 {
         // read-only grant is a read-only *database handle*, not a promise the
         // tool layer makes to itself.
         let library = db::Library::open_existing(&dir, grants.may_write())?;
-        let server = mcp::Server::new(&library, grants, Some(mcp::audit_path(&dir)));
+        let server = mcp::Server::new(&library, grants);
         let stdin = std::io::stdin().lock();
         let stdout = std::io::stdout().lock();
         server.serve(stdin, stdout)
@@ -148,6 +148,8 @@ pub fn run() -> tauri::Result<()> {
             commands::book::book_delete,
             commands::book::book_delete_many,
             commands::book::book_set_metadata_many,
+            commands::ops::ops_list,
+            commands::ops::ops_undo,
             commands::book::book_restore,
             commands::book::book_purge,
             commands::book::book_purge_many,
@@ -475,6 +477,8 @@ mod specta_bindings {
                 commands::book::book_migrate,
                 commands::book::book_delete_many,
                 commands::book::book_set_metadata_many,
+                commands::ops::ops_list,
+                commands::ops::ops_undo,
                 commands::book::book_restore,
                 commands::book::book_purge,
                 commands::book::book_purge_many,

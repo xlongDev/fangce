@@ -18,6 +18,7 @@ pub mod lookup;
 pub mod mini_bar;
 pub mod notes_recap;
 pub mod ocr;
+pub mod ops;
 pub mod rag;
 pub mod reader;
 pub mod search;

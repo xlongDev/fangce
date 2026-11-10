@@ -14,6 +14,7 @@ import type {
   DeleteProgress,
   ImportProgress,
   LibraryFacets,
+  Operation,
 } from "@/types/ipc";
 
 /** Shelf contents for one filter/sort/search combination. */
@@ -264,6 +265,39 @@ export function useSetMetadataMany() {
       showToast("success", `已改 ${written} 本的${fields}`);
     },
     onSettled: invalidate,
+  });
+}
+
+/** The library's own record of what changed — 设置 › 操作记录.
+ *
+ * Deliberately not part of the `["books"]` key space: a log is not shelf data,
+ * and invalidating the shelf should not refetch it (nor the reverse). */
+export function useOperations(limit = 50) {
+  return useQuery<Operation[]>({
+    queryKey: ["operations", limit],
+    queryFn: () => ipc.opsList(limit),
+    // The browser build has no operations table — its writes go to IndexedDB
+    // and nothing records them. Asking would be an error the reader cannot act
+    // on, so the section says so instead (see `OperationsSection`).
+    enabled: isDesktopRuntime,
+    staleTime: 10_000,
+  });
+}
+
+/// Puts back what one logged call changed.
+///
+/// Invalidates both sides: the log itself (the call is no longer undoable) and
+/// the shelf (the books just changed under it).
+export function useUndoOperation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (callId: string) => ipc.opsUndo(callId),
+    onSuccess: (outcome) => {
+      const skipped = outcome.skipped > 0 ? `，${outcome.skipped} 本已不在书库` : "";
+      showToast("success", `已撤销 ${outcome.undone} 本${skipped}`);
+      void queryClient.invalidateQueries({ queryKey: ["operations"] });
+      void queryClient.invalidateQueries({ queryKey: ["books"] });
+    },
   });
 }
 

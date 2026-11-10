@@ -37,5 +37,19 @@ pub fn book_set_tags(
     if ids.is_empty() {
         return Ok(());
     }
-    state.library.with_tx(|tx| tags::assign(tx, &ids, &add, &remove))
+    let summary = match (add.is_empty(), remove.is_empty()) {
+        (false, true) => format!("加标签：{}", add.join("、")),
+        (true, false) => format!("去标签：{}", remove.join("、")),
+        _ => "改了标签".to_string(),
+    };
+    state.library.with_tx(|tx| {
+        tags::assign(tx, &ids, &add, &remove)?;
+        crate::library::ops::record(
+            tx,
+            crate::library::ops::Source::Ui,
+            "manage_tags",
+            &ids,
+            &summary,
+        )
+    })
 }

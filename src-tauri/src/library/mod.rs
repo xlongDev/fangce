@@ -21,6 +21,12 @@ mod retrieval;
 mod shelf;
 mod transfer;
 
+/// The record of what changed.
+///
+/// The one module that belongs to no subdirectory: every domain writes through
+/// it, so filing it under `shelf/` or `io/` would say it belongs to that one.
+pub mod ops;
+
 pub use assist::{conversation, graph, guide, ocr, summary};
 pub use io::{characters, clippings, export, import, pack, source};
 pub use lookup::{dictionaries, markup, mdict, stardict};
@@ -190,11 +196,10 @@ pub fn purge_books(
 /// One transaction for the rows and one unlink pass for the files, so an
 /// interrupted empty leaves neither a row whose file is gone nor a file whose
 /// row is.
-pub fn empty_trash(library: &Library) -> AppResult<usize> {
-    let files = library.with_tx(repository::empty_trash)?;
-    let count = files.len();
+pub fn empty_trash(library: &Library) -> AppResult<Vec<String>> {
+    let (ids, files) = library.with_tx(repository::empty_trash)?;
     unlink_all(files);
-    Ok(count)
+    Ok(ids)
 }
 
 /// Rewrites the same two fields on a batch of books, in one transaction.
@@ -492,7 +497,7 @@ mod tests {
 
         let purged = empty_trash(&shelf.library).expect("empty");
 
-        assert_eq!(purged, 1);
+        assert_eq!(purged, ["gone"], "清空的是回收站里那一本");
         assert_eq!(shelf.live_rows(), 1, "书架上的那本必须还在");
         assert!(shelf.files_gone("gone"));
         assert!(!shelf.files_gone("kept"), "书架上的书文件不能动");

@@ -3,6 +3,7 @@ import {
   Archive,
   ArrowsClockwise,
   BookOpenText,
+  ClockCounterClockwise,
   CloudArrowUp,
   type Icon,
   Info,
@@ -33,6 +34,7 @@ export const SECTIONS = [
   { id: "fonts", label: "字体", icon: TextAa },
   { id: "sync", label: "同步", icon: CloudArrowUp },
   { id: "backup", label: "备份", icon: Archive },
+  { id: "operations", label: "操作记录", icon: ClockCounterClockwise },
   { id: "reset", label: "重置", icon: ArrowsClockwise },
   { id: "about", label: "关于", icon: Info },
 ] as const;

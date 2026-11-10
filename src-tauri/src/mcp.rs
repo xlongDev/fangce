@@ -19,17 +19,19 @@
 //! configured with nothing gets nothing that writes.
 //!
 //! Writes go through the same `library::*` functions the UI calls, and every
-//! one of them leaves a line in `mcp-audit.jsonl` — 「写操作有审计」 is not a
-//! later task, it is the price of having a write tool at all.
+//! one of them leaves a row in the library's `operations` table — 「写操作有
+//! 审计」 is not a later task, it is the price of having a write tool at all.
+//! The log lives in the database rather than beside it so the person whose
+//! library it is can read it (设置 › 操作记录).
 
 use std::collections::BTreeSet;
 use std::io::{BufRead, Write};
-use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
 use crate::db::Library;
 use crate::error::{AppError, AppResult};
+use crate::library::ops::{self, Source};
 use crate::library::repository::{self, BookMetadataPatch, BookQuery};
 use crate::library::{annotations, bookmarks, search, tags};
 
@@ -42,9 +44,6 @@ const SERVER_NAME: &str = "fangce";
 
 /// Env var a client sets to widen the grant.
 const PERMISSIONS_ENV: &str = "FANGCE_MCP_PERMISSIONS";
-
-/// Appended to the data directory, one JSON object per line.
-const AUDIT_FILE: &str = "mcp-audit.jsonl";
 
 /// Default and ceiling for a tool's `limit` argument.
 ///
@@ -165,14 +164,11 @@ impl Grants {
 pub struct Server<'a> {
     library: &'a Library,
     grants: Grants,
-    /// `None` in tests, and in any embedding that has no data directory to
-    /// write to. The reader's own binary always has one.
-    audit: Option<PathBuf>,
 }
 
 impl<'a> Server<'a> {
-    pub fn new(library: &'a Library, grants: Grants, audit: Option<PathBuf>) -> Self {
-        Self { library, grants, audit }
+    pub fn new(library: &'a Library, grants: Grants) -> Self {
+        Self { library, grants }
     }
 
     /// Reads JSON-RPC messages from `input` until it closes, answering on
@@ -270,10 +266,11 @@ impl<'a> Server<'a> {
             )));
         }
 
+        // Each write tool records itself, inside its own transaction where it
+        // has one: a generic post-hoc line here could not say which book or
+        // what changed, and it would land after the write had already
+        // committed. See `ops::record`.
         let outcome = (tool.run)(&args, self.library);
-        if !matches!(tool.permission, Permission::Read | Permission::Search) {
-            self.record(name, &args, &outcome);
-        }
         Ok(match outcome {
             Ok(payload) => json!({
                 "content": [{ "type": "text", "text": text(&payload) }],
@@ -281,33 +278,6 @@ impl<'a> Server<'a> {
             }),
             Err(err) => error_result(&err.to_string()),
         })
-    }
-
-    /// Appends one line to the audit log.
-    ///
-    /// A failure to write it is logged and swallowed: the change already
-    /// happened, and reporting failure afterwards would leave the agent
-    /// believing a write it cannot see did not happen.
-    fn record(&self, tool: &str, args: &Value, outcome: &AppResult<Value>) {
-        let Some(path) = &self.audit else { return };
-        let line = json!({
-            "at": crate::library::now_seconds(),
-            "tool": tool,
-            "arguments": args,
-            "ok": outcome.is_ok(),
-            "detail": match outcome {
-                Ok(payload) => payload.to_string(),
-                Err(err) => err.to_string(),
-            },
-        });
-        let written = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .and_then(|mut file| writeln!(file, "{line}"));
-        if let Err(err) = written {
-            tracing::warn!(path = %path.display(), error = %err, "写审计日志失败");
-        }
     }
 
     /// The tools this connection may use, and only those.
@@ -637,7 +607,16 @@ fn update_metadata(args: &Value, library: &Library) -> AppResult<Value> {
         publisher: field("publisher", current.publisher),
         authors,
     };
-    library.with_tx(|tx| repository::update_metadata(tx, id, &patch))?;
+    library.with_tx(|tx| {
+        repository::update_metadata(tx, id, &patch)?;
+        ops::record(
+            tx,
+            Source::Mcp,
+            "update_metadata",
+            std::slice::from_ref(&id.to_string()),
+            "改了书籍信息（MCP）",
+        )
+    })?;
     Ok(json!({ "updated": id, "title": patch.title }))
 }
 
@@ -649,7 +628,15 @@ fn manage_tags(args: &Value, library: &Library) -> AppResult<Value> {
         return Err(AppError::InvalidArgument("add 和 remove 至少要有一个".into()));
     }
     let ids = [id.to_string()];
-    library.with_tx(|tx| tags::assign(tx, &ids, &add, &remove))?;
+    let summary = match (add.is_empty(), remove.is_empty()) {
+        (false, true) => format!("加标签（MCP）：{}", add.join("、")),
+        (true, false) => format!("去标签（MCP）：{}", remove.join("、")),
+        _ => "改了标签（MCP）".to_string(),
+    };
+    library.with_tx(|tx| {
+        tags::assign(tx, &ids, &add, &remove)?;
+        ops::record(tx, Source::Mcp, "manage_tags", &ids, &summary)
+    })?;
     Ok(json!({ "updated": id, "added": add, "removed": remove }))
 }
 
@@ -663,7 +650,7 @@ fn remove_books(args: &Value, library: &Library) -> AppResult<Value> {
         for id in &ids {
             repository::trash(tx, id)?;
         }
-        Ok(())
+        ops::record(tx, Source::Mcp, "trash", &ids, "移到回收站（MCP）")
     })?;
     Ok(json!({ "trashed": ids, "recoverable": true }))
 }
@@ -691,14 +678,11 @@ fn limit_of(args: &Value) -> usize {
         .unwrap_or(DEFAULT_LIMIT)
 }
 
-/// Where this connection's audit log lives, inside the data directory.
-pub fn audit_path(data_dir: &Path) -> PathBuf {
-    data_dir.join(AUDIT_FILE)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::path::{Path, PathBuf};
 
     use crate::document::BookFormat;
     use crate::library::repository::NewBook;
@@ -768,7 +752,7 @@ mod tests {
         let mut input = lines.join("\n");
         input.push('\n');
         let mut output = Vec::new();
-        Server::new(library, grants, None).serve(input.as_bytes(), &mut output).expect("serve");
+        Server::new(library, grants).serve(input.as_bytes(), &mut output).expect("serve");
         String::from_utf8(output)
             .expect("utf-8")
             .lines()
@@ -1045,12 +1029,12 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// Every write leaves a line. The audit is not a later task: a write tool
-    /// without one is a change nobody can account for.
+    /// Every write leaves a line in `operations`, and a read leaves none. The
+    /// log is the database's, not a file beside it: it has to be readable from
+    /// inside the app, which is where the person whose library it is will look.
     #[test]
-    fn a_write_leaves_one_audit_line_and_a_read_leaves_none() {
+    fn a_write_leaves_one_operation_row_and_a_read_leaves_none() {
         let (dir, library) = harness("mcp-audit");
-        let path = audit_path(&dir);
         let script = [
             call("get_book", json!({ "id": "b1" })),
             call("update_metadata", json!({ "id": "b1", "publisher": "审计出版社" })),
@@ -1058,17 +1042,13 @@ mod tests {
         .join("\n")
             + "\n";
         let mut output = Vec::new();
-        Server::new(&library, Grants::all(), Some(path.clone()))
-            .serve(script.as_bytes(), &mut output)
-            .expect("serve");
+        Server::new(&library, Grants::all()).serve(script.as_bytes(), &mut output).expect("serve");
 
-        let log = std::fs::read_to_string(&path).expect("audit file");
-        let lines: Vec<&str> = log.lines().collect();
-        assert_eq!(lines.len(), 1, "读不该留痕：{log}");
-        let entry: Value = serde_json::from_str(lines[0]).expect("json line");
-        assert_eq!(entry["tool"], "update_metadata");
-        assert_eq!(entry["ok"], true);
-        assert_eq!(entry["arguments"]["publisher"], "审计出版社");
+        let rows = library.with(|conn| ops::list(conn, 10)).expect("operations");
+        assert_eq!(rows.len(), 1, "读不该留痕：{rows:?}");
+        assert_eq!(rows[0].action, "update_metadata");
+        assert_eq!(rows[0].source, "mcp", "来源要说得出是哪个 Agent 改的");
+        assert_eq!(rows[0].book_title.as_deref(), Some("三体"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

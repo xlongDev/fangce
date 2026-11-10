@@ -880,7 +880,10 @@ pub fn restore_many(tx: &Transaction<'_>, ids: &[String]) -> AppResult<()> {
 }
 
 /// Empties the bin: purges every trashed book and reports the files to unlink.
-pub fn empty_trash(tx: &Transaction<'_>) -> AppResult<Vec<DeletedFiles>> {
+///
+/// The ids come back with the files because the caller has to be able to say
+/// *what* it emptied — a count is not a record of anything.
+pub fn empty_trash(tx: &Transaction<'_>) -> AppResult<(Vec<String>, Vec<DeletedFiles>)> {
     let ids: Vec<String> = tx
         .prepare("SELECT id FROM books WHERE deleted_at IS NOT NULL")?
         .query_map([], |row| row.get(0))?
@@ -889,7 +892,7 @@ pub fn empty_trash(tx: &Transaction<'_>) -> AppResult<Vec<DeletedFiles>> {
     for id in &ids {
         files.push(purge_one(tx, id)?);
     }
-    Ok(files)
+    Ok((ids, files))
 }
 
 /// Fails with `NotFound` unless every id is on the shelf.
