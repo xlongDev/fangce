@@ -6,6 +6,7 @@ import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
 import { useMetadataSearch } from "@/hooks/useMetadata";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { showToast } from "@/stores/toasts";
 import { isDesktopRuntime } from "@/lib/ipc";
 import type { BookMetadataPatch, BookSummary, Candidate } from "@/types/ipc";
 
@@ -360,7 +361,17 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
           {douban && (
             <button
               type="button"
-              onClick={() => void openUrl(douban).catch(() => {})}
+              onClick={() =>
+                void openUrl(douban).catch((err: unknown) => {
+                  // Never silently: `opener` refuses any URL outside its
+                  // capability scope, and a swallowed rejection is exactly how
+                  // "the link does nothing" became a bug report.
+                  showToast(
+                    "error",
+                    `打不开这个链接：${err instanceof Error ? err.message : String(err)}`,
+                  );
+                })
+              }
               className="text-accent focus-visible:focus-ring inline-flex items-center gap-1 rounded hover:underline"
             >
               豆瓣 <ArrowSquareOut size={10} weight="bold" />

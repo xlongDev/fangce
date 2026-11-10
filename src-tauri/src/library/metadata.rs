@@ -342,7 +342,16 @@ fn douban_link(doc: &Value) -> Option<String> {
         .as_array()?
         .iter()
         .filter_map(|entry| entry.get("url").and_then(Value::as_str))
-        .find(|url| url.contains("book.douban.com/"))
+        // Parsed, not substring-matched: `https://evil.example/?x=book.douban.com/`
+        // contains the string and would be handed to the operating system. The
+        // host has to *be* Douban, and the scheme has to be https — the opener
+        // capability is scoped to this host, so anything else would fail anyway,
+        // silently.
+        .find(|url| {
+            reqwest::Url::parse(url).is_ok_and(|parsed| {
+                parsed.scheme() == "https" && parsed.host_str() == Some("book.douban.com")
+            })
+        })
         .map(str::to_string)
 }
 
@@ -744,6 +753,26 @@ mod tests {
         assert_eq!(best.douban_url.as_deref(), Some("https://book.douban.com/subject/25985021/"));
         // Goodreads is in the same list and must not be mistaken for it.
         assert!(!best.douban_url.as_deref().unwrap_or_default().contains("goodreads"));
+    }
+
+    /// A URL that merely mentions Douban is not a Douban link. This string is
+    /// handed to the operating system, and the capability scope only covers
+    /// `book.douban.com` — so a lookalike would fail at the last moment, with
+    /// nothing to show for it.
+    #[test]
+    fn a_lookalike_host_is_not_a_douban_link() {
+        let body = json!({
+            "data": [{
+                "title": "书",
+                "external_resources": [
+                    { "url": "https://evil.example/?x=book.douban.com/subject/1/" },
+                    { "url": "http://book.douban.com/subject/2/" },
+                    { "url": "https://book.douban.com.evil.example/subject/3/" }
+                ]
+            }]
+        });
+        let found = parse(&body, &lookup("书", &[]));
+        assert_eq!(found[0].douban_url, None, "{:?}", found[0].douban_url);
     }
 
     #[test]

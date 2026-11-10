@@ -24,7 +24,8 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "https://github.com/xlongDev/fangce*" },
-        { "url": "https://*.wikipedia.org/wiki/*" }
+        { "url": "https://*.wikipedia.org/wiki/*" },
+        { "url": "https://book.douban.com/*" }
       ]
     }
   ]
