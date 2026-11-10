@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from "react";
-import { MagnifyingGlass } from "@phosphor-icons/react";
+import { ArrowSquareOut, MagnifyingGlass } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
 import { useMetadataSearch } from "@/hooks/useMetadata";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { isDesktopRuntime } from "@/lib/ipc";
 import type { BookMetadataPatch, BookSummary, Candidate } from "@/types/ipc";
 
@@ -101,6 +102,13 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
   /** A string, not a number: a half-typed year is a state the input has to be
    *  able to hold. Parsed on save, and only when it is all digits. */
   const [year, setYear] = useState(book.publishedYear ? String(book.publishedYear) : "");
+  /** The catalogue's snapshot: not editable, only carried. `null` when the
+   *  book has none, which is also when a lookup would write it. */
+  const [rating, setRating] = useState<{ value: number | null; count: number | null }>({
+    value: book.rating,
+    count: book.ratingCount,
+  });
+  const [douban, setDouban] = useState<string | null>(book.doubanUrl);
   /** Candidates from the last 查找, or `null` when the reader has not asked. */
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   const search = useMetadataSearch();
@@ -115,6 +123,11 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
     publisher: blank(publisher),
     isbn: blank(isbn),
     publishedYear: yearValue,
+    // Carried through untouched: a save that dropped them would wipe the
+    // catalogue's rating every time the reader fixed a typo in the title.
+    rating: rating.value,
+    ratingCount: rating.count,
+    doubanUrl: douban,
     authors: splitAuthors(authors),
   };
 
@@ -128,6 +141,8 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
     (patch.publisher ?? "") !== (book.publisher ?? "") ||
     (patch.isbn ?? "") !== (book.isbn ?? "") ||
     (patch.publishedYear ?? null) !== (book.publishedYear ?? null) ||
+    (patch.rating ?? null) !== (book.rating ?? null) ||
+    (patch.doubanUrl ?? null) !== (book.doubanUrl ?? null) ||
     patch.authors.join("\u0000") !== book.authors.join("\u0000");
 
   const valid = patch.title.length > 0;
@@ -213,6 +228,12 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
                     if (candidate.description) setDescription(candidate.description);
                     if (candidate.isbn) setIsbn(candidate.isbn);
                     if (candidate.publishedYear) setYear(String(candidate.publishedYear));
+                    // The catalogue's own rating and the Douban page it was
+                    // linked from — shown read-only, saved with the form.
+                    if (candidate.rating !== null) {
+                      setRating({ value: candidate.rating, count: candidate.ratingCount });
+                    }
+                    if (candidate.doubanUrl) setDouban(candidate.doubanUrl);
                     setCandidates(null);
                   }}
                   className="press focus-visible:focus-ring hover:bg-surface-2 flex w-full items-baseline gap-2 rounded px-2 py-1.5 text-left"
@@ -324,12 +345,28 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
           />
         </Field>
 
-        {/* Read-only, and last: 「这本书什么时候进的库」 is a fact about this
-            library rather than about the book, so it is shown where the reader
-            looks for facts but cannot be typed over. */}
-        <p className="text-text-3 text-[11px]">
-          添加于 {ADDED.format(new Date(book.addedAt * 1000))}
-        </p>
+        {/* Read-only facts, and last. The rating is **NeoDB's**, never Douban's
+            — printing a bare number here would be a lie the reader has no way
+            to check, and Douban's own rating is not something this app can
+            fetch. The link is how a reader gets to the real one. */}
+        <div className="text-text-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+          <span>添加于 {ADDED.format(new Date(book.addedAt * 1000))}</span>
+          {rating.value !== null && (
+            <span className="text-text-2">
+              NeoDB {rating.value.toFixed(1)}
+              {rating.count !== null && `（${rating.count} 人）`}
+            </span>
+          )}
+          {douban && (
+            <button
+              type="button"
+              onClick={() => void openUrl(douban).catch(() => {})}
+              className="text-accent focus-visible:focus-ring inline-flex items-center gap-1 rounded hover:underline"
+            >
+              豆瓣 <ArrowSquareOut size={10} weight="bold" />
+            </button>
+          )}
+        </div>
 
         {/* The one rule the backend enforces, stated before the click rather
             than as a toast after it. */}

@@ -67,6 +67,14 @@ pub struct BookSummary {
     pub isbn: Option<String>,
     /// The edition's publication year.
     pub published_year: Option<i32>,
+    /// The catalogue's community rating and how many people gave it.
+    ///
+    /// Somebody else's opinion at the moment of the lookup, not the reader's
+    /// metadata: the UI names the source whenever it prints the number.
+    pub rating: Option<f64>,
+    pub rating_count: Option<i32>,
+    /// The Douban page this record was linked from, when there is one.
+    pub douban_url: Option<String>,
     pub authors: Vec<String>,
     pub tags: Vec<String>,
 }
@@ -303,7 +311,8 @@ pub fn cover_path(conn: &Connection, id: &str) -> AppResult<Option<PathBuf>> {
 
 const SELECT_COLUMNS: &str = "b.id, b.title, b.subtitle, b.description, b.language, b.publisher, \
      b.format, b.file_size, b.cover_path, b.added_at, b.updated_at, b.last_read_at, b.progress, \
-     b.location, b.favorite, b.isbn, b.published_year";
+     b.location, b.favorite, b.isbn, b.published_year, b.rating, b.rating_count, \
+     b.douban_url";
 
 /// SQL conditions and their bound parameters for one shelf query.
 ///
@@ -594,6 +603,9 @@ fn summary_from_row(row: &rusqlite::Row<'_>) -> AppResult<BookSummary> {
         favorite: row.get::<_, i64>("favorite")? != 0,
         isbn: row.get("isbn")?,
         published_year: row.get("published_year")?,
+        rating: row.get("rating")?,
+        rating_count: row.get("rating_count")?,
+        douban_url: row.get("douban_url")?,
         authors: Vec::new(),
         tags: Vec::new(),
     })
@@ -1000,6 +1012,12 @@ pub struct BookMetadataPatch {
     pub publisher: Option<String>,
     pub isbn: Option<String>,
     pub published_year: Option<i32>,
+    /// Carried, not edited: the sheet has no field for these, and a save that
+    /// dropped them would wipe the catalogue's rating every time the reader
+    /// fixed a typo in the title.
+    pub rating: Option<f64>,
+    pub rating_count: Option<i32>,
+    pub douban_url: Option<String>,
     pub authors: Vec<String>,
 }
 
@@ -1059,6 +1077,9 @@ pub fn update_fields_many(
             publisher: patch.publisher.clone().or(book.publisher),
             isbn: book.isbn,
             published_year: book.published_year,
+            rating: book.rating,
+            rating_count: book.rating_count,
+            douban_url: book.douban_url,
             authors: book.authors,
         };
         update_metadata(tx, id, &merged)?;
@@ -1087,8 +1108,8 @@ pub fn update_metadata(tx: &Transaction<'_>, id: &str, patch: &BookMetadataPatch
 
     let changed = tx.execute(
         "UPDATE books SET title = ?1, sort_title = ?2, subtitle = ?3, description = ?4, \
-         language = ?5, publisher = ?6, isbn = ?7, published_year = ?8, updated_at = ?9 \
-         WHERE id = ?10",
+         language = ?5, publisher = ?6, isbn = ?7, published_year = ?8, rating = ?9, \
+         rating_count = ?10, douban_url = ?11, updated_at = ?12 WHERE id = ?13",
         params![
             title,
             sort_key(title),
@@ -1098,6 +1119,9 @@ pub fn update_metadata(tx: &Transaction<'_>, id: &str, patch: &BookMetadataPatch
             blank_to_none(patch.publisher.as_deref()),
             blank_to_none(patch.isbn.as_deref()),
             patch.published_year,
+            patch.rating,
+            patch.rating_count,
+            blank_to_none(patch.douban_url.as_deref()),
             crate::library::now_seconds(),
             id,
         ],
@@ -1622,6 +1646,9 @@ mod tests {
             publisher: None,
             isbn: None,
             published_year: None,
+            rating: None,
+            rating_count: None,
+            douban_url: None,
             authors: authors.iter().map(|name| name.to_string()).collect(),
         }
     }

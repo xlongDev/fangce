@@ -47,6 +47,10 @@ pub struct MetadataFill {
     pub isbn: Option<String>,
     pub published_year: Option<i32>,
     pub description: Option<String>,
+    /// The catalogue's snapshot: written with the fills, never edited by hand.
+    pub rating: Option<f64>,
+    pub rating_count: Option<i32>,
+    pub douban_url: Option<String>,
 }
 
 /// `metadata.propose` — what a fill would add to these books, without writing.
@@ -74,6 +78,8 @@ pub async fn metadata_propose(
                     isbn: book.isbn,
                     published_year: book.published_year,
                     description: book.description,
+                    rating: book.rating,
+                    douban_url: book.douban_url,
                 });
             }
         }
@@ -143,6 +149,9 @@ pub fn metadata_apply(state: State<'_, AppState>, items: Vec<MetadataFill>) -> A
                 publisher: None,
                 isbn: None,
                 published_year: None,
+                rating: None,
+                rating_count: None,
+                douban_url: None,
                 authors: Vec::new(),
             };
             if let Some(book) = repository::get(tx, &item.id)? {
@@ -154,6 +163,9 @@ pub fn metadata_apply(state: State<'_, AppState>, items: Vec<MetadataFill>) -> A
                 patch.publisher = item.publisher.clone().or(book.publisher);
                 patch.isbn = item.isbn.clone().or(book.isbn);
                 patch.published_year = item.published_year.or(book.published_year);
+                patch.rating = item.rating.or(book.rating);
+                patch.rating_count = item.rating_count.or(book.rating_count);
+                patch.douban_url = item.douban_url.clone().or(book.douban_url);
             }
             repository::update_metadata(tx, &item.id, &patch)?;
         }

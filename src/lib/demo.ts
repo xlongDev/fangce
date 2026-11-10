@@ -560,6 +560,9 @@ export function demoProposals(ids: string[]): Proposal[] {
         fills: [],
         skipped: "没有找到相近的书",
         matchScore: 0,
+        rating: null,
+        ratingCount: null,
+        doubanUrl: null,
       };
     }
     const fills: Fill[] = [
@@ -573,6 +576,17 @@ export function demoProposals(ids: string[]): Proposal[] {
         to: "这是一段演示用的简介，长度接近真实目录返回的那种营销文案。".repeat(60),
       });
     }
-    return { bookId: id, bookTitle: title, fills, skipped: null, matchScore: 0.92 };
+    return {
+      bookId: id,
+      bookTitle: title,
+      fills,
+      skipped: null,
+      matchScore: 0.92,
+      // The demo shows the rating line and the Douban link, so the fixture
+      // carries them the way a real answer does.
+      rating: 9.2,
+      ratingCount: 995,
+      doubanUrl: "https://book.douban.com/subject/25985021/",
+    };
   });
 }

@@ -663,6 +663,28 @@ ALTER TABLE books ADD COLUMN isbn TEXT;
 ALTER TABLE books ADD COLUMN published_year INTEGER;
 "#,
     },
+    Migration {
+        version: 25,
+        name: "books_catalogue_rating",
+        // What the catalogue knows and this app had nowhere to put: a community
+        // rating, how many people gave it, and the Douban page the record was
+        // linked from.
+        //
+        // **These are not the reader's metadata.** They are a snapshot of
+        // somebody else's opinion at the moment of the lookup, so they are
+        // carried through the edit sheet rather than editable in it, and the UI
+        // names the source every time it prints one — 「NeoDB 9.2」, never a bare
+        // number a reader would take for Douban's.
+        //
+        // No Douban *rating* column on purpose: Douban has no API, its terms
+        // forbid scraping, and a value that silently goes missing on a 403 is
+        // worse than a link the reader can follow.
+        sql: r#"
+ALTER TABLE books ADD COLUMN rating REAL;
+ALTER TABLE books ADD COLUMN rating_count INTEGER;
+ALTER TABLE books ADD COLUMN douban_url TEXT;
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.

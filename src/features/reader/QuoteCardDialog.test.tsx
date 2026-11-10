@@ -58,6 +58,9 @@ const BOOK: BookSummary = {
   favorite: false,
   isbn: null,
   publishedYear: null,
+  rating: null,
+  ratingCount: null,
+  doubanUrl: null,
   authors: ["刘慈欣"],
   tags: [],
 };

@@ -88,7 +88,9 @@ function FillBody({ ids, onClose }: { ids: string[]; onClose: () => void }) {
   const [unticked, setUnticked] = useState<ReadonlySet<string>>(() => new Set());
 
   const proposals = propose.data ?? [];
-  const fillable = proposals.filter((proposal) => proposal.fills.length > 0);
+  // A row can carry nothing but a rating and a Douban link — a book whose
+  // fields are all filled still gains something from the lookup.
+  const fillable = proposals.filter(hasSomething);
   const chosen = fillable.filter((proposal) => !unticked.has(proposal.bookId));
   const skipped = proposals.length - fillable.length;
 
@@ -268,6 +270,13 @@ function Row({
             <span className="text-text-3 mt-0.5 block text-[11px]">{proposal.skipped}</span>
           ) : (
             <span className="text-text-2 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
+              {proposal.rating !== null && (
+                // Named, always: a bare number here would be read as Douban's.
+                <span className="text-text-3">
+                  NeoDB {proposal.rating.toFixed(1)}
+                  {proposal.ratingCount !== null && `（${proposal.ratingCount} 人）`}
+                </span>
+              )}
               {proposal.fills.map((fill) => (
                 <span key={fill.field}>
                   {FIELD_LABELS[fill.field] ?? fill.field} → {preview(fill)}
@@ -302,6 +311,14 @@ function Row({
             className="overflow-hidden"
           >
             <dl className="mx-1.5 mb-2 ml-8 space-y-1.5">
+              {proposal.doubanUrl && (
+                <div className="flex gap-3">
+                  <dt className="text-text-3 w-12 shrink-0 text-[11px] leading-5">豆瓣</dt>
+                  <dd className="text-text-2 min-w-0 flex-1 truncate text-[12px] leading-5">
+                    {proposal.doubanUrl}
+                  </dd>
+                </div>
+              )}
               {proposal.fills.map((fill) =>
                 fill.field === "description" ? (
                   <div key={fill.field}>
@@ -329,6 +346,11 @@ function Row({
   );
 }
 
+/** Whether a proposal would write anything at all. */
+export function hasSomething(proposal: Proposal): boolean {
+  return proposal.fills.length > 0 || proposal.rating !== null || proposal.doubanUrl !== null;
+}
+
 /** One fill, as a line that fits.
  *
  * 简介 arrives as up to 4000 characters — printed whole, one row became a page
@@ -351,6 +373,10 @@ function toFill(proposal: Proposal): MetadataFill {
     isbn: null,
     publishedYear: null,
     description: null,
+    // The catalogue's snapshot travels with the fills rather than as a fill.
+    rating: proposal.rating,
+    ratingCount: proposal.ratingCount,
+    doubanUrl: proposal.doubanUrl,
   };
   for (const item of proposal.fills) {
     if (item.field === "subtitle") fill.subtitle = item.to;

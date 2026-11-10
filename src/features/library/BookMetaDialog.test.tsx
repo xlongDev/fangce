@@ -24,6 +24,9 @@ const book: BookSummary = {
   favorite: false,
   isbn: null,
   publishedYear: null,
+  rating: null,
+  ratingCount: null,
+  doubanUrl: null,
   authors: ["刘慈欣"],
   tags: [],
 };
@@ -85,6 +88,9 @@ describe("BookMetaDialog — 元数据编辑表", () => {
       publisher: null,
       isbn: null,
       publishedYear: null,
+      rating: null,
+      ratingCount: null,
+      doubanUrl: null,
       authors: ["刘慈欣"],
     });
   });

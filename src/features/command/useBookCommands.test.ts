@@ -22,6 +22,9 @@ function book(id: string, title: string, authors: string[] = [], tags: string[] 
     favorite: false,
     isbn: null,
     publishedYear: null,
+    rating: null,
+    ratingCount: null,
+    doubanUrl: null,
     authors,
     tags,
   };

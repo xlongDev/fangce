@@ -609,6 +609,9 @@ fn update_metadata(args: &Value, library: &Library) -> AppResult<Value> {
         // round trip: `update_metadata` writes the whole record.
         isbn: current.isbn,
         published_year: current.published_year,
+        rating: current.rating,
+        rating_count: current.rating_count,
+        douban_url: current.douban_url,
         authors,
     };
     library.with_tx(|tx| {

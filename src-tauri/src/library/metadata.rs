@@ -54,6 +54,12 @@ pub struct Candidate {
     pub published_year: Option<i32>,
     /// The catalogue's blurb, capped — see [`DESCRIPTION_LIMIT`].
     pub description: Option<String>,
+    /// The catalogue's own community rating — **not Douban's**, and the UI says
+    /// so every time it prints one.
+    pub rating: Option<f64>,
+    pub rating_count: Option<i32>,
+    /// The Douban page this record was linked from, when it has one.
+    pub douban_url: Option<String>,
     /// A BCP-47-ish tag (`zh`, `en`), taken as the catalogue spells it — NeoDB
     /// already speaks that language, unlike a MARC catalogue's `chi`/`eng`.
     pub language: Option<String>,
@@ -85,6 +91,8 @@ pub struct Target {
     pub isbn: Option<String>,
     pub published_year: Option<i32>,
     pub description: Option<String>,
+    pub rating: Option<f64>,
+    pub douban_url: Option<String>,
 }
 
 /// One field the fill would write.
@@ -109,6 +117,15 @@ pub struct Proposal {
     /// silent skip reads as a bug.
     pub skipped: Option<String>,
     pub match_score: f64,
+    /// The catalogue's rating, how many people gave it, and the Douban page.
+    ///
+    /// Carried beside the fills rather than as fills: they are not fields the
+    /// reader edits, they are what the catalogue said at lookup time. `None`
+    /// when the book already has them, so what the row shows is exactly what
+    /// the apply will write.
+    pub rating: Option<f64>,
+    pub rating_count: Option<i32>,
+    pub douban_url: Option<String>,
 }
 
 /// Below this a candidate is not offered at all.
@@ -169,26 +186,34 @@ pub fn propose_failed(target: &Target, reason: &str) -> Proposal {
         fills: Vec::new(),
         skipped: Some(format!("查询失败：{reason}")),
         match_score: 0.0,
+        rating: None,
+        rating_count: None,
+        douban_url: None,
     }
 }
 
 /// Turns one book's best candidate into a proposal, or into a reason.
 pub fn propose_for(target: &Target, best: Option<Candidate>) -> Proposal {
-    let (fills, skipped, match_score) = match best {
-        None => (Vec::new(), Some("没有找到相近的书".to_string()), 0.0),
+    let (fills, skipped, match_score, rating, rating_count, douban_url) = match best {
+        None => (Vec::new(), Some("没有找到相近的书".to_string()), 0.0, None, None, None),
         Some(candidate) if candidate.match_score < MIN_SCORE => (
             Vec::new(),
             Some(format!("匹配度只有 {:.0}%，不采用", candidate.match_score * 100.0)),
             candidate.match_score,
+            None,
+            None,
+            None,
         ),
         Some(candidate) => {
             let fills = fills(&candidate, target);
-            let skipped = if fills.is_empty() {
-                Some("可补的字段都已经有了".to_string())
-            } else {
-                None
-            };
-            (fills, skipped, candidate.match_score)
+            // Only what the book does not already have — the same rule as the
+            // fills, so the row never promises a write the apply will skip.
+            let rating = target.rating.is_none().then_some(candidate.rating).flatten();
+            let rating_count = rating.and(candidate.rating_count);
+            let douban_url = target.douban_url.is_none().then_some(candidate.douban_url).flatten();
+            let nothing_to_do = fills.is_empty() && rating.is_none() && douban_url.is_none();
+            let skipped = nothing_to_do.then(|| "可补的字段都已经有了".to_string());
+            (fills, skipped, candidate.match_score, rating, rating_count, douban_url)
         }
     };
     Proposal {
@@ -197,6 +222,9 @@ pub fn propose_for(target: &Target, best: Option<Candidate>) -> Proposal {
         fills,
         skipped,
         match_score,
+        rating,
+        rating_count,
+        douban_url,
     }
 }
 
@@ -296,8 +324,26 @@ fn candidate(doc: &Value, lookup: &Lookup<'_>) -> Option<Candidate> {
         // most records and the fuller one on some. Either is better than an
         // empty 简介, which is what the reader reported.
         description: text(doc, "brief").or_else(|| text(doc, "description")).map(cap),
+        rating: doc.get("rating").and_then(Value::as_f64),
+        rating_count: doc.get("rating_count").and_then(Value::as_i64).map(|count| count as i32),
+        douban_url: douban_link(doc),
         match_score,
     })
+}
+
+/// The Douban page this record was linked from.
+///
+/// NeoDB keeps a list of outside pages for each record; Douban is one of them
+/// when the record was imported from there. Taken as-is rather than built from
+/// an id, because the id this app would have to guess is the one thing that
+/// makes the link wrong.
+fn douban_link(doc: &Value) -> Option<String> {
+    doc.get("external_resources")?
+        .as_array()?
+        .iter()
+        .filter_map(|entry| entry.get("url").and_then(Value::as_str))
+        .find(|url| url.contains("book.douban.com/"))
+        .map(str::to_string)
 }
 
 /// A trimmed string field, or `None` when it is missing or blank.
@@ -475,7 +521,13 @@ mod tests {
                     "pub_year": 2014,
                     "language": ["zh"],
                     "isbn": "9787508647357",
-                    "cover_image_url": "https://neodb.social/m/book/2021/09/cover.jpg"
+                    "cover_image_url": "https://neodb.social/m/book/2021/09/cover.jpg",
+                    "rating": 9.2,
+                    "rating_count": 995,
+                    "external_resources": [
+                        { "url": "https://www.goodreads.com/book/show/25233317" },
+                        { "url": "https://book.douban.com/subject/25985021/" }
+                    ]
                 },
                 {
                     "title": "Sapiens",
@@ -602,6 +654,8 @@ mod tests {
             isbn: None,
             published_year: None,
             description: None,
+            rating: None,
+            douban_url: None,
         }
     }
 
@@ -620,6 +674,9 @@ mod tests {
             isbn: None,
             cover_url: None,
             description: None,
+            rating: None,
+            rating_count: None,
+            douban_url: None,
             match_score: score,
         }
     }
@@ -673,6 +730,55 @@ mod tests {
     #[test]
     fn a_short_blurb_is_left_alone() {
         assert_eq!(cap("很短的一段话。".into()), "很短的一段话。");
+    }
+
+    /// The number is NeoDB's, not Douban's — 《活着》 is 9.2 with 995 people
+    /// there and roughly 9.4 with hundreds of thousands on Douban. The link is
+    /// the only honest way to show a Douban number, so it is carried too.
+    #[test]
+    fn a_candidate_carries_the_rating_and_the_douban_page() {
+        let found = parse(&body(), &lookup("人类简史", &[]));
+        let best = &found[0];
+        assert_eq!(best.rating, Some(9.2));
+        assert_eq!(best.rating_count, Some(995));
+        assert_eq!(best.douban_url.as_deref(), Some("https://book.douban.com/subject/25985021/"));
+        // Goodreads is in the same list and must not be mistaken for it.
+        assert!(!best.douban_url.as_deref().unwrap_or_default().contains("goodreads"));
+    }
+
+    #[test]
+    fn a_record_without_a_douban_page_says_nothing_rather_than_guessing() {
+        let body = json!({ "data": [{ "title": "书" }] });
+        let found = parse(&body, &lookup("书", &[]));
+        assert_eq!(found[0].douban_url, None);
+        assert_eq!(found[0].rating, None);
+    }
+
+    #[test]
+    fn a_proposal_carries_the_rating_beside_its_fills() {
+        let mut found = candidate(Some("中信出版社"), None, 0.95);
+        found.rating = Some(9.2);
+        found.rating_count = Some(995);
+        found.douban_url = Some("https://book.douban.com/subject/1/".into());
+        let proposal = propose_for(&target(None, None), Some(found));
+        assert_eq!(proposal.rating, Some(9.2));
+        assert_eq!(proposal.rating_count, Some(995));
+        assert!(proposal.douban_url.is_some());
+        assert!(!proposal.fills.is_empty(), "评分不影响字段补全");
+    }
+
+    /// A book that already has a rating keeps it: what the row shows must be
+    /// exactly what the apply writes.
+    #[test]
+    fn a_book_that_already_has_a_rating_is_not_given_a_new_one() {
+        let mut found = candidate(Some("中信出版社"), None, 0.95);
+        found.rating = Some(9.2);
+        found.douban_url = Some("https://book.douban.com/subject/1/".into());
+        let mut book = target(None, None);
+        book.rating = Some(8.0);
+        let proposal = propose_for(&book, Some(found));
+        assert_eq!(proposal.rating, None);
+        assert_eq!(proposal.douban_url.as_deref(), Some("https://book.douban.com/subject/1/"));
     }
 
     #[test]

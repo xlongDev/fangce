@@ -287,6 +287,16 @@ export const commands = {
       isbn: string | null;
       /**  The edition's publication year. */
       publishedYear: number | null;
+      /**
+       *  The catalogue's community rating and how many people gave it.
+       *
+       *  Somebody else's opinion at the moment of the lookup, not the reader's
+       *  metadata: the UI names the source whenever it prints the number.
+       */
+      rating: number | null;
+      ratingCount: number | null;
+      /**  The Douban page this record was linked from, when there is one. */
+      doubanUrl: string | null;
       authors: string[];
       tags: string[];
     } | null>("book_get", { id }),
@@ -1177,6 +1187,14 @@ export type BookMetadataPatch = {
   publisher: string | null;
   isbn: string | null;
   publishedYear: number | null;
+  /**
+   *  Carried, not edited: the sheet has no field for these, and a save that
+   *  dropped them would wipe the catalogue's rating every time the reader
+   *  fixed a typo in the title.
+   */
+  rating: number | null;
+  ratingCount: number | null;
+  doubanUrl: string | null;
   authors: string[];
 };
 
@@ -1288,6 +1306,16 @@ export type BookSummary = {
   isbn: string | null;
   /**  The edition's publication year. */
   publishedYear: number | null;
+  /**
+   *  The catalogue's community rating and how many people gave it.
+   *
+   *  Somebody else's opinion at the moment of the lookup, not the reader's
+   *  metadata: the UI names the source whenever it prints the number.
+   */
+  rating: number | null;
+  ratingCount: number | null;
+  /**  The Douban page this record was linked from, when there is one. */
+  doubanUrl: string | null;
   authors: string[];
   tags: string[];
 };
@@ -1319,6 +1347,14 @@ export type Candidate = {
   publishedYear: number | null;
   /**  The catalogue's blurb, capped — see [`DESCRIPTION_LIMIT`]. */
   description: string | null;
+  /**
+   *  The catalogue's own community rating — **not Douban's**, and the UI says
+   *  so every time it prints one.
+   */
+  rating: number | null;
+  ratingCount: number | null;
+  /**  The Douban page this record was linked from, when it has one. */
+  doubanUrl: string | null;
   /**
    *  A BCP-47-ish tag (`zh`, `en`), taken as the catalogue spells it — NeoDB
    *  already speaks that language, unlike a MARC catalogue's `chi`/`eng`.
@@ -1829,6 +1865,10 @@ export type MetadataFill = {
   isbn: string | null;
   publishedYear: number | null;
   description: string | null;
+  /**  The catalogue's snapshot: written with the fills, never edited by hand. */
+  rating: number | null;
+  ratingCount: number | null;
+  doubanUrl: string | null;
 };
 
 /**  What one `book.migrate` carried across, for the dialog that asked for it. */
@@ -1950,6 +1990,17 @@ export type Proposal = {
    */
   skipped: string | null;
   matchScore: number | null;
+  /**
+   *  The catalogue's rating, how many people gave it, and the Douban page.
+   *
+   *  Carried beside the fills rather than as fills: they are not fields the
+   *  reader edits, they are what the catalogue said at lookup time. `None`
+   *  when the book already has them, so what the row shows is exactly what
+   *  the apply will write.
+   */
+  rating: number | null;
+  ratingCount: number | null;
+  doubanUrl: string | null;
 };
 
 /**  One retrieved chunk, handed to the frontend and to the prompt builder. */

@@ -108,6 +108,9 @@ async function importOne(file: File, seen: Set<string>): Promise<ImportOutcome> 
       // the catalogue is what puts real values here.
       isbn: null,
       publishedYear: null,
+      rating: null,
+      ratingCount: null,
+      doubanUrl: null,
       format: parsed.format,
       fileSize: file.size,
       addedAt: stamp,
