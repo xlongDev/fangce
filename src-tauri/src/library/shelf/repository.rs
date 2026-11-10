@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 
@@ -190,7 +191,22 @@ pub struct BookQuery {
     /// "find the copy I deleted last week" a search rather than a scroll.
     #[serde(default)]
     pub trash: bool,
+    /// How many rows to return; `None` is the whole shelf.
+    ///
+    /// The renderer asks for the whole shelf on purpose — its grid is windowed
+    /// over the full array, and grouping and scroll restore both index into it,
+    /// so a page would be a second source of truth for "where am I". The one
+    /// caller that pages is the tool server, which has a context window instead
+    /// of a viewport.
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Rows to skip. Only meaningful together with `limit`.
+    #[serde(default)]
+    pub offset: Option<usize>,
 }
+
+/// Ceiling on `limit`, so a caller cannot ask for a million rows by accident.
+const MAX_PAGE: usize = 5_000;
 
 /// A dimension the shelf can be narrowed by.
 ///
@@ -289,10 +305,12 @@ const SELECT_COLUMNS: &str = "b.id, b.title, b.subtitle, b.description, b.langua
 /// library would offer values that lead straight to an empty grid.
 ///
 /// Every clause here is a literal from this file; user input only ever arrives
-/// as a bound parameter.
-fn conditions(query: &BookQuery, skip: Option<Dimension>) -> (Vec<String>, Vec<String>) {
+/// as a bound parameter. The parameters are `Value`s rather than `String`s
+/// because a page's `LIMIT`/`OFFSET` are numbers, and a bind list that can hold
+/// only text would push them into the SQL as a formatted fragment.
+fn conditions(query: &BookQuery, skip: Option<Dimension>) -> (Vec<String>, Vec<Value>) {
     let mut conditions: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
+    let mut binds: Vec<Value> = Vec::new();
     let keep = |dimension: Dimension| skip != Some(dimension);
 
     // Never skipped: the bin is a different set of rows, not a filter on the
@@ -310,7 +328,7 @@ fn conditions(query: &BookQuery, skip: Option<Dimension>) -> (Vec<String>, Vec<S
               WHERE bt.book_id = b.id AND t.name = ? COLLATE NOCASE)"
                 .to_string(),
         );
-        binds.push(tag.to_string());
+        binds.push(Value::Text(tag.to_string()));
     }
     if let Some(needle) = normalized_search(&query.search) {
         conditions.push(
@@ -320,12 +338,12 @@ fn conditions(query: &BookQuery, skip: Option<Dimension>) -> (Vec<String>, Vec<S
                 .to_string(),
         );
         // One needle, three placeholders.
-        binds.extend([needle.clone(), needle.clone(), needle]);
+        binds.extend([needle.clone(), needle.clone(), needle].map(Value::Text));
     }
 
     if keep(Dimension::Format) && !query.formats.is_empty() {
         conditions.push(in_list("b.format", query.formats.len()));
-        binds.extend(query.formats.iter().map(|format| format.as_str().to_string()));
+        binds.extend(query.formats.iter().map(|format| Value::Text(format.as_str().to_string())));
     }
     if keep(Dimension::Language) {
         push_in(&mut conditions, &mut binds, "b.language", &query.languages);
@@ -372,13 +390,13 @@ fn in_list(column: &str, len: usize) -> String {
 }
 
 /// Pushes an `IN` condition for a text column, skipping an empty selection.
-fn push_in(conditions: &mut Vec<String>, binds: &mut Vec<String>, column: &str, values: &[String]) {
+fn push_in(conditions: &mut Vec<String>, binds: &mut Vec<Value>, column: &str, values: &[String]) {
     let values: Vec<&String> = values.iter().filter(|value| !value.trim().is_empty()).collect();
     if values.is_empty() {
         return;
     }
     conditions.push(in_list(column, values.len()));
-    binds.extend(values.into_iter().cloned());
+    binds.extend(values.into_iter().map(|value| Value::Text(value.clone())));
 }
 
 fn status_predicate(status: ReadingStatus) -> Option<&'static str> {
@@ -392,11 +410,12 @@ fn status_predicate(status: ReadingStatus) -> Option<&'static str> {
 
 /// Loads the shelf for the given query.
 pub fn list(conn: &Connection, query: &BookQuery) -> AppResult<Vec<BookSummary>> {
-    let (conditions, binds) = conditions(query, None);
+    let (conditions, mut binds) = conditions(query, None);
     let mut sql = format!("SELECT {SELECT_COLUMNS} FROM {} b", relation(query));
     sql.push_str(&where_clause(&conditions));
     sql.push_str(" ORDER BY ");
     sql.push_str(query.sort.order_by());
+    push_page(&mut sql, &mut binds, query);
 
     let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query(rusqlite::params_from_iter(binds.iter()))?;
@@ -410,6 +429,36 @@ pub fn list(conn: &Connection, query: &BookQuery) -> AppResult<Vec<BookSummary>>
     attach_authors(conn, &mut books)?;
     attach_tags(conn, &mut books)?;
     Ok(books)
+}
+
+/// How many books the query matches, ignoring its page.
+///
+/// A page without a total is a page you cannot navigate: "20 of 20" and "20 of
+/// 985" look identical until something counts. This runs the same conditions
+/// through `COUNT(*)` rather than `books.len()` so a paged caller never has to
+/// load the rows it is not going to show.
+pub fn count(conn: &Connection, query: &BookQuery) -> AppResult<usize> {
+    let (conditions, binds) = conditions(query, None);
+    let sql = format!("SELECT COUNT(*) FROM {} b {}", relation(query), where_clause(&conditions));
+    let total: i64 =
+        conn.query_row(&sql, rusqlite::params_from_iter(binds.iter()), |row| row.get(0))?;
+    Ok(total as usize)
+}
+
+/// Appends `LIMIT`/`OFFSET` when the query asked for a page.
+///
+/// Both are bound rather than formatted in, and both are clamped first: a
+/// `usize` cannot carry a fragment, but a caller that asks for ten million rows
+/// would still be asking for the whole table under a different name.
+fn push_page(sql: &mut String, binds: &mut Vec<Value>, query: &BookQuery) {
+    let Some(limit) = query.limit else { return };
+    let limit = limit.clamp(1, MAX_PAGE);
+    sql.push_str(" LIMIT ?");
+    binds.push(Value::Integer(limit as i64));
+    if let Some(offset) = query.offset.filter(|offset| *offset > 0) {
+        sql.push_str(" OFFSET ?");
+        binds.push(Value::Integer(offset.min(i64::MAX as usize) as i64));
+    }
 }
 
 /// Counts for the shelf's filter panel.
@@ -944,6 +993,61 @@ pub struct BookMetadataPatch {
 /// of as a blank line the card would still have to draw.
 fn blank_to_none(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|text| !text.is_empty())
+}
+
+/// The fields a **batch** edit may overwrite.
+///
+/// Two fields, not six. A title or a description is a fact about one book; a
+/// publisher or a language is a fact about a shelf's worth of them — 「这三十本
+/// 是同一家出的」 is the sentence this exists for. Replacing fifty author lists
+/// at once is a different feature with a different confirmation, and not one
+/// the batch bar should be able to do by accident.
+///
+/// `None` means "leave it alone" and `Some("")` means "clear it", the same
+/// convention the MCP `update_metadata` tool uses.
+#[derive(specta::Type, Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookFieldsPatch {
+    pub publisher: Option<String>,
+    pub language: Option<String>,
+}
+
+impl BookFieldsPatch {
+    fn is_empty(&self) -> bool {
+        self.publisher.is_none() && self.language.is_none()
+    }
+}
+
+/// Applies `patch` to every id, inside the caller's transaction.
+///
+/// Read-modify-write per book: [`update_metadata`] takes a whole record, and a
+/// batch is defined as "change these fields, leave everything else" — a book's
+/// title has to survive a publisher edit. Returns how many rows were written.
+pub fn update_fields_many(
+    tx: &Transaction<'_>,
+    ids: &[String],
+    patch: &BookFieldsPatch,
+) -> AppResult<usize> {
+    if patch.is_empty() {
+        return Err(AppError::InvalidArgument("没有要改的字段".into()));
+    }
+    let mut written = 0;
+    for id in ids {
+        let book = get(tx, id)?.ok_or_else(|| AppError::NotFound(id.clone()))?;
+        let merged = BookMetadataPatch {
+            title: book.title,
+            subtitle: book.subtitle,
+            description: book.description,
+            // `Some("")` is meaningful: `blank_to_none` inside `update_metadata`
+            // turns it into "no value", which is how a batch clears a field.
+            language: patch.language.clone().or(book.language),
+            publisher: patch.publisher.clone().or(book.publisher),
+            authors: book.authors,
+        };
+        update_metadata(tx, id, &merged)?;
+        written += 1;
+    }
+    Ok(written)
 }
 
 /// Rewrites the metadata the edit sheet exposes.
@@ -1781,5 +1885,90 @@ mod tests {
         trash(&conn, "b2").expect("first");
         trash(&conn, "b2").expect("second — 双击不该报错");
         assert!(matches!(trash(&conn, "nope"), Err(AppError::NotFound(_))));
+    }
+
+    /// A page is a window onto the same list, not a different one: the two
+    /// halves have to cover the shelf exactly once.
+    #[test]
+    fn a_page_returns_its_window_and_the_count_ignores_it() {
+        let conn = filtered_shelf();
+        let first = list(&conn, &BookQuery { limit: Some(2), ..BookQuery::default() }).expect("p1");
+        let rest =
+            list(&conn, &BookQuery { limit: Some(2), offset: Some(2), ..BookQuery::default() })
+                .expect("p2");
+
+        assert_eq!(first.len(), 2);
+        assert_eq!(rest.len(), 1, "第二页只剩一本");
+        let mut ids: Vec<&str> =
+            first.iter().chain(rest.iter()).map(|book| book.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["b1", "b2", "b3"], "两页合起来正好是书架，不重不漏");
+
+        // The total describes the query, not the page — a page you cannot
+        // navigate is a page that looks like the whole library.
+        let paged = BookQuery { limit: Some(1), ..BookQuery::default() };
+        assert_eq!(count(&conn, &paged).expect("count"), 3);
+        // And it counts what the filters leave, not the table.
+        let narrowed =
+            BookQuery { formats: vec![BookFormat::Epub], limit: Some(1), ..BookQuery::default() };
+        assert_eq!(count(&conn, &narrowed).expect("count"), 2);
+    }
+
+    #[test]
+    fn a_page_past_the_end_is_empty_rather_than_an_error() {
+        let conn = filtered_shelf();
+        let beyond = BookQuery { limit: Some(10), offset: Some(50), ..BookQuery::default() };
+        assert!(list(&conn, &beyond).expect("list").is_empty());
+        assert_eq!(count(&conn, &beyond).expect("count"), 3);
+    }
+
+    /// The sentence this feature exists for: 「这三十本是同一家出的」. The one
+    /// thing it must not do is rewrite the title on the way.
+    #[test]
+    fn a_batch_edit_changes_only_the_fields_it_names() {
+        let conn = filtered_shelf();
+        let tx = conn.unchecked_transaction().expect("tx");
+        let written = update_fields_many(
+            &tx,
+            &["b1".into(), "b2".into()],
+            &BookFieldsPatch { publisher: Some("统一出版社".into()), language: None },
+        )
+        .expect("batch");
+        tx.commit().expect("commit");
+
+        assert_eq!(written, 2);
+        let first = get(&conn, "b1").expect("get").expect("b1");
+        assert_eq!(first.publisher.as_deref(), Some("统一出版社"));
+        assert_eq!(first.title, "三体", "书名不是批量的字段");
+        assert_eq!(first.authors, ["刘慈欣"], "作者不是批量的字段");
+        assert_eq!(first.language.as_deref(), Some("zh"), "没点名的字段保持原样");
+
+        let third = get(&conn, "b3").expect("get").expect("b3");
+        assert_eq!(third.publisher, None, "没选中的书不动");
+    }
+
+    #[test]
+    fn a_batch_edit_can_clear_a_field_with_an_empty_string() {
+        let conn = filtered_shelf();
+        let tx = conn.unchecked_transaction().expect("tx");
+        update_fields_many(
+            &tx,
+            &["b1".into()],
+            &BookFieldsPatch { publisher: None, language: Some(String::new()) },
+        )
+        .expect("batch");
+        tx.commit().expect("commit");
+
+        let book = get(&conn, "b1").expect("get").expect("b1");
+        assert_eq!(book.language, None, "空串 = 清空");
+        assert_eq!(book.publisher.as_deref(), Some("重庆出版社"), "别的字段不受影响");
+    }
+
+    #[test]
+    fn an_empty_batch_patch_is_rejected_rather_than_a_no_op() {
+        let conn = filtered_shelf();
+        let tx = conn.unchecked_transaction().expect("tx");
+        let outcome = update_fields_many(&tx, &["b1".into()], &BookFieldsPatch::default());
+        assert!(matches!(outcome, Err(AppError::InvalidArgument(_))));
     }
 }

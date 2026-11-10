@@ -144,6 +144,17 @@ impl Grants {
         self.granted.contains(&permission)
     }
 
+    /// Whether anything this connection may do writes.
+    ///
+    /// Asked once, when the connection is opened: a read-only grant gets a
+    /// `query_only` connection, so a mistake in this layer cannot become a
+    /// changed row. See [`crate::db::Library::open_existing`].
+    pub fn may_write(&self) -> bool {
+        self.granted
+            .iter()
+            .any(|permission| !matches!(permission, Permission::Read | Permission::Search))
+    }
+
     fn names(&self) -> Vec<&'static str> {
         self.granted.iter().map(|permission| permission.key()).collect()
     }
@@ -359,6 +370,11 @@ fn catalogue() -> Vec<Tool> {
                                 "minimum": 1,
                                 "maximum": MAX_LIMIT,
                                 "default": DEFAULT_LIMIT
+                            },
+                            "offset": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "description": "跳过多少本，配合 limit 翻页；total 告诉你还有多少。"
                             }
                         }
                     }
@@ -516,19 +532,30 @@ fn catalogue() -> Vec<Tool> {
 }
 
 fn search_books(args: &Value, library: &Library) -> AppResult<Value> {
+    let limit = limit_of(args);
+    let offset =
+        args.get("offset").and_then(Value::as_u64).map(|value| value as usize).unwrap_or(0);
     let query = BookQuery {
         search: args.get("query").and_then(Value::as_str).map(str::to_string),
+        // Paged in SQL rather than fetched and sliced: on a real 985-book
+        // library the whole shelf is ~1 MB of JSON, and an agent asking for
+        // three titles was paying for all of it.
+        limit: Some(limit),
+        offset: Some(offset),
         ..BookQuery::default()
     };
-    let limit = limit_of(args);
-    let books = library.with(|conn| repository::list(conn, &query))?;
-    let total = books.len();
+    // One lock, two statements: the count and the page have to describe the
+    // same set, and a write landing between them would make `total` a lie.
+    let (books, total) = library.with(|conn| {
+        let total = repository::count(conn, &query)?;
+        let books = repository::list(conn, &query)?;
+        Ok((books, total))
+    })?;
     // Projected rather than serialised whole: `BookSummary` carries the
     // description and the last-position anchor, which are the two longest
     // fields and the two an agent asking "which book is this" never needs.
     let rows: Vec<Value> = books
         .into_iter()
-        .take(limit)
         .map(|book| {
             json!({
                 "id": book.id,
@@ -542,7 +569,12 @@ fn search_books(args: &Value, library: &Library) -> AppResult<Value> {
             })
         })
         .collect();
-    Ok(json!({ "total": total, "returned": rows.len(), "books": rows }))
+    Ok(json!({
+        "total": total,
+        "returned": rows.len(),
+        "offset": offset,
+        "books": rows,
+    }))
 }
 
 fn get_book(args: &Value, library: &Library) -> AppResult<Value> {
@@ -671,54 +703,64 @@ mod tests {
     use crate::document::BookFormat;
     use crate::library::repository::NewBook;
 
-    /// A library with one book, one chapter, one highlight and one bookmark.
+    /// A library with one book, one chapter, one highlight and one bookmark,
+    /// opened the way the tool server opens one.
+    ///
+    /// The seeding uses `Library::open` because that is what the app does; the
+    /// handle returned is `open_existing(.., true)`, because that is what a
+    /// granted connection gets. Using `Library::open` for the handle is what
+    /// let a `query_only` bug ship — every write tool failed in production and
+    /// every test here passed.
     fn harness(tag: &str) -> (PathBuf, Library) {
         let dir = crate::document::fixture::temp_dir(tag);
-        let library = Library::open(&dir).expect("open library");
-        library
-            .with_tx(|tx| {
-                repository::insert(
-                    tx,
-                    &NewBook {
-                        id: "b1",
-                        title: "三体",
-                        subtitle: None,
-                        description: None,
-                        language: Some("zh"),
-                        publisher: Some("重庆出版社"),
-                        identifier: None,
-                        format: BookFormat::Epub,
-                        content_hash: "h1",
-                        file_path: "/books/b1.epub",
-                        file_size: 1024,
-                        cover_path: None,
-                        authors: &["刘慈欣".to_string()],
-                    },
-                )?;
-                Ok(())
-            })
-            .expect("insert book");
-        library
-            .with(|conn| {
-                conn.execute(
-                    "INSERT INTO chapters (book_id, idx, title, content, chars) \
-                     VALUES ('b1', 0, '第一章', '宇宙很大，生活更大。', 10)",
-                    [],
-                )?;
-                conn.execute(
-                    "INSERT INTO annotations (id, book_id, chapter_idx, start_char, end_char, \
-                     text, created_at, updated_at) VALUES ('a1', 'b1', 0, 0, 2, '宇宙', 1, 1)",
-                    [],
-                )?;
-                conn.execute(
-                    "INSERT INTO bookmarks (id, book_id, chapter_idx, fraction, label, \
-                     created_at, updated_at) VALUES ('m1', 'b1', 0, 0.5, '页签', 1, 1)",
-                    [],
-                )?;
-                Ok(())
-            })
-            .expect("seed marks");
+        seed(&dir);
+        let library = Library::open_existing(&dir, true).expect("tool handle");
         (dir, library)
+    }
+
+    fn seed(dir: &Path) {
+        let app = Library::open(dir).expect("open library");
+        app.with_tx(|tx| {
+            repository::insert(
+                tx,
+                &NewBook {
+                    id: "b1",
+                    title: "三体",
+                    subtitle: None,
+                    description: None,
+                    language: Some("zh"),
+                    publisher: Some("重庆出版社"),
+                    identifier: None,
+                    format: BookFormat::Epub,
+                    content_hash: "h1",
+                    file_path: "/books/b1.epub",
+                    file_size: 1024,
+                    cover_path: None,
+                    authors: &["刘慈欣".to_string()],
+                },
+            )?;
+            Ok(())
+        })
+        .expect("insert book");
+        app.with(|conn| {
+            conn.execute(
+                "INSERT INTO chapters (book_id, idx, title, content, chars) \
+                 VALUES ('b1', 0, '第一章', '宇宙很大，生活更大。', 10)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO annotations (id, book_id, chapter_idx, start_char, end_char, \
+                 text, created_at, updated_at) VALUES ('a1', 'b1', 0, 0, 2, '宇宙', 1, 1)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO bookmarks (id, book_id, chapter_idx, fraction, label, \
+                 created_at, updated_at) VALUES ('m1', 'b1', 0, 0.5, '页签', 1, 1)",
+                [],
+            )?;
+            Ok(())
+        })
+        .expect("seed marks");
     }
 
     /// Feeds a script through `serve` and returns the parsed responses.
@@ -891,6 +933,34 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The page is the page; the total is the query. An agent that reads
+    /// `returned == total` as "that is the whole library" must not be able to
+    /// make that mistake here.
+    #[test]
+    fn search_books_pages_without_losing_the_total() {
+        let (dir, library) = harness("mcp-page");
+        let out = run_script(
+            &library,
+            &[&call("search_books", json!({ "query": "三体", "limit": 1, "offset": 0 }))],
+        );
+        let payload: Value = serde_json::from_str(text_of(&out[0])).expect("payload");
+        assert_eq!(payload["returned"], 1);
+        assert_eq!(payload["total"], 1);
+        assert_eq!(payload["offset"], 0);
+
+        // Past the end: an empty page, and a total that still says how many
+        // there are — that is what makes "there is nothing on page 7" different
+        // from "there is nothing at all".
+        let out = run_script(
+            &library,
+            &[&call("search_books", json!({ "query": "三体", "offset": 40 }))],
+        );
+        let payload: Value = serde_json::from_str(text_of(&out[0])).expect("payload");
+        assert_eq!(payload["returned"], 0);
+        assert_eq!(payload["total"], 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn annotations_and_bookmarks_come_back_with_their_book() {
         let (dir, library) = harness("mcp-marks");
@@ -1051,5 +1121,38 @@ mod tests {
         assert_eq!(grants.names(), ["delete"]);
         assert_eq!(Permission::parse("write"), Some(Permission::WriteMetadata));
         assert_eq!(Permission::parse("nonsense"), None);
+    }
+
+    #[test]
+    fn a_grant_knows_whether_it_needs_a_writable_handle() {
+        assert!(!Grants::read_only().may_write());
+        assert!(Grants::all().may_write());
+        // `write` alone is enough: the handle is not about *how much* it can
+        // write, only whether it may.
+        let write_only = Grants { granted: [Permission::WriteMetadata].into_iter().collect() };
+        assert!(write_only.may_write());
+    }
+
+    /// Defence in depth, and the bug that proved it was needed: the grant says
+    /// this connection may write, the handle says it may not, and the handle
+    /// wins. A mistake in the grant layer must not become a changed row.
+    #[test]
+    fn a_read_only_handle_refuses_a_write_the_grant_allowed() {
+        let dir = crate::document::fixture::temp_dir("mcp-ro-handle");
+        seed(&dir);
+        let library = Library::open_existing(&dir, false).expect("read-only handle");
+
+        let out = run_with(
+            Grants::all(),
+            &library,
+            &[&call("update_metadata", json!({ "id": "b1", "publisher": "不该写进去" }))],
+        );
+        assert_eq!(out[0]["result"]["isError"], true, "{}", text_of(&out[0]));
+
+        drop(library);
+        let check = Library::open_existing(&dir, false).expect("reopen");
+        let book = check.with(|conn| repository::get(conn, "b1")).expect("get").expect("b1");
+        assert_eq!(book.publisher.as_deref(), Some("重庆出版社"), "库里一个字都没变");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

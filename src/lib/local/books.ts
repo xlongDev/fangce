@@ -11,6 +11,7 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 
 import type {
   Annotation,
+  BookFieldsPatch,
   Bookmark,
   BookMetadataPatch,
   BookQuery,
@@ -519,6 +520,33 @@ export async function bookUpdate(id: string, patch: BookMetadataPatch): Promise<
     publisher: patch.publisher,
     authors: patch.authors,
   });
+}
+
+/** The batch sheet's two fields, on a whole selection.
+ *
+ * `null` is "leave it alone" and `""` is "clear it", the same contract the
+ * desktop side has: a reader who fills in one field must not blank the other
+ * one on thirty books. */
+/** `null` leaves the field alone; a blank string clears it. Module scope
+ *  rather than a closure: it captures nothing, and a per-call copy of a pure
+ *  two-line rule is the kind of thing that grows a second definition. */
+function settle(value: string | null, current: string | null): string | null {
+  if (value === null) return current;
+  return value.trim() === "" ? null : value.trim();
+}
+
+export async function bookSetMetadataMany(ids: string[], patch: BookFieldsPatch): Promise<number> {
+  let written = 0;
+  for (const id of ids) {
+    const row = await bookRow(id);
+    if (!row) continue;
+    await patchBook(id, {
+      publisher: settle(patch.publisher, row.publisher),
+      language: settle(patch.language, row.language),
+    });
+    written += 1;
+  }
+  return written;
 }
 
 export async function bookCoverSave(id: string, bytes: number[]): Promise<void> {

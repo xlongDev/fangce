@@ -5,7 +5,9 @@ import { ipc, isDesktopRuntime, onDeleteProgress, onImportProgress } from "@/lib
 import { demoBooks, demoEnabled, demoFacets, demoLibraryStats } from "@/lib/demo";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { renderFirstPagePng } from "@/lib/pdf";
+import { showToast } from "@/stores/toasts";
 import type {
+  BookFieldsPatch,
   BookMetadataPatch,
   BookQuery,
   BookSummary,
@@ -234,6 +236,33 @@ export function useEmptyTrash() {
   const invalidate = useInvalidateShelf();
   return useMutation({
     mutationFn: () => ipc.bookEmptyTrash(),
+    onSettled: invalidate,
+  });
+}
+
+/** Rewrites the same two fields on a whole selection, in one transaction.
+ *
+ * One request rather than one `updateBook` per id: a batch of thirty was
+ * thirty round trips and thirty invalidations of the shelf it was editing.
+ *
+ * The toast is not decoration. A shelf card shows a title, authors and a
+ * format — not the publisher — so without a word from the app a thirty-book
+ * edit looks exactly like nothing happening.
+ */
+export function useSetMetadataMany() {
+  const invalidate = useInvalidateShelf();
+  return useMutation({
+    mutationFn: ({ ids, patch }: { ids: string[]; patch: BookFieldsPatch }) =>
+      ipc.bookSetMetadataMany(ids, patch),
+    onSuccess: (written, { patch }) => {
+      const fields = [
+        patch.publisher === null ? null : "出版社",
+        patch.language === null ? null : "语言",
+      ]
+        .filter(Boolean)
+        .join(" 和 ");
+      showToast("success", `已改 ${written} 本的${fields}`);
+    },
     onSettled: invalidate,
   });
 }

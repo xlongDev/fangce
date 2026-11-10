@@ -369,6 +369,21 @@ pub async fn book_delete_many(
     .map_err(|err| AppError::Message(format!("删除任务被中断：{err}")))?
 }
 
+/// `book.setMetadataMany` — the batch bar's 编辑信息.
+///
+/// Two fields, and a field left out is a field left alone: `publisher` and
+/// `language` are the facts that belong to a shelf's worth of books at once.
+/// Returns how many rows were written, so the bar can say what it did.
+#[tauri::command]
+#[specta::specta]
+pub fn book_set_metadata_many(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+    patch: crate::library::repository::BookFieldsPatch,
+) -> AppResult<usize> {
+    library::set_metadata_fields(&state.library, &ids, &patch)
+}
+
 /// `book.restore` — takes books back out of the trash.
 ///
 /// One command for one book and for a batch: a restore writes a timestamp and

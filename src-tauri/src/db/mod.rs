@@ -115,18 +115,26 @@ impl Library {
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
-    /// Opens an existing database for **reading only**, without migrating it.
+    /// Opens an existing database for a second process, without migrating it.
     ///
-    /// The second-process path (`fangce --mcp`). The app owns this schema, and
-    /// a tool server that migrated the file out from under a running app would
-    /// be two writers agreeing on nothing — so this one refuses to be the
-    /// second writer at all: `query_only` is SQLite's own word for "I will only
-    /// read", which turns an accidental write into an error instead of a
-    /// corruption.
+    /// The `fangce --mcp` path. The app owns this schema, and a tool server
+    /// that migrated the file out from under a running app would be two writers
+    /// agreeing on nothing — so this one never migrates and never compacts.
+    ///
+    /// `writable` is the connection's own ceiling, and it is deliberately
+    /// stricter than the tool grant: a connection opened read-only refuses
+    /// every write at the SQLite level (`PRAGMA query_only`), so a grant layer
+    /// that lets something through by mistake still cannot change a row. The
+    /// default grant is read-only, so the default connection is too.
+    ///
+    /// ⚠️ This was `query_only` unconditionally at first, which made every
+    /// write tool answer `attempt to write a readonly database` — the unit
+    /// tests used [`Library::open`] and never noticed. `writable: true` is what
+    /// a granted connection gets; there is a test for both ends.
     ///
     /// `journal_mode` is not set here on purpose. WAL is a property of the file
     /// once it has been set, and setting it again is a write.
-    pub fn open_existing(data_dir: &Path) -> AppResult<Self> {
+    pub fn open_existing(data_dir: &Path, writable: bool) -> AppResult<Self> {
         let path = data_dir.join(DB_FILE);
         if !path.exists() {
             return Err(AppError::Message(format!(
@@ -136,10 +144,12 @@ impl Library {
         }
         let conn = Connection::open(&path)?;
         conn.execute_batch(
-            "PRAGMA query_only = ON;
-             PRAGMA busy_timeout = 5000;
+            "PRAGMA busy_timeout = 5000;
              PRAGMA temp_store = MEMORY;",
         )?;
+        if !writable {
+            conn.execute_batch("PRAGMA query_only = ON;")?;
+        }
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
@@ -254,6 +264,50 @@ mod tests {
     /// The contract every `with_tx` caller leans on — sync's apply pass most of
     /// all, where books, highlights and bookmarks have to land together or not
     /// at all. Pins that a write made before the error does not survive it.
+    /// The two ends of [`Library::open_existing`], and the reason `writable`
+    /// exists at all.
+    ///
+    /// The tool server's first version opened every connection `query_only`,
+    /// including the one behind a granted write — every write tool answered
+    /// `attempt to write a readonly database` in production while the unit
+    /// tests, which used [`Library::open`], stayed green.
+    #[test]
+    fn a_second_handle_writes_only_when_it_was_opened_for_writing() {
+        let dir = crate::document::fixture::temp_dir("db-second-handle");
+        {
+            let app = Library::open(&dir).expect("open");
+            app.with(|conn| {
+                Ok(conn.execute(
+                    "INSERT INTO settings (key, value, updated_at) VALUES ('k', 'v', 1)",
+                    [],
+                )?)
+            })
+            .expect("seed");
+        }
+
+        let read_only = Library::open_existing(&dir, false).expect("read-only handle");
+        let refused = read_only.with(|conn| {
+            Ok(conn.execute(
+                "INSERT INTO settings (key, value, updated_at) VALUES ('k2', 'v', 1)",
+                [],
+            )?)
+        });
+        assert!(refused.is_err(), "只读句柄必须拒绝写入：{refused:?}");
+        drop(read_only);
+
+        let writable = Library::open_existing(&dir, true).expect("writable handle");
+        writable
+            .with(|conn| {
+                Ok(conn.execute(
+                    "INSERT INTO settings (key, value, updated_at) VALUES ('k3', 'v', 1)",
+                    [],
+                )?)
+            })
+            .expect("被授予写权限的句柄必须能写");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn a_failed_transaction_leaves_nothing_behind() {
         let h = Harness::new("db-tx-rollback");

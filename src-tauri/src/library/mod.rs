@@ -197,6 +197,24 @@ pub fn empty_trash(library: &Library) -> AppResult<usize> {
     Ok(count)
 }
 
+/// Rewrites the same two fields on a batch of books, in one transaction.
+///
+/// One transaction rather than one per book: the batch bar hands over a
+/// selection, and a half-applied batch is a shelf where thirty books have the
+/// new publisher and twenty do not — a state nobody asked for and nothing can
+/// undo. `ensure_existing` first, so a stale id fails before anything is
+/// written.
+pub fn set_metadata_fields(
+    library: &Library,
+    ids: &[String],
+    patch: &repository::BookFieldsPatch,
+) -> AppResult<usize> {
+    library.with_tx(|tx| {
+        repository::ensure_existing(tx, ids)?;
+        repository::update_fields_many(tx, ids, patch)
+    })
+}
+
 /// Removes the files a batch of deleted books owned. A failure here is logged
 /// rather than raised: the rows are already gone, and an orphan file is not
 /// worth failing the delete over.

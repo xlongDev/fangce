@@ -351,3 +351,93 @@ fn real_books_import_and_delete_bench() -> Result<(), Box<dyn std::error::Error>
     println!("database: {:.0} MB", db_bytes as f64 / 1e6);
     Ok(())
 }
+
+/// What the shelf query costs as a library grows, and what a page costs instead.
+///
+/// The renderer asks for the whole shelf on every filter change — its grid is
+/// windowed over the full array, so that is the shape it needs — but the tool
+/// server used to do the same and then slice in memory. On a real 985-book
+/// library that is roughly a megabyte of JSON, serialised, to answer "which
+/// three books". This measures both ends and the payload between them.
+#[test]
+#[ignore = "benchmark: cargo test --release bench -- --ignored --nocapture"]
+fn shelf_query_bench() -> Result<(), Box<dyn std::error::Error>> {
+    use crate::library::repository::{self, BookQuery};
+
+    const BOOKS: usize = 5000;
+    let bench = Bench::new("bench-shelf");
+    let layout = Layout::create(bench.dir.join("data")).expect("layout");
+    let library = Library::open(&layout.data_dir).expect("open library");
+
+    let seeded = Instant::now();
+    library
+        .with_tx(|tx| {
+            // 97 authors shared across the shelf: `authors.name` is unique, and
+            // a real library has far fewer authors than books anyway.
+            for index in 0..97 {
+                tx.execute(
+                    "INSERT INTO authors (id, name, sort_name) VALUES (?1, ?2, ?2)",
+                    rusqlite::params![format!("a{index}"), format!("作者 {index}")],
+                )?;
+            }
+            for index in 0..BOOKS {
+                tx.execute(
+                    "INSERT INTO books (id, title, sort_title, format, content_hash, file_path, \
+                 file_size, added_at, updated_at, language) \
+                 VALUES (?1, ?2, ?2, 'epub', ?3, 'p', 1024, ?4, ?4, 'zh')",
+                    rusqlite::params![
+                        format!("b{index:05}"),
+                        format!("书 {index}"),
+                        format!("hash{index}"),
+                        index as i64
+                    ],
+                )?;
+                tx.execute(
+                    "INSERT INTO book_authors (book_id, author_id, position) VALUES (?1, ?2, 0)",
+                    rusqlite::params![format!("b{index:05}"), format!("a{}", index % 97)],
+                )?;
+            }
+            Ok(())
+        })
+        .expect("seed");
+    println!("\n{BOOKS} books seeded in {:.0} ms", ms(seeded.elapsed()));
+
+    let full =
+        library.with(|conn| repository::list(conn, &BookQuery::default())).expect("full list");
+    let full_ms = {
+        let started = Instant::now();
+        for _ in 0..5 {
+            let books =
+                library.with(|conn| repository::list(conn, &BookQuery::default())).expect("list");
+            assert_eq!(books.len(), BOOKS);
+        }
+        ms(started.elapsed()) / 5.0
+    };
+    let full_bytes = serde_json::to_vec(&full).expect("serialise").len();
+
+    let page_ms = {
+        let query = BookQuery { limit: Some(20), ..BookQuery::default() };
+        let started = Instant::now();
+        for _ in 0..20 {
+            let books = library.with(|conn| repository::list(conn, &query)).expect("page");
+            assert_eq!(books.len(), 20);
+        }
+        ms(started.elapsed()) / 20.0
+    };
+    let count_ms = {
+        let query = BookQuery::default();
+        let started = Instant::now();
+        for _ in 0..20 {
+            assert_eq!(library.with(|conn| repository::count(conn, &query)).expect("count"), BOOKS);
+        }
+        ms(started.elapsed()) / 20.0
+    };
+
+    println!(
+        "full shelf  ({BOOKS} rows): {full_ms:.1} ms, {:.2} MB of JSON",
+        full_bytes as f64 / 1e6
+    );
+    println!("page of 20:                {page_ms:.2} ms");
+    println!("count:                     {count_ms:.2} ms");
+    Ok(())
+}

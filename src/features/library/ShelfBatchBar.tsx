@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowCounterClockwise, Sparkle, Star, Tag } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, PencilSimple, Sparkle, Star, Tag } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 
 import { GlassButton } from "@/components/glass/button";
@@ -8,8 +8,10 @@ import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
 import { SPRING, useMotion } from "@/lib/motion";
 import { AiErrorCard } from "@/components/common/AiErrorCard";
 import { useAiConfig } from "@/hooks/useAi";
+import { useSetMetadataMany } from "@/hooks/useLibrary";
 import { isDesktopRuntime, ipc } from "@/lib/ipc";
 import { useGuideBatch } from "@/stores/guideBatch";
+import { BatchMetaDialog } from "@/features/library/BatchMetaDialog";
 import type { ShelfSelection } from "@/features/library/useShelfSelection";
 
 /**
@@ -38,6 +40,11 @@ export function ShelfBatchBar({
   const trashed = mode === "trash";
   const barRef = useRef<HTMLDivElement>(null);
   const [guideConfirm, setGuideConfirm] = useState(false);
+  /** The batch metadata sheet. Its own dialog rather than a mode of the
+   *  per-book one: that sheet starts from one book's values, and a batch has
+   *  no values to start from — only fields the reader may or may not fill. */
+  const [metaOpen, setMetaOpen] = useState(false);
+  const setMetadataMany = useSetMetadataMany();
 
   /** Which books already have a cached guide, so the confirm dialog can skip
    *  them out of the queue and out of the token estimate. Refetched on open:
@@ -190,6 +197,17 @@ export function ShelfBatchBar({
                     >
                       <Tag size={13} /> 打标签
                     </GlassButton>
+                    {/* Beside 打标签 because both are "describe these books":
+                        the label is the reader's own word, the metadata is the
+                        book's. */}
+                    <GlassButton
+                      size="sm"
+                      variant="subtle"
+                      disabled={selection.count === 0}
+                      onClick={() => setMetaOpen(true)}
+                    >
+                      <PencilSimple size={13} /> 编辑信息
+                    </GlassButton>
                     <GlassButton
                       size="sm"
                       variant="subtle"
@@ -268,6 +286,19 @@ export function ShelfBatchBar({
           </GlassButton>
         </div>
       </GlassDialog>
+
+      <BatchMetaDialog
+        open={metaOpen}
+        count={selection.count}
+        busy={setMetadataMany.isPending}
+        onCancel={() => setMetaOpen(false)}
+        onSave={(patch) =>
+          setMetadataMany.mutate(
+            { ids: selection.selectedBooks.map((book) => book.id), patch },
+            { onSuccess: () => setMetaOpen(false) },
+          )
+        }
+      />
 
       {/* Batch AI guides: confirm (with the token estimate), then hand the run
           to the global store — progress floats as a shell-level pill, and the

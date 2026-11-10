@@ -42,12 +42,15 @@ pub fn run_mcp() -> i32 {
         .init();
 
     let outcome = db::data_dir().and_then(|dir| {
-        let library = db::Library::open_existing(&dir)?;
         // The grant is read once, at connect: an agent cannot widen its own
         // permissions mid-session, and the reader changes them by editing the
         // client's config — the only place the answer is visible.
-        let server =
-            mcp::Server::new(&library, mcp::Grants::from_env(), Some(mcp::audit_path(&dir)));
+        let grants = mcp::Grants::from_env();
+        // And it decides what the connection itself is allowed to do, so a
+        // read-only grant is a read-only *database handle*, not a promise the
+        // tool layer makes to itself.
+        let library = db::Library::open_existing(&dir, grants.may_write())?;
+        let server = mcp::Server::new(&library, grants, Some(mcp::audit_path(&dir)));
         let stdin = std::io::stdin().lock();
         let stdout = std::io::stdout().lock();
         server.serve(stdin, stdout)
@@ -144,6 +147,7 @@ pub fn run() -> tauri::Result<()> {
             commands::book::book_import,
             commands::book::book_delete,
             commands::book::book_delete_many,
+            commands::book::book_set_metadata_many,
             commands::book::book_restore,
             commands::book::book_purge,
             commands::book::book_purge_many,
@@ -470,6 +474,7 @@ mod specta_bindings {
                 commands::book::book_delete,
                 commands::book::book_migrate,
                 commands::book::book_delete_many,
+                commands::book::book_set_metadata_many,
                 commands::book::book_restore,
                 commands::book::book_purge,
                 commands::book::book_purge_many,
