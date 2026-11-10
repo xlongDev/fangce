@@ -7,7 +7,7 @@ use futures_util::StreamExt;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::library::metadata::{self, Candidate, Lookup, Proposal, Target};
+use crate::library::metadata::{self, Candidate, Lookup, Proposal, Provider, Target};
 use crate::library::{ops, repository};
 use crate::state::AppState;
 
@@ -19,7 +19,13 @@ use crate::state::AppState;
 /// of alternatives, and each one costs another request.
 const SEARCH_DEPTH: usize = 3;
 
-/// `metadata.search` — what the catalogues know about this book.
+/// `metadata.search` — what one catalogue knows about this book.
+///
+/// The source is the caller's choice, not a chain. The two catalogues answer
+/// differently — Douban has Chinese coverage and no ISBN, NeoDB has both and
+/// needs a proxy — and a reader comparing them is the whole reason the sheet
+/// has two buttons. Asking both and merging would hide which record they are
+/// looking at.
 ///
 /// The book is read first and the network call comes after, so no database
 /// guard is held across the await: the app's single connection serialises
@@ -27,21 +33,24 @@ const SEARCH_DEPTH: usize = 3;
 /// shelf.
 #[tauri::command]
 #[specta::specta]
-pub async fn metadata_search(state: State<'_, AppState>, id: String) -> AppResult<Vec<Candidate>> {
+pub async fn metadata_search(
+    state: State<'_, AppState>,
+    id: String,
+    source: String,
+) -> AppResult<Vec<Candidate>> {
+    let provider = Provider::parse(&source)
+        .ok_or_else(|| AppError::InvalidArgument(format!("没有这个书目来源：{source}")))?;
     let book = state
         .library
         .with(|conn| repository::get(conn, &id))?
         .ok_or_else(|| AppError::NotFound(id.clone()))?;
 
     let client = reqwest::Client::new();
-    // A fresh record for a single lookup: there is no second book to spare a
-    // timeout on.
-    let attempts = metadata::Attempts::new();
-    metadata::find(
+    metadata::search(
         &client,
-        &Lookup { title: &book.title, authors: &book.authors },
+        provider,
+        &Lookup::new(&book.title, &book.authors, book.isbn.is_none()),
         SEARCH_DEPTH,
-        &attempts,
     )
     .await
 }
@@ -113,7 +122,7 @@ pub async fn metadata_propose(
             let client = client.clone();
             let attempts = attempts.clone();
             async move {
-                let lookup = Lookup { title: &target.title, authors: &target.authors };
+                let lookup = Lookup::new(&target.title, &target.authors, target.isbn.is_none());
                 // A failure is reported per book, not swallowed into 「没有找到」:
                 // a reader whose network is down was being told to try a better
                 // title. One book failing still leaves the other twenty-nine

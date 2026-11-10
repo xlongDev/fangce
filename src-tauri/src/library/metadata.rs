@@ -82,6 +82,16 @@ impl Provider {
         }
     }
 
+    /// The inverse of [`Provider::key`], for the command that lets the reader
+    /// pick a source by name.
+    pub fn parse(key: &str) -> Option<Self> {
+        match key.trim() {
+            "douban" => Some(Provider::Douban),
+            "neodb" => Some(Provider::Neodb),
+            _ => None,
+        }
+    }
+
     /// What the reader sees next to a rating. The name is not decoration: a
     /// bare number would be read as Douban's, and NeoDB's is a different number
     /// from a different set of people.
@@ -131,6 +141,108 @@ pub struct Candidate {
 pub struct Lookup<'a> {
     pub title: &'a str,
     pub authors: &'a [String],
+    /// Whether the book still has no ISBN — the one field that costs a second
+    /// request, and the one worth it (Douban's JSON has none).
+    pub want_isbn: bool,
+    /// [`core_title`] of `title`, computed once.
+    ///
+    /// A library's titles carry things catalogues drop — 「索拉里斯星（修订版）」
+    /// against a record called 「索拉里斯星」 — and both the query and the
+    /// ranking have to look past them.
+    core: String,
+}
+
+impl<'a> Lookup<'a> {
+    pub fn new(title: &'a str, authors: &'a [String], want_isbn: bool) -> Self {
+        Self { title, authors, want_isbn, core: core_title(title) }
+    }
+}
+
+/// Brackets a Chinese title uses for an edition note, and their closers.
+const BRACKETS: [(char, char); 5] =
+    [('（', '）'), ('(', ')'), ('【', '】'), ('〔', '〕'), ('［', '］')];
+
+/// Separators that end the part of a title a catalogue keeps.
+const SEPARATORS: [&str; 8] = ["——", "—", "：", ":", "，", ",", "；", ";"];
+
+/// The title with its edition note and subtitle taken off.
+///
+/// 「索拉里斯星（修订版）」 → 「索拉里斯星」, 「人类简史：从动物到上帝」 →
+/// 「人类简史」. Used for the query *and* for scoring, because a candidate that
+/// matches the core is the right book even when the shelf's title is longer.
+fn core_title(title: &str) -> String {
+    let mut text = title.trim().to_string();
+    // Repeatedly, because 「书名（修订版）（全二册）」 is a shape that exists.
+    while let Some(shorter) = strip_trailing_group(&text) {
+        text = shorter;
+    }
+    for separator in SEPARATORS {
+        if let Some(index) = text.find(separator) {
+            let head = text[..index].trim();
+            if head.chars().count() >= 2 {
+                text = head.to_string();
+                break;
+            }
+        }
+    }
+    text
+}
+
+fn strip_trailing_group(text: &str) -> Option<String> {
+    let trimmed = text.trim_end();
+    let last = trimmed.chars().last()?;
+    let open = BRACKETS.iter().find(|(_, close)| *close == last)?.0;
+    let cut = trimmed.rfind(open)?;
+    let head = trimmed[..cut].trim();
+    (!head.is_empty()).then(|| head.to_string())
+}
+
+/// 「沙丘2」 → 「沙丘」, 「三体Ⅱ」 → 「三体」. Left alone when nothing would be
+/// left (「1984」 is a title, not a volume number).
+fn strip_volume(text: &str) -> String {
+    let trimmed = text.trim_end();
+    let end = trimmed.trim_end_matches(|ch: char| {
+        ch.is_ascii_digit() || ('Ⅰ'..='Ⅻ').contains(&ch) || ch.is_whitespace()
+    });
+    let end = end.trim_end_matches(['卷', '册', '部']);
+    let head = end.trim();
+    let shorter = head.chars().count() >= 2 && head.chars().count() < trimmed.chars().count();
+    if shorter { head.to_string() } else { trimmed.to_string() }
+}
+
+/// How many queries one book may cost.
+///
+/// The first one answers for most books; the rest exist for the ones that do
+/// not, and every extra attempt is another request to somebody else's server.
+const MAX_QUERIES: usize = 4;
+
+/// The queries to try, most specific first.
+///
+/// `subject_suggest` is an **autocomplete, not a search**: it matches from the
+/// start of a title. 「索拉里斯星」 finds two records and 「索拉里斯星（修订版）」
+/// finds none, which is what 「很多书查不到」 turned out to be. Every step below
+/// removes something a catalogue does not have.
+pub fn queries_for(title: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |query: String| {
+        let query = query.trim().to_string();
+        if query.chars().count() >= 2 && !out.contains(&query) {
+            out.push(query);
+        }
+    };
+    push(title.trim().to_string());
+    let core = core_title(title);
+    push(core.clone());
+    let without_volume = strip_volume(&core);
+    push(without_volume.clone());
+    // A shorter prefix: the last resort, and it still beats 「没有找到」 when the
+    // catalogue's title continues past the reader's.
+    let head: String = without_volume.chars().take(6).collect();
+    if head.chars().count() == 6 {
+        push(head);
+    }
+    out.truncate(MAX_QUERIES);
+    out
 }
 
 /// A book as the batch fill sees it: the fields it has, and the ones it does
@@ -373,12 +485,13 @@ pub async fn find(
         if outcome.is_err() {
             attempts.mark_down(provider);
         }
-        let answered = matches!(&outcome, Ok(found) if !found.is_empty());
+        let settled = matches!(&outcome, Ok(found) if is_strong(found));
         results.push((provider, outcome));
-        // Stop at the first provider that has something. Asking the rest would
-        // mean waiting out a timeout on the one that cannot be reached from
-        // here, for an answer nobody is going to see.
-        if answered {
+        // Stop at the first provider with an answer worth using. Asking the rest
+        // would mean waiting out a timeout on one that cannot be reached from
+        // here — but a weak match is not worth stopping for: 「匹配度 45%」 from
+        // one catalogue is a reason to ask the other, not an answer.
+        if settled {
             break;
         }
     }
@@ -394,9 +507,16 @@ pub async fn find(
 fn choose(results: Vec<(Provider, AppResult<Vec<Candidate>>)>) -> AppResult<Vec<Candidate>> {
     let mut notes = Vec::new();
     let mut answered = false;
+    let mut weak: Option<Vec<Candidate>> = None;
     for (provider, outcome) in results {
         match outcome {
-            Ok(found) if !found.is_empty() => return Ok(found),
+            Ok(found) if is_strong(&found) => return Ok(found),
+            Ok(found) if !found.is_empty() => {
+                // Kept, not used: a weak match still beats 「两个来源都连不上」,
+                // and the row will say 匹配度 only N% so nothing is hidden.
+                notes.push(format!("{}：只有弱匹配", provider.label()));
+                weak.get_or_insert(found);
+            }
             Ok(_) => {
                 answered = true;
                 notes.push(format!("{}：没有找到", provider.label()));
@@ -404,10 +524,18 @@ fn choose(results: Vec<(Provider, AppResult<Vec<Candidate>>)>) -> AppResult<Vec<
             Err(err) => notes.push(format!("{}：{err}", provider.label())),
         }
     }
+    if let Some(found) = weak {
+        return Ok(found);
+    }
     if answered {
         return Ok(Vec::new());
     }
     Err(AppError::Message(notes.join("；")))
+}
+
+/// Whether a provider's answer is worth stopping the chain for.
+fn is_strong(found: &[Candidate]) -> bool {
+    found.first().is_some_and(|best| best.match_score >= MIN_SCORE)
 }
 
 /// NeoDB in one request.
@@ -444,14 +572,42 @@ async fn search_neodb(
 ///
 /// The first step is the site's own autocomplete — no login, no key, and it is
 /// the only door in: the search page is rendered by JavaScript and the search
-/// API answers `need_login`. The second step is the JSON endpoint the mobile app
-/// uses, one request per hit.
+/// API answers `need_login`. It is also a **prefix** matcher, so a title with an
+/// edition note finds nothing; [`queries_for`] is what makes 「索拉里斯星（修订版）」
+/// reach the record called 「索拉里斯星」.
 async fn search_douban(
     client: &Client,
     lookup: &Lookup<'_>,
     depth: usize,
 ) -> AppResult<Vec<Candidate>> {
-    let url = douban_suggest_url(lookup)?;
+    let mut failure = None;
+    for query in queries_for(lookup.title) {
+        let body = match suggest(client, &query).await {
+            Ok(body) => body,
+            // A request that failed is not a query that found nothing: stop
+            // rather than spend the remaining attempts on a network that is
+            // down.
+            Err(err) => {
+                failure = Some(err);
+                break;
+            }
+        };
+        let hits = parse_suggest(&body, lookup);
+        if !hits.is_empty() {
+            return Ok(open_hits(client, hits, depth, lookup).await);
+        }
+    }
+    match failure {
+        Some(err) => Err(err),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// One autocomplete request.
+async fn suggest(client: &Client, query: &str) -> AppResult<Value> {
+    let mut url = reqwest::Url::parse(DOUBAN_SUGGEST)
+        .map_err(|err| AppError::Message(format!("书源地址不合法：{err}")))?;
+    url.query_pairs_mut().append_pair("q", query);
     let response = client
         .get(url)
         .timeout(Duration::from_secs(12))
@@ -460,19 +616,23 @@ async fn search_douban(
         .send()
         .await
         .map_err(|err| AppError::Message(format!("连不上豆瓣：{err}")))?;
-
     if !response.status().is_success() {
         return Err(AppError::Message(format!(
             "豆瓣返回了 {}，过一会儿再试",
             response.status().as_u16()
         )));
     }
-    let body: Value = response
-        .json()
-        .await
-        .map_err(|err| AppError::Message(format!("豆瓣的回复看不懂：{err}")))?;
+    response.json().await.map_err(|err| AppError::Message(format!("豆瓣的回复看不懂：{err}")))
+}
 
-    let hits: Vec<Hit> = parse_suggest(&body, lookup).into_iter().take(depth.max(1)).collect();
+/// Opens the first `depth` hits into full records.
+async fn open_hits(
+    client: &Client,
+    hits: Vec<Hit>,
+    depth: usize,
+    lookup: &Lookup<'_>,
+) -> Vec<Candidate> {
+    let hits: Vec<Hit> = hits.into_iter().take(depth.max(1)).collect();
     // Opened side by side rather than one after another: three records at about
     // a second each is three seconds of a dialog that looks stuck, and the cap
     // here is three. `join_all` keeps the order, so the ranking survives.
@@ -480,8 +640,7 @@ async fn search_douban(
         hits.iter().map(|hit| open_subject(client, &hit.id, lookup)),
     )
     .await;
-    Ok(hits
-        .into_iter()
+    hits.into_iter()
         .zip(opened)
         // A hit whose record could not be opened is still worth showing: it has
         // the title, the author, the year and the page. Throwing the whole
@@ -490,7 +649,7 @@ async fn search_douban(
             Some(rich) => merge(&hit.candidate, rich),
             None => hit.candidate,
         })
-        .collect())
+        .collect()
 }
 
 /// One subject, in full. `None` on any failure — the caller already has
@@ -510,7 +669,69 @@ async fn open_subject(client: &Client, id: &str, lookup: &Lookup<'_>) -> Option<
         return None;
     }
     let body: Value = response.json().await.ok()?;
-    parse_detail(&body, lookup)
+    let mut candidate = parse_detail(&body, lookup)?;
+    if lookup.want_isbn
+        && candidate.isbn.is_none()
+        && let Some(info_url) = text(&body, "info_url")
+    {
+        candidate.isbn = isbn_of(client, &info_url).await;
+    }
+    Some(candidate)
+}
+
+/// The ISBN, from the small page the mobile app shows for a book's details.
+///
+/// The JSON record has no ISBN at all, and the desktop subject page that does
+/// is 118 KB of markup. This one is 3 KB and carries the same table —
+/// `<td>ISBN</td><td>978…</td>` — which is the only reason the field can be
+/// filled at all. `info_url` comes from the record, and is still checked to be
+/// Douban before anything is sent to it.
+async fn isbn_of(client: &Client, info_url: &str) -> Option<String> {
+    let url = reqwest::Url::parse(info_url).ok()?;
+    if url.scheme() != "https" || !url.host_str()?.ends_with("douban.com") {
+        return None;
+    }
+    let page = client
+        .get(url)
+        .timeout(Duration::from_secs(12))
+        .header("User-Agent", DOUBAN_UA)
+        .header("Referer", "https://book.douban.com/")
+        .send()
+        .await
+        .ok()?;
+    if !page.status().is_success() {
+        return None;
+    }
+    isbn_from_page(&page.text().await.ok()?)
+}
+
+/// Pure: the table row, from the page's markup.
+pub fn isbn_from_page(html: &str) -> Option<String> {
+    let mut from = 0;
+    while let Some(found) = html[from..].find("ISBN") {
+        let at = from + found + "ISBN".len();
+        from = at;
+        let rest = &html[at..];
+        let Some(open) = rest.find("<td>") else {
+            continue;
+        };
+        let after = &rest[open + "<td>".len()..];
+        let Some(close) = after.find("</td>") else {
+            continue;
+        };
+        let value = after[..close].trim();
+        if is_isbn(value) {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn is_isbn(value: &str) -> bool {
+    let count = value.chars().count();
+    (count == 10 || count == 13)
+        && value.chars().all(|ch| ch.is_ascii_digit() || ch == 'X')
+        && value.chars().filter(char::is_ascii_digit).count() >= 9
 }
 
 /// One autocomplete hit: the id, and what can be said without opening it.
@@ -694,17 +915,6 @@ fn build_url(base: &str, lookup: &Lookup<'_>) -> AppResult<reqwest::Url> {
     Ok(url)
 }
 
-fn douban_suggest_url(lookup: &Lookup<'_>) -> AppResult<reqwest::Url> {
-    let mut url = reqwest::Url::parse(DOUBAN_SUGGEST)
-        .map_err(|err| AppError::Message(format!("书源地址不合法：{err}")))?;
-    // The title alone, not title + author, for the same reason as NeoDB: the
-    // catalogue spells authors differently (`[以色列] 尤瓦尔·赫拉利` against a
-    // book whose file says `尤瓦尔·赫拉利`), and narrowing on that loses the
-    // record. The author ranks the results instead.
-    url.query_pairs_mut().append_pair("q", lookup.title.trim());
-    Ok(url)
-}
-
 /// The subject page this record points at, when it points at one.
 fn douban_subject(body: &Value) -> Option<String> {
     let url = text(body, "url")?;
@@ -848,7 +1058,10 @@ fn is_invisible(ch: char) -> bool {
 /// translator, a `[日]` prefix, a different order). The numbers are a ranking,
 /// not a measurement — nothing downstream should treat 0.8 as a probability.
 fn score(lookup: &Lookup<'_>, title: &str, authors: &[String]) -> f64 {
-    let title_score = similarity(lookup.title, title);
+    // The better of the two: a record called 「索拉里斯星」 against a shelf title
+    // of 「索拉里斯星（修订版）」 is the same book, and scoring only the full
+    // title would rank it below a stranger that happens to share more characters.
+    let title_score = similarity(lookup.title, title).max(similarity(&lookup.core, title));
     if lookup.authors.is_empty() {
         return title_score;
     }
@@ -952,7 +1165,7 @@ mod tests {
     use serde_json::json;
 
     fn lookup<'a>(title: &'a str, authors: &'a [String]) -> Lookup<'a> {
-        Lookup { title, authors }
+        Lookup::new(title, authors, false)
     }
 
     /// The shape NeoDB actually answers with, trimmed to the fields this app
@@ -1480,6 +1693,94 @@ mod tests {
         assert_eq!(proposal.rating_source, None, "没有要写的评分，就没有来源");
     }
 
+    // ---- 书名归一化 ----------------------------------------------------
+
+    /// The reason 「很多书查不到」 existed: the endpoint is an autocomplete, and
+    /// an edition note at the end of the title makes it match nothing.
+    #[test]
+    fn an_edition_note_is_taken_off_before_asking() {
+        let queries = queries_for("索拉里斯星（修订版）");
+        assert_eq!(queries[0], "索拉里斯星（修订版）", "先原样问一次");
+        assert_eq!(queries[1], "索拉里斯星", "再问一次去掉版次注的");
+    }
+
+    #[test]
+    fn a_subtitle_is_taken_off_before_asking() {
+        let queries = queries_for("人类简史：从动物到上帝");
+        assert!(queries.contains(&"人类简史".to_string()), "{queries:?}");
+    }
+
+    #[test]
+    fn a_volume_number_is_taken_off_before_asking() {
+        let queries = queries_for("沙丘2");
+        assert!(queries.contains(&"沙丘".to_string()), "{queries:?}");
+        let roman = queries_for("三体Ⅱ");
+        assert!(roman.contains(&"三体".to_string()), "{roman:?}");
+    }
+
+    /// 「1984」 is a title, not a volume number, and stripping it would leave
+    /// nothing to search for.
+    #[test]
+    fn a_title_that_is_all_digits_is_left_alone() {
+        assert_eq!(queries_for("1984"), ["1984"]);
+    }
+
+    #[test]
+    fn both_shapes_at_once_are_handled() {
+        let queries = queries_for("人类简史：从动物到上帝（修订版）");
+        assert!(queries.contains(&"人类简史".to_string()), "{queries:?}");
+    }
+
+    #[test]
+    fn a_title_is_never_asked_more_than_four_times() {
+        let queries = queries_for("一个名字很长很长很长很长很长很长的书名：带副标题（修订版）");
+        assert!(queries.len() <= MAX_QUERIES, "{queries:?}");
+        assert_eq!(queries.len(), queries.iter().collect::<std::collections::HashSet<_>>().len());
+    }
+
+    /// A record called 「索拉里斯星」 against a shelf title of
+    /// 「索拉里斯星（修订版）」 is the right book, and the ranking has to say so.
+    #[test]
+    fn a_record_matching_the_core_title_scores_as_a_match() {
+        let authors: Vec<String> = Vec::new();
+        let long = Lookup::new("索拉里斯星（修订版）", &authors, false);
+        let short = Lookup::new("索拉里斯星", &authors, false);
+        let with_note = score(&long, "索拉里斯星", &[]);
+        assert!(with_note >= MIN_SCORE, "去掉版次注就该算匹配：{with_note}");
+        assert_eq!(with_note, score(&short, "索拉里斯星", &[]));
+    }
+
+    // ---- ISBN ----------------------------------------------------------
+
+    /// The table row from the page the mobile app shows — 3 KB, against the
+    /// desktop page's 118 KB.
+    #[test]
+    fn the_isbn_comes_out_of_the_table_row() {
+        let html = "<tr><td>出版社</td><td>湖南科学技术出版社</td></tr>\
+                    <tr><td>ISBN</td><td>9787535795038</td></tr>";
+        assert_eq!(isbn_from_page(html).as_deref(), Some("9787535795038"));
+    }
+
+    #[test]
+    fn a_ten_digit_isbn_is_accepted() {
+        let html = "<td>ISBN</td><td>753579503X</td>";
+        assert_eq!(isbn_from_page(html).as_deref(), Some("753579503X"));
+    }
+
+    /// The word ISBN appears in a buy link too; the value there is not the
+    /// table row, and a regex that took the first match would return rubbish.
+    #[test]
+    fn an_isbn_mention_without_a_value_is_skipped() {
+        let html = "<a href=\"/isbn/\">ISBN</a><td>定价</td><td>49.00</td>";
+        assert_eq!(isbn_from_page(html), None);
+    }
+
+    #[test]
+    fn a_page_without_an_isbn_returns_nothing() {
+        assert_eq!(isbn_from_page("<td>定价</td><td>49.00</td>"), None);
+        assert_eq!(isbn_from_page(""), None);
+    }
+
     // ---- 来源链 --------------------------------------------------------
 
     #[test]
@@ -1539,6 +1840,33 @@ mod tests {
         assert!(text.contains("超时"), "{text}");
     }
 
+    /// A weak match is a reason to ask the other catalogue, not an answer.
+    #[test]
+    fn the_chain_keeps_asking_when_the_first_only_has_a_weak_match() {
+        let mut weak = candidate(None, None, 0.3);
+        weak.source = "douban".into();
+        let results = vec![
+            (Provider::Douban, Ok(vec![weak])),
+            (Provider::Neodb, Ok(vec![candidate(None, None, 0.95)])),
+        ];
+        let chosen = choose(results).expect("an answer");
+        assert_eq!(chosen[0].source, "neodb", "0.3 不该结束整条链");
+    }
+
+    /// …but when nobody has a strong one, the weak match is still better than
+    /// 「两个来源都连不上」 — and the row will print its score.
+    #[test]
+    fn a_weak_match_is_still_returned_when_it_is_all_there_is() {
+        let mut weak = candidate(None, None, 0.3);
+        weak.source = "douban".into();
+        let results = vec![
+            (Provider::Douban, Ok(vec![weak])),
+            (Provider::Neodb, Err(AppError::Message("连不上 NeoDB".into()))),
+        ];
+        let chosen = choose(results).expect("an answer");
+        assert_eq!(chosen[0].match_score, 0.3);
+    }
+
     /// One provider answering 「没有找到」 makes the whole result an honest
     /// empty list, even when the other one is down: something was asked and
     /// something answered.
@@ -1564,7 +1892,7 @@ mod tests {
     #[ignore = "hits the network: book.douban.com"]
     fn the_live_douban_answers_the_shape_this_parser_expects() {
         let authors = ["[以色列] 尤瓦尔·赫拉利".to_string()];
-        let lookup = Lookup { title: "人类简史", authors: &authors };
+        let lookup = Lookup::new("人类简史", &authors, false);
         let client = Client::new();
         let found = tauri::async_runtime::block_on(search(&client, Provider::Douban, &lookup, 3))
             .expect("live search");
@@ -1598,7 +1926,7 @@ mod tests {
     #[ignore = "hits the network: book.douban.com"]
     fn the_chain_answers_when_the_proxy_is_off() {
         let authors = ["[以色列] 尤瓦尔·赫拉利".to_string()];
-        let lookup = Lookup { title: "人类简史", authors: &authors };
+        let lookup = Lookup::new("人类简史", &authors, false);
         let client = Client::new();
         let found = tauri::async_runtime::block_on(find(&client, &lookup, 1, &Attempts::new()))
             .expect("an answer without a proxy");
@@ -1616,7 +1944,7 @@ mod tests {
     #[ignore = "hits the network: neodb.social"]
     fn the_live_neodb_answers_the_shape_this_parser_expects() {
         let authors = ["[以色列] 尤瓦尔·赫拉利".to_string()];
-        let lookup = Lookup { title: "人类简史", authors: &authors };
+        let lookup = Lookup::new("人类简史", &authors, false);
         let client = Client::new();
         let found = tauri::async_runtime::block_on(search(&client, Provider::Neodb, &lookup, 1))
             .expect("live search");

@@ -5,17 +5,24 @@ import { demoEnabled, demoProposals } from "@/lib/demo";
 import { showToast } from "@/stores/toasts";
 import type { Candidate, MetadataFill, Proposal } from "@/types/ipc";
 
+/** The two catalogues the sheet offers, by the name the backend knows them by. */
+export type Source = "douban" | "neodb";
+
 /**
- * Asks Open Library about one book.
+ * Asks one catalogue about one book.
  *
- * A mutation rather than a query: it runs when the reader presses 查找, not
- * when the sheet opens. A query would fire on every book the sheet is opened
- * for — a network round trip per edit, most of them for books whose metadata
- * the reader has no intention of touching.
+ * A mutation rather than a query: it runs when the reader presses a source's
+ * button, not when the sheet opens. A query would fire on every book the sheet
+ * is opened for — a network round trip per edit, most of them for books whose
+ * metadata the reader has no intention of touching.
+ *
+ * The source is a parameter and not a chain: the two answer differently —
+ * Douban has Chinese coverage and no ISBN, NeoDB has both and needs a proxy —
+ * and comparing them is the reason there are two buttons.
  */
 export function useMetadataSearch() {
-  return useMutation<Candidate[], Error, string>({
-    mutationFn: (id: string) => ipc.metadataSearch(id),
+  return useMutation<Candidate[], Error, { id: string; source: Source }>({
+    mutationFn: ({ id, source }) => ipc.metadataSearch(id, source),
   });
 }
 

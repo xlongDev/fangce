@@ -269,7 +269,7 @@ function Row({
             <span className="text-text-3 mt-0.5 block text-[11px]">{proposal.skipped}</span>
           ) : (
             <span className="text-text-2 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
-              {proposal.rating !== null && (
+              {typeof proposal.rating === "number" && (
                 // Named, always: a bare number here would be read as Douban's.
                 <span className="text-text-3">
                   {sourceLabel(proposal.ratingSource)} {proposal.rating.toFixed(1)}
@@ -347,7 +347,9 @@ function Row({
 
 /** Whether a proposal would write anything at all. */
 export function hasSomething(proposal: Proposal): boolean {
-  return proposal.fills.length > 0 || proposal.rating !== null || proposal.doubanUrl !== null;
+  return (
+    proposal.fills.length > 0 || typeof proposal.rating === "number" || proposal.doubanUrl != null
+  );
 }
 
 /** One fill, as a line that fits.

@@ -48,6 +48,34 @@ function open(overrides: Partial<BookSummary> = {}) {
 
 const saveButton = () => screen.getByRole("button", { name: "保存" });
 
+/**
+ * A row written before a column existed has the field *missing*, not null —
+ * which is what every browser-build row from before migration 26 looks like,
+ * and what the demo shelf looked like until it was fixed.
+ *
+ * `undefined !== null` is true, so the rating line's guard let it through and
+ * called `.toFixed` on undefined: the whole sheet came down with 「这个界面出错了」
+ * instead of showing a book with no rating.
+ */
+it("renders a row that predates the rating columns", () => {
+  const {
+    rating: _rating,
+    ratingCount: _ratingCount,
+    ratingSource: _ratingSource,
+    isbn: _isbn,
+    publishedYear: _publishedYear,
+    doubanUrl: _doubanUrl,
+    ...older
+  } = book;
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <BookMetaDialog book={older as BookSummary} onCancel={vi.fn()} onSave={vi.fn()} />
+    </QueryClientProvider>,
+  );
+  expect(screen.getByLabelText("书名")).toHaveValue("三体");
+});
+
 describe("BookMetaDialog — 元数据编辑表", () => {
   it("pre-fills every field from the book", () => {
     open({ authors: ["刘慈欣", "李四"], subtitle: "地球往事", publisher: "重庆出版社" });

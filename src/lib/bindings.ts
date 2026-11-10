@@ -415,14 +415,21 @@ export const commands = {
   /**  `ops.list` — the newest changes, newest first. */
   opsList: (limit: number) => __TAURI_INVOKE<Operation[]>("ops_list", { limit }),
   /**
-   *  `metadata.search` — what the catalogues know about this book.
+   *  `metadata.search` — what one catalogue knows about this book.
+   *
+   *  The source is the caller's choice, not a chain. The two catalogues answer
+   *  differently — Douban has Chinese coverage and no ISBN, NeoDB has both and
+   *  needs a proxy — and a reader comparing them is the whole reason the sheet
+   *  has two buttons. Asking both and merging would hide which record they are
+   *  looking at.
    *
    *  The book is read first and the network call comes after, so no database
    *  guard is held across the await: the app's single connection serialises
    *  everything, and a twelve-second HTTP timeout inside it would freeze the
    *  shelf.
    */
-  metadataSearch: (id: string) => __TAURI_INVOKE<Candidate[]>("metadata_search", { id }),
+  metadataSearch: (id: string, source: string) =>
+    __TAURI_INVOKE<Candidate[]>("metadata_search", { id, source }),
   /**
    *  `metadata.propose` — what a fill would add to these books, without writing.
    *

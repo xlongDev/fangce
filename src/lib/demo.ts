@@ -132,6 +132,16 @@ const shelf: BookSummary[] = Array.from({ length: COUNT }, (_, index) => ({
   progress: index === 0 ? 0.18 : index === 1 ? 0.62 : 0,
   location: null,
   favorite: index === 0,
+  // Every field a row can carry, including the ones the shelf never shows: a
+  // fixture that omits them is a fixture that cannot catch 「undefined 让整页
+  // 崩掉」, which is exactly what a row written before a column existed looks
+  // like.
+  isbn: null,
+  publishedYear: null,
+  rating: null,
+  ratingCount: null,
+  ratingSource: null,
+  doubanUrl: null,
   authors: AUTHORS[index % AUTHORS.length]!,
   tags: index === 1 ? ["小说", "悬疑"] : [],
 })) as unknown as BookSummary[];

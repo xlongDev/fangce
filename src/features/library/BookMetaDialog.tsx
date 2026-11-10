@@ -4,7 +4,7 @@ import { ArrowSquareOut, MagnifyingGlass } from "@phosphor-icons/react";
 import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
-import { useMetadataSearch } from "@/hooks/useMetadata";
+import { type Source, useMetadataSearch } from "@/hooks/useMetadata";
 import { sourceLabel } from "@/lib/metadata";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { showToast } from "@/stores/toasts";
@@ -23,6 +23,13 @@ import type { BookMetadataPatch, BookSummary, Candidate } from "@/types/ipc";
  */
 
 /** Field ceilings, mirroring what the backend stores without truncating. */
+/** The two catalogues, in the order the sheet offers them. Douban first
+ *  because it is the one that answers without a proxy. */
+const SOURCES: { key: Source; label: string; hint: string }[] = [
+  { key: "douban", label: "豆瓣", hint: "豆瓣图书：中文版次最全，国内可直连" },
+  { key: "neodb", label: "NeoDB", hint: "NeoDB：有 ISBN 和外文书，国内需要代理" },
+];
+
 const LIMITS = {
   title: 300,
   subtitle: 300,
@@ -166,22 +173,36 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
         {/* A catalogue lookup, not an autofill: it fills the form and stops
             there. The reader still presses 保存, so nothing is written behind
             their back — and a candidate that is wrong costs one edit, not a
-            silent overwrite. */}
+            silent overwrite.
+
+            Two buttons, one per catalogue, because they are not interchangeable:
+            Douban is reachable from here and has the Chinese editions; NeoDB
+            needs a proxy and is the only one with an ISBN and with books Douban
+            has never heard of. One button that quietly picked one of them hid
+            that choice from the reader. */}
         {isDesktopRuntime && (
-          <div className="flex items-center gap-2">
-            <GlassButton
-              type="button"
-              size="sm"
-              variant="subtle"
-              disabled={search.isPending}
-              onClick={() => search.mutate(book.id, { onSuccess: setCandidates })}
-            >
-              <MagnifyingGlass size={13} />
-              {search.isPending ? "查找中…" : "查找书目"}
-            </GlassButton>
+          <div className="flex flex-wrap items-center gap-2">
+            <MagnifyingGlass size={13} className="text-text-3 shrink-0" />
+            {SOURCES.map((source) => (
+              <GlassButton
+                key={source.key}
+                type="button"
+                size="sm"
+                variant="subtle"
+                title={source.hint}
+                disabled={search.isPending}
+                onClick={() =>
+                  search.mutate({ id: book.id, source: source.key }, { onSuccess: setCandidates })
+                }
+              >
+                {search.isPending && search.variables?.source === source.key
+                  ? "查找中…"
+                  : source.label}
+              </GlassButton>
+            ))}
             {candidates !== null && (
               <span className="text-text-3 text-xs">
-                {candidates.length} 条结果
+                {sourceLabel(search.variables?.source)} {candidates.length} 条
                 {/* The catalogue lists every name attached to any edition,
                     translators included. Saying so is cheaper and more honest
                     than guessing which names are authors. */}
@@ -197,7 +218,8 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
 
         {candidates !== null && candidates.length === 0 && (
           <p className="text-text-3 text-xs leading-relaxed">
-            目录里没有找到相近的书。可以换个书名再试，或者自己填。
+            {sourceLabel(search.variables?.source)}{" "}
+            没有找到相近的书。可以换个书名再试、换个来源再查，或者自己填。
           </p>
         )}
 
@@ -361,7 +383,10 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
             one's. The link is how a reader gets to the page. */}
         <div className="text-text-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
           <span>添加于 {ADDED.format(new Date(book.addedAt * 1000))}</span>
-          {rating.value !== null && (
+          {/* `typeof` rather than `!== null`: a row written before the column
+              existed has no `rating` at all, and `undefined !== null` is true —
+              which crashed the whole sheet on `.toFixed` of undefined. */}
+          {typeof rating.value === "number" && (
             <span className="text-text-2">
               {sourceLabel(rating.source)} {rating.value.toFixed(1)}
               {rating.count !== null && `（${rating.count} 人）`}
