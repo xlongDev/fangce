@@ -45,7 +45,7 @@ pub async fn metadata_search(
         .with(|conn| repository::get(conn, &id))?
         .ok_or_else(|| AppError::NotFound(id.clone()))?;
 
-    let client = reqwest::Client::new();
+    let client = metadata::client();
     metadata::search(
         &client,
         provider,
@@ -75,6 +75,9 @@ pub struct MetadataFill {
     /// `douban` or `neodb`. Stored with the number: they are different numbers
     /// from different sets of people, and the sheet prints the source.
     pub rating_source: Option<String>,
+    /// A picture to fetch, when the book has none. Not a field: it is a file,
+    /// downloaded before the write rather than inside it.
+    pub cover_url: Option<String>,
 }
 
 /// `metadata.propose` — what a fill would add to these books, without writing.
@@ -106,13 +109,14 @@ pub async fn metadata_propose(
                     description: book.description,
                     rating: book.rating,
                     douban_url: book.douban_url,
+                    has_cover: book.cover_url.is_some(),
                 });
             }
         }
         Ok(out)
     })?;
 
-    let client = reqwest::Client::new();
+    let client = metadata::client();
     // Shared by the whole batch: a provider that failed for book three is not
     // asked again for book four, so forty books with the proxy off cost one
     // timeout rather than forty.
@@ -150,70 +154,95 @@ pub async fn metadata_propose(
 
 /// `metadata.apply` — writes the proposals the reader accepted.
 ///
+/// **Covers are downloaded before the transaction opens.** The library has one
+/// connection and a twenty-second download inside it would freeze the shelf;
+/// it is the same rule the read path follows in the other direction.
+///
+/// A cover that will not download is not a reason to drop the fields that did.
+/// The row still gains its metadata, and the missing picture is one more thing
+/// the next run can try.
+///
 /// One transaction and one log entry for the whole batch, with before-images:
 /// a fill is a bulk edit, and the reader has to be able to put it back.
 #[tauri::command]
 #[specta::specta]
-pub fn metadata_apply(state: State<'_, AppState>, items: Vec<MetadataFill>) -> AppResult<usize> {
+pub async fn metadata_apply(
+    state: State<'_, AppState>,
+    items: Vec<MetadataFill>,
+) -> AppResult<usize> {
     if items.is_empty() {
         return Ok(0);
     }
-    state.library.with_tx(|tx| {
+    let client = metadata::client();
+    let mut covers: Vec<(String, Vec<u8>)> = Vec::new();
+    for item in &items {
+        let Some(url) = item.cover_url.as_deref() else {
+            continue;
+        };
+        if let Ok(bytes) = metadata::download_cover(&client, url).await {
+            covers.push((item.id.clone(), bytes));
+        }
+    }
+
+    let covers_dir = state.layout.covers_dir.clone();
+    state.library.with_tx(move |tx| {
         let mut befores = Vec::new();
+        let mut written = 0;
         for item in &items {
-            // Read before writing, for the before-image the undo needs.
-            if let Some(book) = repository::get(tx, &item.id)? {
-                befores.push(ops::Before {
-                    book_id: item.id.clone(),
-                    publisher: book.publisher,
-                    language: book.language,
-                });
-            }
+            // One read per book: the before-image and the patch both come from
+            // the same row. Reading it twice let the two disagree.
+            let Some(book) = repository::get(tx, &item.id)? else {
+                // Deleted between the lookup and the write — nothing to fill.
+                continue;
+            };
+            befores.push(ops::Before {
+                book_id: item.id.clone(),
+                publisher: book.publisher.clone(),
+                language: book.language.clone(),
+            });
             // A full record, built from the row plus whatever this fill says:
             // `update_fields_many` only knows the two fields the batch sheet
             // edits, and a fill writes more than that.
-            let mut patch = crate::library::repository::BookMetadataPatch {
-                title: String::new(),
-                subtitle: None,
-                description: None,
-                language: None,
-                publisher: None,
-                isbn: None,
-                published_year: None,
-                rating: None,
-                rating_count: None,
-                douban_url: None,
-                rating_source: None,
-                authors: Vec::new(),
-            };
-            if let Some(book) = repository::get(tx, &item.id)? {
-                patch.title = book.title;
-                patch.authors = book.authors;
-                patch.subtitle = item.subtitle.clone().or(book.subtitle);
-                patch.description = item.description.clone().or(book.description);
-                patch.language = item.language.clone().or(book.language);
-                patch.publisher = item.publisher.clone().or(book.publisher);
-                patch.isbn = item.isbn.clone().or(book.isbn);
-                patch.published_year = item.published_year.or(book.published_year);
-                patch.rating = item.rating.or(book.rating);
-                patch.rating_count = item.rating_count.or(book.rating_count);
-                patch.douban_url = item.douban_url.clone().or(book.douban_url);
+            let patch = crate::library::repository::BookMetadataPatch {
+                title: book.title.clone(),
+                subtitle: item.subtitle.clone().or(book.subtitle.clone()),
+                description: item.description.clone().or(book.description.clone()),
+                language: item.language.clone().or(book.language.clone()),
+                publisher: item.publisher.clone().or(book.publisher.clone()),
+                isbn: item.isbn.clone().or(book.isbn.clone()),
+                published_year: item.published_year.or(book.published_year),
+                rating: item.rating.or(book.rating),
+                rating_count: item.rating_count.or(book.rating_count),
                 // The label travels with the number, or neither does: a rating
                 // whose source is unknown prints as a bare number, and a bare
                 // number gets read as Douban's.
-                patch.rating_source = item.rating_source.clone().or_else(|| {
+                rating_source: item.rating_source.clone().or_else(|| {
                     item.rating.is_some().then(|| book.rating_source.clone()).flatten()
-                });
-            }
+                }),
+                douban_url: item.douban_url.clone().or(book.douban_url.clone()),
+                authors: book.authors.clone(),
+            };
             repository::update_metadata(tx, &item.id, &patch)?;
+            written += 1;
+
+            // The cover, only when the book still has none: the proposal was
+            // made minutes ago, and the reader may have added one since.
+            if book.cover_url.is_none()
+                && let Some((_, bytes)) = covers.iter().find(|(id, _)| id == &item.id)
+                && let Some(extension) = metadata::image_extension(bytes)
+            {
+                let target = covers_dir.join(format!("{}.{extension}", item.id));
+                std::fs::write(&target, bytes)?;
+                repository::set_cover(tx, &item.id, target.to_string_lossy().as_ref())?;
+            }
         }
         ops::record_before(
             tx,
             ops::Source::Ui,
             "fill_metadata",
             &befores,
-            &format!("从目录补全了 {} 本", items.len()),
+            &format!("从目录补全了 {written} 本"),
         )?;
-        Ok(items.len())
+        Ok(written)
     })
 }

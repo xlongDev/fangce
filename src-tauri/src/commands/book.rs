@@ -183,6 +183,46 @@ pub async fn book_cover_save(
     .map_err(|err| AppError::Message(format!("保存封面任务被中断：{err}")))?
 }
 
+/// `book.cover_from_url` — fetches the cover a catalogue offered.
+///
+/// The single-book sheet needs this because its save path is `book.update`,
+/// which writes columns: a cover is a file, and downloading it inside a
+/// transaction is exactly what this file's other cover command avoids.
+///
+/// The bytes are checked before anything is written — https, a catalogue's own
+/// image host, a real JPEG or PNG, under 8 MB — and the extension comes from
+/// the bytes rather than from the URL.
+#[tauri::command]
+#[specta::specta]
+pub async fn book_cover_from_url(
+    state: State<'_, AppState>,
+    id: String,
+    url: String,
+) -> AppResult<()> {
+    let client = crate::library::metadata::client();
+    let bytes = crate::library::metadata::download_cover(&client, &url).await?;
+    let extension = crate::library::metadata::image_extension(&bytes)
+        .ok_or_else(|| AppError::Parse("拿到的不是图片".into()))?;
+    let library = state.library.clone();
+    let covers_dir = state.layout.covers_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Only touch the disk for books the library actually knows.
+        library.with(|conn| library::repository::get(conn, &id))?;
+        let target = covers_dir.join(format!("{id}.{extension}"));
+        std::fs::write(&target, &bytes)?;
+        library
+            .with(|conn| {
+                library::repository::set_cover(conn, &id, target.to_string_lossy().as_ref())?;
+                ops::record(conn, ops::Source::Ui, "cover", std::slice::from_ref(&id), "换了封面")
+            })
+            .inspect_err(|_| {
+                let _ = std::fs::remove_file(&target);
+            })
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("保存封面任务被中断：{err}")))?
+}
+
 /// `book.import`
 ///
 /// Takes absolute paths chosen by the native file dialog or dropped onto the

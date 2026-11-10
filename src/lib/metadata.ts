@@ -17,6 +17,8 @@ export function sourceLabel(source: string | null | undefined): string {
   return "评分";
 }
 
+import type { MetadataFill, Proposal } from "@/types/ipc";
+
 /** The sheet's field names, in the order the form shows them. */
 export const FIELD_LABELS: Record<string, string> = {
   subtitle: "副标题",
@@ -42,4 +44,49 @@ export function existingHint(fields: string[]): string | null {
   const names = fields.map((field) => FIELD_LABELS[field] ?? field);
   if (names.length <= 3) return `已有 ${names.join("、")}`;
   return `已有 ${names.slice(0, 2).join("、")} 等 ${names.length} 项`;
+}
+
+/** Whether a proposal would write anything at all.
+ *
+ * A book whose six fields are already there still gains a rating, a Douban
+ * link, or a cover — judging by `fills` alone rendered those rows greyed out
+ * and untickable, with no reason line. */
+export function hasSomething(proposal: Proposal): boolean {
+  return (
+    proposal.fills.length > 0 ||
+    typeof proposal.rating === "number" ||
+    proposal.doubanUrl != null ||
+    proposal.coverUrl != null
+  );
+}
+
+/** A proposal as the write it asks for: only the fields it named. */
+export function toFill(proposal: Proposal): MetadataFill {
+  const fill: MetadataFill = {
+    id: proposal.bookId,
+    subtitle: null,
+    publisher: null,
+    language: null,
+    isbn: null,
+    publishedYear: null,
+    description: null,
+    // The catalogue's snapshot travels with the fills rather than as a fill.
+    rating: proposal.rating,
+    ratingCount: proposal.ratingCount,
+    ratingSource: proposal.ratingSource,
+    doubanUrl: proposal.doubanUrl,
+    coverUrl: proposal.coverUrl,
+  };
+  for (const item of proposal.fills) {
+    if (item.field === "subtitle") fill.subtitle = item.to;
+    if (item.field === "publisher") fill.publisher = item.to;
+    if (item.field === "language") fill.language = item.to;
+    if (item.field === "isbn") fill.isbn = item.to;
+    if (item.field === "description") fill.description = item.to;
+    if (item.field === "publishedYear") {
+      const year = Number.parseInt(item.to, 10);
+      if (Number.isFinite(year)) fill.publishedYear = year;
+    }
+  }
+  return fill;
 }

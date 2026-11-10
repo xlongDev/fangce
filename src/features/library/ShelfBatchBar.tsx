@@ -18,6 +18,7 @@ import { useAiConfig } from "@/hooks/useAi";
 import { useSetMetadataMany } from "@/hooks/useLibrary";
 import { isDesktopRuntime, ipc } from "@/lib/ipc";
 import { demoEnabled } from "@/lib/demo";
+import { useFillRun } from "@/stores/fillRun";
 import { useGuideBatch } from "@/stores/guideBatch";
 import { BatchFillDialog } from "@/features/library/BatchFillDialog";
 import { BatchMetaDialog } from "@/features/library/BatchMetaDialog";
@@ -58,6 +59,8 @@ export function ShelfBatchBar({
    *  book behind the dialog is not asking for a new lookup. */
   const [fillIds, setFillIds] = useState<string[] | null>(null);
   const setMetadataMany = useSetMetadataMany();
+  /** 整架补全的进度。名字避开下面导读批处理那个 `run`。 */
+  const fillRun = useFillRun();
 
   /** Which books already have a cached guide, so the confirm dialog can skip
    *  them out of the queue and out of the token estimate. Refetched on open:
@@ -230,10 +233,17 @@ export function ShelfBatchBar({
                       // Enabled in the demo build too: it serves canned
                       // proposals, which is what lets a browser test open this
                       // sheet at all.
-                      disabled={selection.count === 0 || (!isDesktopRuntime && !demoEnabled())}
+                      // A run keeps going after the dialog is closed, so the bar
+                      // has to say so — otherwise the reader closes it, sees
+                      // nothing happening, and starts a second one.
+                      disabled={
+                        !fillRun.running &&
+                        (selection.count === 0 || (!isDesktopRuntime && !demoEnabled()))
+                      }
                       onClick={() => setFillIds(selection.selectedBooks.map((book) => book.id))}
                     >
-                      <MagicWand size={13} /> 补全信息
+                      <MagicWand size={13} />
+                      {fillRun.running ? `补全中 ${fillRun.done}/${fillRun.total}` : "补全信息"}
                     </GlassButton>
                     <GlassButton
                       size="sm"

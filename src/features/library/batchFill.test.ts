@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { hasSomething, preview } from "@/features/library/BatchFillDialog";
-import { existingHint } from "@/lib/metadata";
+import { preview } from "@/features/library/BatchFillDialog";
+import { existingHint, hasSomething } from "@/lib/metadata";
 import type { Fill, Proposal } from "@/types/ipc";
 
 const fill = (field: string, to: string): Fill => ({ field, from: null, to });
@@ -38,6 +38,7 @@ const proposal = (over: Partial<Proposal>): Proposal => ({
   ratingCount: null,
   ratingSource: null,
   doubanUrl: null,
+  coverUrl: null,
   existing: [],
   ...over,
 });

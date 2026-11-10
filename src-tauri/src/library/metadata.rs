@@ -59,6 +59,20 @@ const DOUBAN_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
 /// with the same name.
 const CATEGORY: &str = "book";
 
+/// The client every lookup uses.
+///
+/// The connect timeout is the load-bearing part: a host that is blocked does
+/// not refuse the connection, it swallows it, so without this the whole
+/// twelve-second budget goes on a TCP handshake. A 950-book run asks about
+/// twenty-four batches, and one stall per batch is five minutes of nothing.
+///
+/// `Client::default()` on the (practically impossible) build failure: a lookup
+/// without a connect timeout is worse than no lookup, but not worse than a
+/// panic on the shelf.
+pub fn client() -> Client {
+    Client::builder().connect_timeout(Duration::from_secs(3)).build().unwrap_or_default()
+}
+
 /// Which catalogue to ask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
@@ -259,6 +273,10 @@ pub struct Target {
     pub description: Option<String>,
     pub rating: Option<f64>,
     pub douban_url: Option<String>,
+    /// Whether the shelf already has a picture for it. A cover is a file, not a
+    /// column, and overwriting one the reader is used to seeing is not a
+    /// "fill" — so this is the one field that is only ever written when absent.
+    pub has_cover: bool,
 }
 
 /// One field the fill would write.
@@ -296,6 +314,13 @@ pub struct Proposal {
     /// the number because they are different numbers from different people, and
     /// a label that has to be guessed later is a label that will be wrong.
     pub rating_source: Option<String>,
+    /// The catalogue's cover, when the book has none.
+    ///
+    /// Beside the fills rather than as one: a cover is a file to download, not
+    /// a string to write, and `None` here means either the catalogue had no
+    /// picture or the book already has one — both of which mean "nothing to do
+    /// about the cover".
+    pub cover_url: Option<String>,
     /// The fields this book already has, in the order the sheet shows them.
     ///
     /// Shown beside what the fill would add, because 「只补了两项」 reads as a
@@ -366,6 +391,7 @@ pub fn propose_failed(target: &Target, reason: &str) -> Proposal {
         rating_count: None,
         douban_url: None,
         rating_source: None,
+        cover_url: None,
         existing: Vec::new(),
     }
 }
@@ -387,33 +413,59 @@ pub fn propose_for(target: &Target, best: Option<Candidate>) -> Proposal {
     .map(|(field, _)| field.to_string())
     .collect();
 
-    let (fills, skipped, match_score, rating, rating_count, douban_url, rating_source) = match best
-    {
-        None => (Vec::new(), Some("没有找到相近的书".to_string()), 0.0, None, None, None, None),
-        Some(candidate) if candidate.match_score < MIN_SCORE => (
-            Vec::new(),
-            Some(format!("匹配度只有 {:.0}%，不采用", candidate.match_score * 100.0)),
-            candidate.match_score,
-            None,
-            None,
-            None,
-            None,
-        ),
-        Some(candidate) => {
-            let fills = fills(&candidate, target);
-            // Only what the book does not already have — the same rule as the
-            // fills, so the row never promises a write the apply will skip.
-            let rating = target.rating.is_none().then_some(candidate.rating).flatten();
-            let rating_count = rating.and(candidate.rating_count);
-            let douban_url = target.douban_url.is_none().then_some(candidate.douban_url).flatten();
-            let nothing_to_do = fills.is_empty() && rating.is_none() && douban_url.is_none();
-            let skipped = nothing_to_do.then(|| "可补的字段都已经有了".to_string());
-            // The source only travels when the number does: a label with no
-            // rating behind it would print next to an empty space.
-            let rating_source = rating.and(Some(candidate.source));
-            (fills, skipped, candidate.match_score, rating, rating_count, douban_url, rating_source)
-        }
-    };
+    let (fills, skipped, match_score, rating, rating_count, douban_url, rating_source, cover_url) =
+        match best {
+            None => (
+                Vec::new(),
+                Some("没有找到相近的书".to_string()),
+                0.0,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            Some(candidate) if candidate.match_score < MIN_SCORE => (
+                Vec::new(),
+                Some(format!("匹配度只有 {:.0}%，不采用", candidate.match_score * 100.0)),
+                candidate.match_score,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            Some(candidate) => {
+                let fills = fills(&candidate, target);
+                // Only what the book does not already have — the same rule as the
+                // fills, so the row never promises a write the apply will skip.
+                let rating = target.rating.is_none().then_some(candidate.rating).flatten();
+                let rating_count = rating.and(candidate.rating_count);
+                let douban_url =
+                    target.douban_url.is_none().then_some(candidate.douban_url).flatten();
+                // A book that already has a picture keeps it: replacing one the
+                // reader is used to seeing is not a fill.
+                let cover_url = if target.has_cover { None } else { candidate.cover_url };
+                let nothing_to_do = fills.is_empty()
+                    && rating.is_none()
+                    && douban_url.is_none()
+                    && cover_url.is_none();
+                let skipped = nothing_to_do.then(|| "可补的字段都已经有了".to_string());
+                // The source only travels when the number does: a label with no
+                // rating behind it would print next to an empty space.
+                let rating_source = rating.and(Some(candidate.source));
+                (
+                    fills,
+                    skipped,
+                    candidate.match_score,
+                    rating,
+                    rating_count,
+                    douban_url,
+                    rating_source,
+                    cover_url,
+                )
+            }
+        };
     Proposal {
         book_id: target.id.clone(),
         book_title: target.title.clone(),
@@ -424,6 +476,7 @@ pub fn propose_for(target: &Target, best: Option<Candidate>) -> Proposal {
         rating_count,
         douban_url,
         rating_source,
+        cover_url,
         existing,
     }
 }
@@ -938,6 +991,66 @@ fn build_url(base: &str, lookup: &Lookup<'_>) -> AppResult<reqwest::Url> {
     Ok(url)
 }
 
+/// The largest cover worth keeping. A shelf thumbnail at 1200 px is well under
+/// this; anything larger is a page scan somebody mislabelled.
+const MAX_COVER_BYTES: usize = 8 * 1024 * 1024;
+
+/// Downloads a cover the catalogue pointed at.
+///
+/// The URL comes out of somebody else's JSON, so it is checked before a request
+/// is sent: https, and a host that is one of the catalogues' own image servers.
+/// Without that check this would be an HTTP client that fetches whatever a
+/// response happened to contain — including the reader's own network.
+pub async fn download_cover(client: &Client, url: &str) -> AppResult<Vec<u8>> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|err| AppError::Message(format!("封面地址不合法：{err}")))?;
+    let host = parsed.host_str().unwrap_or_default();
+    let allowed = parsed.scheme() == "https"
+        && (host == "doubanio.com"
+            || host.ends_with(".doubanio.com")
+            || host == "neodb.social"
+            || host.ends_with(".neodb.social"));
+    if !allowed {
+        return Err(AppError::InvalidArgument(format!("不是目录的图片地址：{host}")));
+    }
+    let response = client
+        .get(parsed)
+        .timeout(Duration::from_secs(20))
+        .header("User-Agent", DOUBAN_UA)
+        // Douban's image CDN answers 418 with no referer and 200 with one.
+        .header("Referer", "https://book.douban.com/")
+        .send()
+        .await
+        .map_err(|err| AppError::Message(format!("下载封面失败：{err}")))?;
+    if !response.status().is_success() {
+        return Err(AppError::Message(format!("封面返回了 {}", response.status().as_u16())));
+    }
+    let bytes =
+        response.bytes().await.map_err(|err| AppError::Message(format!("下载封面失败：{err}")))?;
+    if bytes.len() > MAX_COVER_BYTES {
+        return Err(AppError::Message("封面太大了，跳过".into()));
+    }
+    if image_extension(&bytes).is_none() {
+        return Err(AppError::Message("拿到的不是图片，跳过".into()));
+    }
+    Ok(bytes.to_vec())
+}
+
+/// `jpg` or `png`, from the bytes rather than from the URL.
+///
+/// The extension matters: the shelf serves the file through the asset protocol,
+/// which picks a content type from it. A JPEG stored as `.png` is the kind of
+/// thing that works everywhere until it does not.
+pub fn image_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("jpg");
+    }
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Some("png");
+    }
+    None
+}
+
 /// The subject page this record points at, when it points at one.
 fn douban_subject(body: &Value) -> Option<String> {
     let url = text(body, "url")?;
@@ -1340,6 +1453,7 @@ mod tests {
             description: None,
             rating: None,
             douban_url: None,
+            has_cover: false,
         }
     }
 
@@ -1834,6 +1948,75 @@ mod tests {
         assert_eq!(isbn_from_page(""), None);
     }
 
+    // ---- 封面 ----------------------------------------------------------
+
+    #[test]
+    fn the_extension_comes_from_the_bytes() {
+        assert_eq!(image_extension(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("jpg"));
+        assert_eq!(image_extension(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]), Some("png"));
+        assert_eq!(image_extension(b"<html>not an image</html>"), None);
+        assert_eq!(image_extension(b""), None);
+    }
+
+    /// The URL comes out of somebody else's JSON. Anything but a catalogue's
+    /// own image host is refused before a request is sent — otherwise this app
+    /// is an HTTP client for whatever a response happens to contain.
+    #[test]
+    fn a_cover_url_from_somewhere_else_is_refused() {
+        let client = client();
+        for url in [
+            "https://evil.example/cover.jpg",
+            "http://img3.doubanio.com/view/subject/l/public/s29710377.jpg",
+            "https://doubanio.com.evil.example/cover.jpg",
+            "file:///etc/passwd",
+        ] {
+            let outcome = tauri::async_runtime::block_on(download_cover(&client, url));
+            assert!(outcome.is_err(), "{url}");
+        }
+    }
+
+    fn target_with_cover(has_cover: bool) -> Target {
+        let mut book = target(None, None);
+        book.has_cover = has_cover;
+        book
+    }
+
+    #[test]
+    fn a_book_without_a_picture_is_offered_one() {
+        let mut found = candidate(Some("译林出版社"), None, 0.95);
+        found.cover_url = Some("https://img3.doubanio.com/x.jpg".into());
+        let proposal = propose_for(&target_with_cover(false), Some(found));
+        assert_eq!(proposal.cover_url.as_deref(), Some("https://img3.doubanio.com/x.jpg"));
+    }
+
+    /// Replacing a cover the reader is used to seeing is not a "fill".
+    #[test]
+    fn a_book_with_a_picture_keeps_it() {
+        let mut found = candidate(Some("译林出版社"), None, 0.95);
+        found.cover_url = Some("https://img3.doubanio.com/x.jpg".into());
+        let proposal = propose_for(&target_with_cover(true), Some(found));
+        assert_eq!(proposal.cover_url, None);
+    }
+
+    /// A cover on its own is something to write — the row has to stay tickable
+    /// and the batch has to include it.
+    #[test]
+    fn a_cover_alone_counts_as_something_to_do() {
+        let mut book = target(Some("译林出版社"), Some("zh"));
+        book.subtitle = Some("副标题".into());
+        book.isbn = Some("9787544782173".into());
+        book.published_year = Some(2021);
+        book.description = Some("简介".into());
+        book.rating = Some(9.0);
+        book.douban_url = Some("https://book.douban.com/subject/1/".into());
+        let mut found = candidate(None, None, 0.95);
+        found.cover_url = Some("https://img3.doubanio.com/x.jpg".into());
+        let proposal = propose_for(&book, Some(found));
+        assert!(proposal.fills.is_empty());
+        assert!(proposal.cover_url.is_some());
+        assert_eq!(proposal.skipped, None);
+    }
+
     // ---- 来源链 --------------------------------------------------------
 
     #[test]
@@ -1941,12 +2124,29 @@ mod tests {
 
     /// Douban, live. This one runs from the mainland without a proxy, which is
     /// the entire reason the provider exists.
+    /// Douban's image CDN answers **418** without a `Referer` and 200 with one,
+    /// so this is the test that proves the header is load-bearing rather than
+    /// decorative.
+    #[test]
+    #[ignore = "hits the network: img3.doubanio.com"]
+    fn the_live_cover_downloads() {
+        let client = client();
+        let bytes = tauri::async_runtime::block_on(download_cover(
+            &client,
+            "https://img3.doubanio.com/view/subject/l/public/s29710377.jpg",
+        ))
+        .expect("a cover");
+        println!("\n{} bytes", bytes.len());
+        assert_eq!(image_extension(&bytes), Some("jpg"));
+        assert!(bytes.len() > 10_000, "{}", bytes.len());
+    }
+
     #[test]
     #[ignore = "hits the network: book.douban.com"]
     fn the_live_douban_answers_the_shape_this_parser_expects() {
         let authors = ["[以色列] 尤瓦尔·赫拉利".to_string()];
         let lookup = Lookup::new("人类简史", &authors, false);
-        let client = Client::new();
+        let client = client();
         let found = tauri::async_runtime::block_on(search(&client, Provider::Douban, &lookup, 3))
             .expect("live search");
         println!("\n{} candidates", found.len());
@@ -1980,7 +2180,7 @@ mod tests {
     fn the_chain_answers_when_the_proxy_is_off() {
         let authors = ["[以色列] 尤瓦尔·赫拉利".to_string()];
         let lookup = Lookup::new("人类简史", &authors, false);
-        let client = Client::new();
+        let client = client();
         let found = tauri::async_runtime::block_on(find(&client, &lookup, 1, &Attempts::new()))
             .expect("an answer without a proxy");
         println!("\n答案来自 {}：{}", found[0].source, found[0].title);
@@ -1998,7 +2198,7 @@ mod tests {
     fn the_live_neodb_answers_the_shape_this_parser_expects() {
         let authors = ["[以色列] 尤瓦尔·赫拉利".to_string()];
         let lookup = Lookup::new("人类简史", &authors, false);
-        let client = Client::new();
+        let client = client();
         let found = tauri::async_runtime::block_on(search(&client, Provider::Neodb, &lookup, 1))
             .expect("live search");
         assert!(!found.is_empty(), "真实目录里不可能没有《人类简史》");

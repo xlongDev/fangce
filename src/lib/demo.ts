@@ -574,6 +574,7 @@ export function demoProposals(ids: string[]): Proposal[] {
         ratingCount: null,
         ratingSource: null,
         doubanUrl: null,
+        coverUrl: null,
         existing: [],
       };
     }
@@ -601,6 +602,7 @@ export function demoProposals(ids: string[]): Proposal[] {
       ratingCount: 217634,
       ratingSource: "douban",
       doubanUrl: "https://book.douban.com/subject/25985021/",
+      coverUrl: null,
       // What the book already has. Half the rows in a real batch look like
       // this — an EPUB carries an ISBN and a year, and nothing else.
       existing: index % 2 === 0 ? ["isbn", "publishedYear"] : [],

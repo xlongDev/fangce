@@ -1,14 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
 import { CaretDown, Check } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
 import { useMetadataApply, useMetadataPropose } from "@/hooks/useMetadata";
+import { CHUNK, useFillRun } from "@/stores/fillRun";
 import { cn } from "@/lib/cn";
-import { FIELD_LABELS, existingHint, sourceLabel } from "@/lib/metadata";
+import { FIELD_LABELS, existingHint, hasSomething, sourceLabel, toFill } from "@/lib/metadata";
 import { EASE_OUT, useMotion } from "@/lib/motion";
-import type { Fill, MetadataFill, Proposal } from "@/types/ipc";
+import type { Fill, Proposal } from "@/types/ipc";
 
 /**
  * 批量补全：what the catalogue would add to a selection, before anything is
@@ -29,13 +31,14 @@ import type { Fill, MetadataFill, Proposal } from "@/types/ipc";
  * 字段都有 — is the only thing that tells the reader whether to try again.
  */
 /**
- * One run asks about this many books.
+ * The preview cap, and the batch size the whole-shelf run uses.
  *
- * These are other people's servers, not a commercial API, and a reader who
- * hits 全选 on a 985-book shelf would otherwise send 985 requests in one go.
- * Forty is a batch you can read the result of; the rest is another run.
+ * These are other people's servers, not a commercial API. Forty rows is a list
+ * you can read; forty books is also one transaction, which is what
+ * [`useFillRun`] feeds the backend at a time. One number so the two cannot
+ * drift apart.
  */
-const MAX_BATCH = 40;
+const MAX_BATCH = CHUNK;
 
 export function BatchFillDialog({
   open,
@@ -46,29 +49,143 @@ export function BatchFillDialog({
   ids: string[];
   onClose: () => void;
 }) {
-  const count = Math.min(ids.length, MAX_BATCH);
+  const run = useFillRun();
+  // A run outlives this dialog — the reader can close it and watch the shelf —
+  // so an open dialog shows the run it would otherwise be starting a second of.
+  const showingRun = run.running || run.total > 0;
+  const whole = ids.length > MAX_BATCH;
+
+  const close = () => {
+    // A finished run is dismissed here; a running one keeps going.
+    if (!run.running) run.reset();
+    onClose();
+  };
+
   return (
     <GlassDialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) onClose();
+        if (!next) close();
       }}
-      title={`从目录补全 ${count} 本`}
+      title={
+        showingRun
+          ? "整架补全"
+          : whole
+            ? `整架补全 ${ids.length} 本`
+            : `从目录补全 ${Math.min(ids.length, MAX_BATCH)} 本`
+      }
       description={
-        ids.length > MAX_BATCH
-          ? `只填空着的字段，不会覆盖你已经写过的内容。一次最多查 ${MAX_BATCH} 本，这次先查前 ${count} 本。`
-          : "只填空着的字段，不会覆盖你已经写过的内容。"
+        showingRun
+          ? undefined
+          : whole
+            ? "只填空着的字段，不会覆盖你已经写过的内容。按批自动跑，中途可以停。"
+            : "只填空着的字段，不会覆盖你已经写过的内容。"
       }
       widthClass="w-[min(92vw,560px)]"
     >
-      {/* Keyed by the selection: opening a different batch must not show the
-          previous one's proposals for a frame. */}
-      <FillBody
-        key={ids.slice(0, MAX_BATCH).join(",")}
-        ids={ids.slice(0, MAX_BATCH)}
-        onClose={onClose}
-      />
+      {showingRun ? (
+        <RunBody onClose={close} />
+      ) : whole ? (
+        <WholeBody ids={ids} onClose={close} />
+      ) : (
+        /* Keyed by the selection: opening a different batch must not show the
+           previous one's proposals for a frame. */
+        <FillBody key={ids.join(",")} ids={ids} onClose={close} />
+      )}
     </GlassDialog>
+  );
+}
+
+/** The start of a run over more books than a preview can hold. */
+function WholeBody({ ids, onClose }: { ids: string[]; onClose: () => void }) {
+  const run = useFillRun();
+  const batches = Math.ceil(ids.length / MAX_BATCH);
+  // Measured at roughly a third of a second a book, four at a time. Rounded up
+  // and never below a minute, because 「1 分钟」 for a five-minute job is worse
+  // than no estimate at all.
+  const minutes = Math.max(1, Math.ceil((ids.length * 0.35) / 60));
+
+  return (
+    <div className="space-y-4">
+      <p className="text-text-2 text-[13px] leading-relaxed">
+        这次选了 {ids.length} 本，分 {batches} 批自动跑，大约 {minutes}{" "}
+        分钟。跑的时候可以随时停，已经写进去的会留着。
+      </p>
+      <p className="text-text-3 text-xs leading-relaxed">
+        整架跑没有预览——几百行的清单没人看，而且每本都要先查一遍才有预览，等于查两遍。想先看看效果，选{" "}
+        {MAX_BATCH} 本以内。
+      </p>
+      <div className="flex justify-end gap-2">
+        <GlassButton variant="subtle" onClick={onClose}>
+          取消
+        </GlassButton>
+        <GlassButton variant="primary" onClick={() => run.start(ids)}>
+          开始补全 {ids.length} 本
+        </GlassButton>
+      </div>
+    </div>
+  );
+}
+
+/** Progress, and the summary it leaves behind. */
+function RunBody({ onClose }: { onClose: () => void }) {
+  const run = useFillRun();
+  const queryClient = useQueryClient();
+  const finished = !run.running;
+
+  // One refresh at the end rather than one per batch: the shelf is not what the
+  // reader is looking at, and twenty-four refetches of 985 rows to update a
+  // grid nobody is watching is work for its own sake.
+  useEffect(() => {
+    if (finished && run.total > 0) {
+      void queryClient.invalidateQueries({ queryKey: ["books"] });
+    }
+  }, [finished, run.total, queryClient]);
+
+  const percent = run.total > 0 ? Math.round((run.done / run.total) * 100) : 0;
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="flex items-baseline justify-between text-[13px]">
+          <span className="text-text-1">
+            {finished ? (run.stopped ? "已停止" : "补完了") : "正在查目录并写入…"}
+          </span>
+          <span className="text-text-3 tabular-nums">
+            {run.done} / {run.total}
+          </span>
+        </div>
+        {/* Decorative: the count above it is the accessible version, and a
+            div with a `progressbar` role is exactly what `prefer-tag-over-role`
+            exists to replace. */}
+        <div aria-hidden className="bg-surface-2 mt-2 h-1.5 overflow-hidden rounded-full">
+          <div
+            className="bg-accent h-full rounded-full transition-[width] duration-300 ease-out"
+            style={{ width: `${percent}%` }}
+          />
+        </div>
+      </div>
+
+      <p className="text-text-2 text-[13px]">
+        已补 {run.written} 本 · 跳过 {run.skipped} 本{run.failed > 0 && ` · 失败 ${run.failed} 本`}
+      </p>
+      {run.stopped && <p className="text-text-3 text-xs leading-relaxed">{run.stopped}</p>}
+      {finished && !run.stopped && run.written > 0 && (
+        <p className="text-text-3 text-xs leading-relaxed">书架上已经能看到改过的信息。</p>
+      )}
+
+      <div className="flex justify-end gap-2">
+        {run.running ? (
+          <GlassButton variant="subtle" onClick={run.cancel}>
+            停止
+          </GlassButton>
+        ) : (
+          <GlassButton variant="primary" onClick={onClose}>
+            关闭
+          </GlassButton>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -362,13 +479,6 @@ function Row({
   );
 }
 
-/** Whether a proposal would write anything at all. */
-export function hasSomething(proposal: Proposal): boolean {
-  return (
-    proposal.fills.length > 0 || typeof proposal.rating === "number" || proposal.doubanUrl != null
-  );
-}
-
 /** One fill, as a line that fits.
  *
  * 简介 arrives as up to 4000 characters — printed whole, one row became a page
@@ -379,34 +489,4 @@ export function hasSomething(proposal: Proposal): boolean {
 export function preview(fill: Fill): string {
   if (fill.field === "description") return `将填入（${fill.to.length} 字）`;
   return fill.to.length > 32 ? `${fill.to.slice(0, 32)}…` : fill.to;
-}
-
-/** A proposal as the write it asks for: only the fields it named. */
-function toFill(proposal: Proposal): MetadataFill {
-  const fill: MetadataFill = {
-    id: proposal.bookId,
-    subtitle: null,
-    publisher: null,
-    language: null,
-    isbn: null,
-    publishedYear: null,
-    description: null,
-    // The catalogue's snapshot travels with the fills rather than as a fill.
-    rating: proposal.rating,
-    ratingCount: proposal.ratingCount,
-    ratingSource: proposal.ratingSource,
-    doubanUrl: proposal.doubanUrl,
-  };
-  for (const item of proposal.fills) {
-    if (item.field === "subtitle") fill.subtitle = item.to;
-    if (item.field === "publisher") fill.publisher = item.to;
-    if (item.field === "language") fill.language = item.to;
-    if (item.field === "isbn") fill.isbn = item.to;
-    if (item.field === "description") fill.description = item.to;
-    if (item.field === "publishedYear") {
-      const year = Number.parseInt(item.to, 10);
-      if (Number.isFinite(year)) fill.publishedYear = year;
-    }
-  }
-  return fill;
 }

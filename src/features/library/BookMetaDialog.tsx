@@ -8,7 +8,7 @@ import { type Source, useMetadataSearch } from "@/hooks/useMetadata";
 import { sourceLabel } from "@/lib/metadata";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { showToast } from "@/stores/toasts";
-import { isDesktopRuntime } from "@/lib/ipc";
+import { ipc, isDesktopRuntime } from "@/lib/ipc";
 import type { BookMetadataPatch, BookSummary, Candidate } from "@/types/ipc";
 
 /**
@@ -119,6 +119,10 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
     source: string | null;
   }>({ value: book.rating, count: book.ratingCount, source: book.ratingSource });
   const [douban, setDouban] = useState<string | null>(book.doubanUrl);
+  /** A cover to fetch on 保存. A cover is a file, not a column, so it cannot be
+   *  part of the form's patch — and it must not be written the moment the
+   *  reader clicks a candidate, because nothing is written before 保存. */
+  const [pendingCover, setPendingCover] = useState<string | null>(null);
   /** Candidates from the last 查找, or `null` when the reader has not asked. */
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   const search = useMetadataSearch();
@@ -166,7 +170,22 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
       // owes the keyboard.
       onSubmit={(event) => {
         event.preventDefault();
-        if (changed && valid && !busy) onSave(patch);
+        if (changed && valid && !busy) {
+          // The cover is a file, so it is not part of the patch. Fire it first
+          // and let it land on its own: a cover that will not download must not
+          // hold up the fields that did.
+          if (pendingCover) {
+            void ipc
+              .bookCoverFromUrl(book.id, pendingCover)
+              .catch((err: unknown) =>
+                showToast(
+                  "error",
+                  `封面没下载下来：${err instanceof Error ? err.message : String(err)}`,
+                ),
+              );
+          }
+          onSave(patch);
+        }
       }}
     >
       <div className="flex max-h-[62vh] flex-col gap-3 overflow-y-auto pr-1">
@@ -266,6 +285,9 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
                       });
                     }
                     if (candidate.doubanUrl) setDouban(candidate.doubanUrl);
+                    // Only when the book has none: replacing a cover the reader
+                    // is used to seeing is not a "fill".
+                    if (!book.coverUrl && candidate.coverUrl) setPendingCover(candidate.coverUrl);
                     setCandidates(null);
                   }}
                   className="press focus-visible:focus-ring hover:bg-surface-2 flex w-full items-baseline gap-2 rounded px-2 py-1.5 text-left"
@@ -392,6 +414,7 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
               {rating.count !== null && `（${rating.count} 人）`}
             </span>
           )}
+          {pendingCover && <span>封面：保存时下载</span>}
           {douban && (
             <button
               type="button"

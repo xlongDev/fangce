@@ -337,6 +337,19 @@ export const commands = {
   bookCoverSave: (id: string, bytes: number[]) =>
     __TAURI_INVOKE<null>("book_cover_save", { id, bytes }),
   /**
+   *  `book.cover_from_url` — fetches the cover a catalogue offered.
+   *
+   *  The single-book sheet needs this because its save path is `book.update`,
+   *  which writes columns: a cover is a file, and downloading it inside a
+   *  transaction is exactly what this file's other cover command avoids.
+   *
+   *  The bytes are checked before anything is written — https, a catalogue's own
+   *  image host, a real JPEG or PNG, under 8 MB — and the extension comes from
+   *  the bytes rather than from the URL.
+   */
+  bookCoverFromUrl: (id: string, url: string) =>
+    __TAURI_INVOKE<null>("book_cover_from_url", { id, url }),
+  /**
    *  `book.import`
    *
    *  Takes absolute paths chosen by the native file dialog or dropped onto the
@@ -442,6 +455,14 @@ export const commands = {
   metadataPropose: (ids: string[]) => __TAURI_INVOKE<Proposal[]>("metadata_propose", { ids }),
   /**
    *  `metadata.apply` — writes the proposals the reader accepted.
+   *
+   *  **Covers are downloaded before the transaction opens.** The library has one
+   *  connection and a twenty-second download inside it would freeze the shelf;
+   *  it is the same rule the read path follows in the other direction.
+   *
+   *  A cover that will not download is not a reason to drop the fields that did.
+   *  The row still gains its metadata, and the missing picture is one more thing
+   *  the next run can try.
    *
    *  One transaction and one log entry for the whole batch, with before-images:
    *  a fill is a bulk edit, and the reader has to be able to put it back.
@@ -1900,6 +1921,11 @@ export type MetadataFill = {
    *  from different sets of people, and the sheet prints the source.
    */
   ratingSource: string | null;
+  /**
+   *  A picture to fetch, when the book has none. Not a field: it is a file,
+   *  downloaded before the write rather than inside it.
+   */
+  coverUrl: string | null;
 };
 
 /**  What one `book.migrate` carried across, for the dialog that asked for it. */
@@ -2038,6 +2064,15 @@ export type Proposal = {
    *  a label that has to be guessed later is a label that will be wrong.
    */
   ratingSource: string | null;
+  /**
+   *  The catalogue's cover, when the book has none.
+   *
+   *  Beside the fills rather than as one: a cover is a file to download, not
+   *  a string to write, and `None` here means either the catalogue had no
+   *  picture or the book already has one — both of which mean "nothing to do
+   *  about the cover".
+   */
+  coverUrl: string | null;
   /**
    *  The fields this book already has, in the order the sheet shows them.
    *
