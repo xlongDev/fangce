@@ -394,6 +394,10 @@ function Row({
                   {FIELD_LABELS[fill.field] ?? fill.field} → {preview(fill)}
                 </span>
               ))}
+              {/* A cover is written too, and it has no value to show — without
+                  this line a book whose only gain is a picture rendered as an
+                  empty row that looked like nothing would happen. */}
+              {proposal.coverUrl && <span>封面</span>}
               {/* What this book already has, so 「只补两项」 reads as 「另外四项
                   本来就有」 rather than as a catalogue with thin data. */}
               {existingHint(proposal.existing) && (
@@ -437,6 +441,14 @@ function Row({
                   <dd className="text-text-1 min-w-0 flex-1 text-[12px] leading-5">
                     {sourceLabel(proposal.ratingSource)} {proposal.rating.toFixed(1)}
                     {typeof proposal.ratingCount === "number" && `（${proposal.ratingCount} 人）`}
+                  </dd>
+                </div>
+              )}
+              {proposal.coverUrl && (
+                <div className="flex gap-3">
+                  <dt className="text-text-3 w-12 shrink-0 text-[11px] leading-5">封面</dt>
+                  <dd className="text-text-2 min-w-0 flex-1 truncate text-[12px] leading-5">
+                    {proposal.coverUrl}
                   </dd>
                 </div>
               )}

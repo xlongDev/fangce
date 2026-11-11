@@ -71,6 +71,10 @@ test("the fill sheet fits the window and its list scrolls", async ({ page }) => 
   // reads as a catalogue with thin data unless it also says the other ones
   // were already there.
   await expect(row).toContainText("已有 ISBN、出版年");
+
+  // A cover has no value to show, so without this the row of a book whose only
+  // gain is a picture reads as 「什么都不会做」.
+  await expect(row).toContainText("封面");
   await expect(row).toContainText("book.douban.com");
 
   // And it is bounded: a 1700-character blurb scrolls inside its own box.

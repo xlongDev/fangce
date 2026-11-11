@@ -602,7 +602,10 @@ export function demoProposals(ids: string[]): Proposal[] {
       ratingCount: 217634,
       ratingSource: "douban",
       doubanUrl: "https://book.douban.com/subject/25985021/",
-      coverUrl: null,
+      // One row in three carries a picture, so the 「封面」 chip and its detail
+      // row are something a browser test can see.
+      coverUrl:
+        index % 3 === 0 ? "https://img3.doubanio.com/view/subject/l/public/s35198069.jpg" : null,
       // What the book already has. Half the rows in a real batch look like
       // this — an EPUB carries an ISBN and a year, and nothing else.
       existing: index % 2 === 0 ? ["isbn", "publishedYear"] : [],
