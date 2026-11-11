@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ArrowSquareOut, MagnifyingGlass } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
@@ -126,6 +127,7 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
   /** Candidates from the last 查找, or `null` when the reader has not asked. */
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   const search = useMetadataSearch();
+  const queryClient = useQueryClient();
 
   const yearText = year.trim();
   const yearValue = /^\d{1,4}$/.test(yearText) ? Number(yearText) : null;
@@ -175,8 +177,14 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
           // and let it land on its own: a cover that will not download must not
           // hold up the fields that did.
           if (pendingCover) {
+            // 🔴 The shelf has to be refreshed **again** when the cover lands.
+            // `onSave` invalidates it within a few milliseconds, and the
+            // download takes about a second — so the refetch that follows the
+            // metadata save reads `cover_path = NULL` and nothing ever asks
+            // again. That is why a saved cover stayed a placeholder.
             void ipc
               .bookCoverFromUrl(book.id, pendingCover)
+              .then(() => queryClient.invalidateQueries({ queryKey: ["books"] }))
               .catch((err: unknown) =>
                 showToast(
                   "error",
