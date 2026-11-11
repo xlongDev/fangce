@@ -437,12 +437,8 @@ pub fn book_set_metadata_many(
     let befores: Vec<ops::Before> = state.library.with(|conn| {
         let mut out = Vec::new();
         for id in &ids {
-            if let Some(book) = crate::library::repository::get(conn, id)? {
-                out.push(ops::Before {
-                    book_id: id.clone(),
-                    publisher: book.publisher,
-                    language: book.language,
-                });
+            if let Some(before) = ops::snapshot_of(conn, id)? {
+                out.push(before);
             }
         }
         Ok(out)
@@ -556,20 +552,12 @@ pub fn book_update(
     state.library.with_tx(|tx| {
         // Read first: the before-image is what makes the change undoable, and
         // after the write there is nothing left to read it from.
-        let before = crate::library::repository::get(tx, &id)?;
+        // Read first: the before-image is what makes the change undoable, and
+        // after the write there is nothing left to read it from.
+        let before = ops::snapshot_of(tx, &id)?;
         crate::library::repository::update_metadata(tx, &id, &patch)?;
-        if let Some(book) = before {
-            ops::record_before(
-                tx,
-                ops::Source::Ui,
-                "update_metadata",
-                &[ops::Before {
-                    book_id: id.clone(),
-                    publisher: book.publisher,
-                    language: book.language,
-                }],
-                "改了书籍信息",
-            )?;
+        if let Some(before) = before {
+            ops::record_before(tx, ops::Source::Ui, "update_metadata", &[before], "改了书籍信息")?;
         }
         Ok(())
     })

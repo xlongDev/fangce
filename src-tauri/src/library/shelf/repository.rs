@@ -1154,6 +1154,19 @@ pub fn update_metadata(tx: &Transaction<'_>, id: &str, patch: &BookMetadataPatch
 }
 
 /// Points a book at an already-written cover file, after import.
+/// Takes the picture away. Used by undo, where the write being reversed was the
+/// one that added it.
+pub fn clear_cover(conn: &Connection, id: &str) -> AppResult<()> {
+    let changed = conn.execute(
+        "UPDATE books SET cover_path = NULL, updated_at = ?1 WHERE id = ?2",
+        params![crate::library::now_seconds(), id],
+    )?;
+    if changed == 0 {
+        return Err(AppError::NotFound(id.to_string()));
+    }
+    Ok(())
+}
+
 pub fn set_cover(conn: &Connection, id: &str, cover_path: &str) -> AppResult<()> {
     let changed = conn.execute(
         "UPDATE books SET cover_path = ?1, updated_at = ?2 WHERE id = ?3",

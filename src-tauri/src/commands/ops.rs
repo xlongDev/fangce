@@ -24,5 +24,6 @@ pub fn ops_list(state: State<'_, AppState>, limit: usize) -> AppResult<Vec<Opera
 #[tauri::command]
 #[specta::specta]
 pub fn ops_undo(state: State<'_, AppState>, call_id: String) -> AppResult<Undo> {
-    state.library.with_tx(|tx| ops::undo(tx, &call_id))
+    let covers_dir = state.layout.covers_dir.clone();
+    state.library.with_tx(|tx| ops::undo(tx, &call_id, &covers_dir))
 }

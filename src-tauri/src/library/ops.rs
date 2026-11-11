@@ -9,12 +9,13 @@
 //! What is not: reading, searching, and the reading position — this is a record
 //! of changes, not of surveillance.
 
+use std::path::Path;
+
 use rusqlite::{Connection, Transaction, params};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::error::{AppError, AppResult};
-use crate::library::repository::BookFieldsPatch;
 
 /// Where a change came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,13 +37,62 @@ impl Source {
 
 /// What one book's metadata looked like before a write, so it can be put back.
 ///
-/// Only the two fields a write can change: a before-image of everything would
-/// be a copy of the row, and a copy is a second source of truth waiting to
-/// disagree with the first.
+/// **Every field a write can change**, and no more: this is the list of things
+/// being touched, not a copy of the row. A copy would be a second source of
+/// truth waiting to disagree with the first — and it would restore fields the
+/// write never touched, which is its own kind of wrong.
+///
+/// The two-field version this replaced was written when a fill only knew
+/// publisher and language. By the time it knew eleven fields, 「撤销」 still
+/// restored two of them and said 「已撤销 N 本」 — a button that lies is worse
+/// than no button.
 pub struct Before {
     pub book_id: String,
+    pub subtitle: Option<String>,
     pub publisher: Option<String>,
     pub language: Option<String>,
+    pub isbn: Option<String>,
+    pub published_year: Option<i32>,
+    pub description: Option<String>,
+    pub rating: Option<f64>,
+    pub rating_count: Option<i32>,
+    pub rating_source: Option<String>,
+    pub douban_url: Option<String>,
+    /// The cover file this book had, if any. `None` means it had none — undo
+    /// clears the column and removes the file the write created.
+    pub cover_path: Option<String>,
+}
+
+/// Reads what a book looks like right now, for a write that is about to change
+/// it.
+pub fn snapshot(
+    conn: &Connection,
+    book: &crate::library::repository::BookSummary,
+) -> AppResult<Before> {
+    let cover_path = crate::library::repository::cover_path(conn, &book.id)?
+        .map(|path| path.to_string_lossy().into_owned());
+    Ok(Before {
+        book_id: book.id.clone(),
+        subtitle: book.subtitle.clone(),
+        publisher: book.publisher.clone(),
+        language: book.language.clone(),
+        isbn: book.isbn.clone(),
+        published_year: book.published_year,
+        description: book.description.clone(),
+        rating: book.rating,
+        rating_count: book.rating_count,
+        rating_source: book.rating_source.clone(),
+        douban_url: book.douban_url.clone(),
+        cover_path,
+    })
+}
+
+/// The same, by id, for a caller that has not read the row yet.
+pub fn snapshot_of(conn: &Connection, id: &str) -> AppResult<Option<Before>> {
+    match crate::library::repository::get(conn, id)? {
+        Some(book) => Ok(Some(snapshot(conn, &book)?)),
+        None => Ok(None),
+    }
 }
 
 /// One change, as the settings page prints it.
@@ -103,10 +153,23 @@ pub fn record_before(
     let rows: Vec<(String, Option<Value>)> = befores
         .iter()
         .map(|before| {
+            // `v` is not decoration: rows written before this format have a
+            // `before` object with two keys, and reading those as 「the other
+            // nine were null」 would wipe nine fields on undo.
             let detail = json!({
+                "v": 2,
                 "before": {
+                    "subtitle": before.subtitle,
                     "publisher": before.publisher,
                     "language": before.language,
+                    "isbn": before.isbn,
+                    "published_year": before.published_year,
+                    "description": before.description,
+                    "rating": before.rating,
+                    "rating_count": before.rating_count,
+                    "rating_source": before.rating_source,
+                    "douban_url": before.douban_url,
+                    "cover_path": before.cover_path,
                 }
             });
             (before.book_id.clone(), Some(detail))
@@ -184,10 +247,13 @@ pub fn list(conn: &Connection, limit: usize) -> AppResult<Vec<Operation>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Whether this row carries a before-image complete enough to put back.
+///
+/// Rows written before the format carried every field do not: restoring the two
+/// they remember would leave nine changed and report success, so the button is
+/// not offered at all.
 fn carries_before(detail: Option<&str>) -> bool {
-    detail
-        .and_then(|text| serde_json::from_str::<Value>(text).ok())
-        .is_some_and(|value| value.get("before").is_some_and(Value::is_object))
+    before_fields(detail).is_some()
 }
 
 /// Puts back what one call changed.
@@ -195,7 +261,7 @@ fn carries_before(detail: Option<&str>) -> bool {
 /// Idempotent by construction: it writes the values the books had before, so a
 /// second undo of the same call writes the same values again. The `undo` marker
 /// row is what stops the settings page from offering it a second time.
-pub fn undo(tx: &Transaction<'_>, call_id: &str) -> AppResult<Undo> {
+pub fn undo(tx: &Transaction<'_>, call_id: &str, covers_dir: &Path) -> AppResult<Undo> {
     let rows: Vec<(Option<String>, Option<String>)> = tx
         .prepare(
             "SELECT book_id, detail FROM operations \
@@ -211,21 +277,20 @@ pub fn undo(tx: &Transaction<'_>, call_id: &str) -> AppResult<Undo> {
     let mut undone = 0;
     let mut skipped = 0;
     for (book_id, detail) in &rows {
-        // A row without a book (a library-level action) and a row without a
-        // before-image are both "nothing to put back", not failures.
-        let (Some(book_id), Some(patch)) = (book_id, before_patch(detail.as_deref())) else {
+        // A row without a book (a library-level action) and a row whose
+        // before-image is from the older, two-field format are both "cannot be
+        // put back", not failures. The second is the honest one: restoring the
+        // two fields such a row remembers would leave nine changed and report
+        // success.
+        let (Some(book_id), Some(fields)) = (book_id, before_fields(detail.as_deref())) else {
             skipped += 1;
             continue;
         };
         // A book purged or trashed in the meantime is gone, not broken: the
         // undo moves on and reports how many it could not reach.
-        match crate::library::repository::update_fields_many(
-            tx,
-            std::slice::from_ref(book_id),
-            &patch,
-        ) {
-            Ok(_) => undone += 1,
-            Err(AppError::NotFound(_)) => skipped += 1,
+        match restore(tx, book_id, &fields, covers_dir) {
+            Ok(true) => undone += 1,
+            Ok(false) => skipped += 1,
             Err(err) => return Err(err),
         }
     }
@@ -241,21 +306,73 @@ pub fn undo(tx: &Transaction<'_>, call_id: &str) -> AppResult<Undo> {
     Ok(Undo { undone, skipped })
 }
 
-/// `None` on the left of the patch means "leave alone", so a field the write
-/// cleared has to come back as an empty string, which is this repository's word
-/// for "no value".
-fn before_patch(detail: Option<&str>) -> Option<BookFieldsPatch> {
-    let detail: Value = serde_json::from_str(detail?).ok()?;
-    let before = detail.get("before")?.as_object()?;
-    let field = |key: &str| match before.get(key) {
-        Some(Value::String(text)) => Some(text.clone()),
-        Some(Value::Null) | None => Some(String::new()),
-        _ => None,
+/// Puts one book back the way the log says it was.
+///
+/// `Ok(false)` when the book is gone — the caller counts that as skipped rather
+/// than failing the whole call.
+fn restore(
+    tx: &Transaction<'_>,
+    id: &str,
+    fields: &serde_json::Map<String, Value>,
+    covers_dir: &Path,
+) -> AppResult<bool> {
+    let Some(book) = crate::library::repository::get(tx, id)? else {
+        return Ok(false);
     };
-    Some(BookFieldsPatch {
-        publisher: before.get("publisher").map(|_| field("publisher").unwrap_or_default()),
-        language: before.get("language").map(|_| field("language").unwrap_or_default()),
-    })
+    let text = |key: &str| fields.get(key).and_then(Value::as_str).map(str::to_string);
+    let number = |key: &str| fields.get(key).and_then(Value::as_f64);
+    let count = |key: &str| fields.get(key).and_then(Value::as_i64).map(|value| value as i32);
+
+    // A whole record: `update_metadata` writes every column, and `None` here
+    // means 「it had no value」, which is exactly what the log recorded.
+    let patch = crate::library::repository::BookMetadataPatch {
+        // The title and the author list are not things a fill writes, so they
+        // are carried through untouched rather than restored.
+        title: book.title,
+        authors: book.authors,
+        subtitle: text("subtitle"),
+        publisher: text("publisher"),
+        language: text("language"),
+        isbn: text("isbn"),
+        published_year: count("published_year"),
+        description: text("description"),
+        rating: number("rating"),
+        rating_count: count("rating_count"),
+        rating_source: text("rating_source"),
+        douban_url: text("douban_url"),
+    };
+    crate::library::repository::update_metadata(tx, id, &patch)?;
+
+    match text("cover_path") {
+        // There was a picture: put that file back.
+        Some(path) => crate::library::repository::set_cover(tx, id, &path)?,
+        // There was none. Clearing the column is the restore; the file this
+        // write created is garbage once nothing points at it.
+        None => {
+            if let Some(current) = crate::library::repository::cover_path(tx, id)? {
+                crate::library::repository::clear_cover(tx, id)?;
+                // Only inside the covers directory. The path came out of the
+                // database, and the database is not a licence to delete files
+                // anywhere on the disk.
+                if current.starts_with(covers_dir) {
+                    let _ = std::fs::remove_file(&current);
+                }
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// The before-image of one log row, when it is in the format that carries every
+/// field.
+fn before_fields(detail: Option<&str>) -> Option<serde_json::Map<String, Value>> {
+    let detail: Value = serde_json::from_str(detail?).ok()?;
+    // Rows written before this format have a `before` with two keys. Reading
+    // those as 「the other nine were null」 would wipe nine fields.
+    if detail.get("v").and_then(Value::as_u64) != Some(2) {
+        return None;
+    }
+    detail.get("before")?.as_object().cloned()
 }
 
 #[cfg(test)]
@@ -273,6 +390,17 @@ mod tests {
         let library = Library::open(&dir).expect("open");
         seed(&library);
         (dir, library)
+    }
+
+    /// What a book looks like right now — the same call the write paths make.
+    fn before_of(library: &Library, id: &str) -> Before {
+        library.with(|conn| snapshot_of(conn, id)).expect("snapshot").expect("book")
+    }
+
+    /// Undo only ever deletes files inside this directory; the tests do not
+    /// write any, so a path that does not exist is the honest stand-in.
+    fn covers_dir(dir: &std::path::Path) -> PathBuf {
+        dir.join("covers")
     }
 
     fn seed(library: &Library) {
@@ -382,33 +510,134 @@ mod tests {
     #[test]
     fn undo_puts_the_old_values_back() {
         let (dir, library) = harness("ops-undo");
-        let befores = [
-            Before {
-                book_id: "b1".into(),
-                publisher: Some("重庆出版社".into()),
-                language: Some("zh".into()),
-            },
-            Before { book_id: "b2".into(), publisher: None, language: Some("en".into()) },
-        ];
+        let befores = [before_of(&library, "b1"), before_of(&library, "b2")];
         library
             .with_tx(|tx| {
                 repository::update_fields_many(
                     tx,
                     &["b1".into(), "b2".into()],
-                    &BookFieldsPatch { publisher: Some("统一".into()), language: None },
+                    &crate::library::repository::BookFieldsPatch {
+                        publisher: Some("统一".into()),
+                        language: None,
+                    },
                 )?;
                 record_before(tx, Source::Ui, "batch_metadata", &befores, "批量改出版社：统一")
             })
             .expect("write");
 
         let call_id = library.with(|conn| list(conn, 10)).expect("list")[0].call_id.clone();
-        let outcome = library.with_tx(|tx| undo(tx, &call_id)).expect("undo");
+        let outcome = library.with_tx(|tx| undo(tx, &call_id, &covers_dir(&dir))).expect("undo");
         assert_eq!(outcome, Undo { undone: 2, skipped: 0 });
 
         let first = library.with(|conn| repository::get(conn, "b1")).expect("get").expect("b1");
         assert_eq!(first.publisher.as_deref(), Some("重庆出版社"), "旧值回来了");
         let second = library.with(|conn| repository::get(conn, "b2")).expect("get").expect("b2");
-        assert_eq!(second.publisher, None, "原本没有出版社的，撤销之后还是没有");
+        assert_eq!(second.publisher.as_deref(), Some("Chilton"), "另一本也回到自己的旧值");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The reason the before-image grew: a fill writes eleven fields, and undo
+    /// used to put two of them back and call it done.
+    #[test]
+    fn undo_puts_back_every_field_a_fill_writes() {
+        let (dir, library) = harness("ops-undo-all");
+        let before = library.with(|conn| snapshot_of(conn, "b1")).expect("snapshot").expect("b1");
+        library
+            .with_tx(|tx| {
+                repository::update_metadata(
+                    tx,
+                    "b1",
+                    &crate::library::repository::BookMetadataPatch {
+                        title: "三体".into(),
+                        subtitle: Some("全集".into()),
+                        publisher: Some("新出版社".into()),
+                        language: Some("en".into()),
+                        isbn: Some("9787536692930".into()),
+                        published_year: Some(2020),
+                        description: Some("简介".into()),
+                        rating: Some(9.1),
+                        rating_count: Some(1000),
+                        rating_source: Some("douban".into()),
+                        douban_url: Some("https://book.douban.com/subject/1/".into()),
+                        authors: Vec::new(),
+                    },
+                )?;
+                record_before(tx, Source::Ui, "fill_metadata", &[before], "从目录补全了 1 本")
+            })
+            .expect("fill");
+
+        let call_id = library.with(|conn| list(conn, 10)).expect("list")[0].call_id.clone();
+        library.with_tx(|tx| undo(tx, &call_id, &covers_dir(&dir))).expect("undo");
+
+        let book = library.with(|conn| repository::get(conn, "b1")).expect("get").expect("b1");
+        assert_eq!(book.subtitle, None);
+        assert_eq!(book.publisher.as_deref(), Some("重庆出版社"));
+        assert_eq!(book.language.as_deref(), Some("zh"));
+        assert_eq!(book.isbn, None);
+        assert_eq!(book.published_year, None);
+        assert_eq!(book.description, None);
+        assert_eq!(book.rating, None, "评分也回去了");
+        assert_eq!(book.rating_count, None);
+        assert_eq!(book.rating_source, None);
+        assert_eq!(book.douban_url, None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A fill that added a picture is undone by taking it away — column and
+    /// file both, so a redo does not leave the old one lying around.
+    #[test]
+    fn undo_takes_away_the_picture_a_fill_added() {
+        let (dir, library) = harness("ops-undo-cover");
+        let covers = covers_dir(&dir);
+        std::fs::create_dir_all(&covers).expect("covers dir");
+        let file = covers.join("b1.jpg");
+        std::fs::write(&file, b"\xff\xd8\xff").expect("write cover");
+
+        // Taken before the write, which is the whole point of a before-image.
+        let before = library.with(|conn| snapshot_of(conn, "b1")).expect("snapshot").expect("b1");
+        assert_eq!(before.cover_path, None, "这本书本来没有封面");
+        library
+            .with_tx(|tx| {
+                repository::set_cover(tx, "b1", file.to_str().expect("path"))?;
+                record_before(tx, Source::Ui, "fill_metadata", &[before], "补了封面")
+            })
+            .expect("fill");
+
+        let call_id = library.with(|conn| list(conn, 10)).expect("list")[0].call_id.clone();
+        library.with_tx(|tx| undo(tx, &call_id, &covers)).expect("undo");
+
+        let path = library.with(|conn| repository::cover_path(conn, "b1")).expect("path");
+        assert_eq!(path, None, "列清空了");
+        assert!(!file.exists(), "文件也删了，不留垃圾");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Rows written before the format carried every field cannot be undone
+    /// honestly: restoring the two they remember would leave nine changed and
+    /// report success. So the button is not offered, and the call is skipped.
+    #[test]
+    fn a_row_from_the_older_format_is_not_undoable() {
+        let (dir, library) = harness("ops-v1");
+        library
+            .with(|conn| {
+                conn.execute(
+                    "INSERT INTO operations \
+                     (at, source, action, book_id, book_title, summary, detail, call_id) \
+                     VALUES (1, 'ui', 'fill_metadata', 'b1', '三体', '旧格式', ?1, 'old')",
+                    params![r#"{"before":{"publisher":"上海人民出版社","language":"zh"}}"#],
+                )?;
+                Ok(())
+            })
+            .expect("insert");
+
+        let rows = library.with(|conn| list(conn, 10)).expect("list");
+        assert!(!rows[0].undoable, "记不全的行不给撤销按钮");
+
+        let outcome = library.with_tx(|tx| undo(tx, "old", &covers_dir(&dir))).expect("undo");
+        assert_eq!(outcome, Undo { undone: 0, skipped: 1 }, "宁可不动，也不装作还原了");
+
+        let book = library.with(|conn| repository::get(conn, "b1")).expect("get").expect("b1");
+        assert_eq!(book.publisher.as_deref(), Some("重庆出版社"), "一个字段都没被改");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -423,7 +652,7 @@ mod tests {
                     tx,
                     Source::Ui,
                     "batch_metadata",
-                    &[Before { book_id: "b1".into(), publisher: None, language: None }],
+                    &[snapshot_of(tx, "b1")?.expect("b1")],
                     "改了",
                 )
             })
@@ -433,7 +662,7 @@ mod tests {
         assert!(before[0].undoable, "带 before 的行应该可以撤销");
         let call_id = before[0].call_id.clone();
 
-        library.with_tx(|tx| undo(tx, &call_id)).expect("undo");
+        library.with_tx(|tx| undo(tx, &call_id, &covers_dir(&dir))).expect("undo");
 
         let after = library.with(|conn| list(conn, 10)).expect("list");
         assert_eq!(after.len(), 1, "撤销行本身不进列表");
@@ -456,7 +685,7 @@ mod tests {
     fn undoing_a_call_that_never_existed_is_not_found() {
         let dir = crate::document::fixture::temp_dir("ops-missing");
         let library = Library::open(&dir).expect("open");
-        let outcome = library.with_tx(|tx| undo(tx, "nope"));
+        let outcome = library.with_tx(|tx| undo(tx, "nope", &covers_dir(&dir)));
         assert!(matches!(outcome, Err(AppError::NotFound(_))));
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -472,18 +701,7 @@ mod tests {
                     tx,
                     Source::Ui,
                     "batch_metadata",
-                    &[
-                        Before {
-                            book_id: "b1".into(),
-                            publisher: Some("A".into()),
-                            language: None,
-                        },
-                        Before {
-                            book_id: "b2".into(),
-                            publisher: Some("B".into()),
-                            language: None,
-                        },
-                    ],
+                    &[snapshot_of(tx, "b1")?.expect("b1"), snapshot_of(tx, "b2")?.expect("b2")],
                     "改了",
                 )?;
                 repository::purge(tx, "b2")?;
@@ -492,7 +710,7 @@ mod tests {
             .expect("seed");
         let call_id = library.with(|conn| list(conn, 10)).expect("list")[0].call_id.clone();
 
-        let outcome = library.with_tx(|tx| undo(tx, &call_id)).expect("undo");
+        let outcome = library.with_tx(|tx| undo(tx, &call_id, &covers_dir(&dir))).expect("undo");
         assert_eq!(outcome, Undo { undone: 1, skipped: 1 });
         std::fs::remove_dir_all(&dir).ok();
     }

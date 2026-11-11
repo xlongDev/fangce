@@ -195,11 +195,7 @@ pub async fn metadata_apply(
                 // Deleted between the lookup and the write — nothing to fill.
                 continue;
             };
-            befores.push(ops::Before {
-                book_id: item.id.clone(),
-                publisher: book.publisher.clone(),
-                language: book.language.clone(),
-            });
+            befores.push(ops::snapshot(tx, &book)?);
             // A full record, built from the row plus whatever this fill says:
             // `update_fields_many` only knows the two fields the batch sheet
             // edits, and a fill writes more than that.
