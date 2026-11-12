@@ -629,7 +629,14 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
 
       {duplicatesOpen && (
         <Suspense fallback={null}>
-          <DuplicateDialog open onClose={() => setDuplicatesOpen(false)} />
+          <DuplicateDialog
+            open
+            onClose={() => setDuplicatesOpen(false)}
+            onLocate={(term) => {
+              setDuplicatesOpen(false);
+              update({ search: term });
+            }}
+          />
         </Suspense>
       )}
 

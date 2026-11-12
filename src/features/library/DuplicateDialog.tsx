@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Copy } from "@phosphor-icons/react";
+import { Copy, MagnifyingGlass } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
@@ -15,7 +15,16 @@ import type { DuplicateBook, DuplicateGroup } from "@/types/ipc";
  * copy. So this sheet names the evidence and stops there: no merge, no delete,
  * no silent judgement about which copy matters.
  */
-export function DuplicateDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function DuplicateDialog({
+  open,
+  onClose,
+  onLocate,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /** Close the sheet and point the shelf's search at this word. */
+  onLocate: (term: string) => void;
+}) {
   const report = useQuery({
     queryKey: ["duplicates"],
     queryFn: () => ipc.libraryDuplicates(),
@@ -34,7 +43,7 @@ export function DuplicateDialog({ open, onClose }: { open: boolean; onClose: () 
         if (!next) onClose();
       }}
       title="疑似重复"
-      description="按 ISBN 精确匹配，其余按书名归一化比较。只做提示，不会自动合并或删除。"
+      description="按 ISBN 精确匹配，其余按书名完全一致判断。点放大镜可在书架里查找这一组；报告不会自动合并或删除。"
       widthClass="w-[min(92vw,600px)]"
     >
       {!isDesktopRuntime ? (
@@ -56,7 +65,11 @@ export function DuplicateDialog({ open, onClose }: { open: boolean; onClose: () 
           </p>
           <ul className="max-h-[55vh] space-y-3 overflow-y-auto pr-1">
             {groups.map((group) => (
-              <Group key={`${group.reason}|${group.books[0]?.id ?? ""}`} group={group} />
+              <Group
+                key={`${group.reason}|${group.books[0]?.id ?? ""}`}
+                group={group}
+                onLocate={onLocate}
+              />
             ))}
           </ul>
         </>
@@ -71,8 +84,9 @@ export function DuplicateDialog({ open, onClose }: { open: boolean; onClose: () 
   );
 }
 
-function Group({ group }: { group: DuplicateGroup }) {
+function Group({ group, onLocate }: { group: DuplicateGroup; onLocate: (term: string) => void }) {
   const oldest = group.books[0];
+  const term = searchTerm(oldest?.title ?? "");
   return (
     <li className="glass space-y-2 rounded-md p-3">
       <div className="flex items-center gap-2">
@@ -83,6 +97,18 @@ function Group({ group }: { group: DuplicateGroup }) {
         <span className="border-hairline text-text-3 shrink-0 rounded-full border px-1.5 py-0.5 text-[10px]">
           {group.reason}
         </span>
+        {/* Wider than the group on purpose: a search for the main title also
+            finds the copy whose cataloguer added a subtitle, which the exact
+            grouping rule deliberately leaves out. */}
+        <button
+          type="button"
+          aria-label="在书架中查看这一组"
+          title={`在书架中查找「${term}」`}
+          onClick={() => onLocate(term)}
+          className="press focus-visible:focus-ring text-text-3 hover:text-accent shrink-0 rounded p-1"
+        >
+          <MagnifyingGlass size={13} />
+        </button>
       </div>
       <ul className="divide-hairline divide-y">
         {group.books.map((book) => (
@@ -91,6 +117,24 @@ function Group({ group }: { group: DuplicateGroup }) {
       </ul>
     </li>
   );
+}
+
+/**
+ * The word a pile is looked up by in the shelf's search box.
+ *
+ * Only a colon or an opening bracket starts a suffix worth dropping: those
+ * carry subtitles, edition notes and marketing copy. `·` and `-` are **not**
+ * cut — in this library they are a person's given name or a series volume,
+ * and cutting there is exactly what produced the false positives the grouping
+ * rule had to be rewritten over.
+ *
+ * The search is intentionally a little wider than a group: it is the way back
+ * to a copy whose cataloguer added a subtitle, which exact title equality
+ * cannot see.
+ */
+export function searchTerm(title: string): string {
+  const head = title.split(/[:：（(【]/)[0]?.trim() ?? "";
+  return head.length >= 2 ? head : title.trim();
 }
 
 function Book({ book }: { book: DuplicateBook }) {
