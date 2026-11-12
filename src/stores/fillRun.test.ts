@@ -22,6 +22,7 @@ const proposal = (id: string, over: Partial<Proposal> = {}): Proposal => ({
   ratingSource: null,
   doubanUrl: null,
   coverUrl: null,
+  coverReplaces: false,
   existing: [],
   ...over,
 });
@@ -46,10 +47,23 @@ describe("the whole-shelf run", () => {
     expect(propose).toHaveBeenCalledTimes(2);
     expect(propose.mock.calls[0]![0]).toHaveLength(CHUNK);
     expect(propose.mock.calls[1]![0]).toHaveLength(1);
+    // A run that never opened the switch must not touch existing covers.
+    expect(propose.mock.calls[0]![1]).toBe(false);
     const state = useFillRun.getState();
     expect(state.done).toBe(CHUNK + 1);
     expect(state.written).toBe(CHUNK + 1);
     expect(state.stopped).toBeNull();
+  });
+
+  /** 「连已有封面一起换」 is a decision the whole run carries to every batch,
+   *  not something one dialog re-decides per chunk. */
+  it("carries the cover-replacement answer to every batch", async () => {
+    useFillRun.getState().start(ids(CHUNK + 1), true);
+    await vi.waitFor(() => expect(useFillRun.getState().running).toBe(false));
+
+    expect(propose).toHaveBeenCalledTimes(2);
+    expect(propose.mock.calls[0]![1]).toBe(true);
+    expect(propose.mock.calls[1]![1]).toBe(true);
   });
 
   it("counts a book the catalogue had nothing for as skipped, not written", async () => {

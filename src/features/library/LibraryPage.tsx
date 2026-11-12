@@ -89,6 +89,12 @@ const ClippingsDialog = lazy(() =>
 const BookMetaDialog = lazy(() =>
   import("@/features/library/BookMetaDialog").then((m) => ({ default: m.BookMetaDialog })),
 );
+/** A whole-shelf scan the reader opens by hand — keep it out of the first load. */
+const DuplicateDialog = lazy(() =>
+  import("@/features/library/DuplicateDialog").then((m) => ({
+    default: m.DuplicateDialog,
+  })),
+);
 /** Only ever shown after a successful import, so it is worth its own chunk. */
 const MigrateEditionDialog = lazy(() =>
   import("@/features/library/MigrateEditionDialog").then((m) => ({
@@ -242,6 +248,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const [sourceOpen, setSourceOpen] = useState(false);
   /** The import-clippings sheet; a file picker plus a preview lives inside. */
   const [clippingsOpen, setClippingsOpen] = useState(false);
+  const [duplicatesOpen, setDuplicatesOpen] = useState(false);
   /** True when the import button was clicked in the browser, which has no backend. */
   /** Books the label sheet is open for; one book = edit, several = add. */
   const [tagTarget, setTagTarget] = useState<BookSummary[] | null>(null);
@@ -525,6 +532,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           onLayout={setShelfLayout}
           managing={selection.managing}
           onToggleManaging={() => (selection.managing ? selection.exit() : selection.begin())}
+          onDuplicates={() => setDuplicatesOpen(true)}
           trash={trashed}
           stats={stats.data}
         />
@@ -616,6 +624,12 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           {/* Unmounted when closed: the sheet holds a picked path and a preview
               report, and reopening it should start from an empty picker. */}
           <ClippingsDialog open onClose={() => setClippingsOpen(false)} />
+        </Suspense>
+      )}
+
+      {duplicatesOpen && (
+        <Suspense fallback={null}>
+          <DuplicateDialog open onClose={() => setDuplicatesOpen(false)} />
         </Suspense>
       )}
 

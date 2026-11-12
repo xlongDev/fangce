@@ -94,6 +94,9 @@ pub struct MetadataFill {
 pub async fn metadata_propose(
     state: State<'_, AppState>,
     ids: Vec<String>,
+    // 「连已有封面一起换」. Off by default, and the reason a book that has a
+    // picture is normally not offered another one.
+    replace_covers: bool,
 ) -> AppResult<Vec<Proposal>> {
     let targets: Vec<Target> = state.library.with(|conn| {
         let mut out = Vec::new();
@@ -134,7 +137,11 @@ pub async fn metadata_propose(
                 // title. One book failing still leaves the other twenty-nine
                 // worth asking about.
                 match metadata::find(&client, &lookup, 1, &attempts).await {
-                    Ok(found) => metadata::propose_for(&target, found.into_iter().next()),
+                    Ok(found) => metadata::propose_for_with(
+                        &target,
+                        found.into_iter().next(),
+                        replace_covers,
+                    ),
                     Err(err) => metadata::propose_failed(&target, &err.to_string()),
                 }
             }
@@ -197,7 +204,10 @@ pub async fn metadata_apply(
                 // Deleted between the lookup and the write — nothing to fill.
                 continue;
             };
-            befores.push(ops::snapshot(tx, &book)?);
+            let before = ops::snapshot(tx, &book)?;
+            // Read before the write: the picture this one may replace.
+            let previous = before.cover_path.clone();
+            befores.push(before);
             // A full record, built from the row plus whatever this fill says:
             // `update_fields_many` only knows the two fields the batch sheet
             // edits, and a fill writes more than that.
@@ -223,15 +233,20 @@ pub async fn metadata_apply(
             repository::update_metadata(tx, &item.id, &patch)?;
             written += 1;
 
-            // The cover, only when the book still has none: the proposal was
-            // made minutes ago, and the reader may have added one since.
-            if book.cover_url.is_none()
-                && let Some((_, bytes)) = covers.iter().find(|(id, _)| id == &item.id)
+            // The proposal already decided whether this book may take another
+            // picture — it only carries a `cover_url` when it may. So a
+            // downloaded cover is written, replacing the old one if there was
+            // one, and the old file is moved aside so 撤销 can put it back.
+            if let Some((_, bytes)) = covers.iter().find(|(id, _)| id == &item.id)
                 && let Some(extension) = metadata::image_extension(bytes)
             {
                 let target = covers_dir.join(format!("{}.{extension}", item.id));
+                let moved = crate::library::move_aside(previous.as_deref(), &covers_dir, &item.id);
                 std::fs::write(&target, bytes)?;
                 repository::set_cover(tx, &item.id, target.to_string_lossy().as_ref())?;
+                if let (Some(last), Some((_, kept))) = (befores.last_mut(), moved) {
+                    last.cover_previous = Some(kept.to_string_lossy().into_owned());
+                }
             }
         }
         ops::record_before(

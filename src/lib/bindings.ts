@@ -439,7 +439,8 @@ export const commands = {
    *  one at a time. Not higher: these are other people's servers, and the point of
    *  the cap is to stay welcome, not to finish first.
    */
-  metadataPropose: (ids: string[]) => __TAURI_INVOKE<Proposal[]>("metadata_propose", { ids }),
+  metadataPropose: (ids: string[], replaceCovers: boolean) =>
+    __TAURI_INVOKE<Proposal[]>("metadata_propose", { ids, replaceCovers }),
   /**
    *  `metadata.apply` — writes the proposals the reader accepted.
    *
@@ -500,6 +501,11 @@ export const commands = {
   bookPurgeMany: (ids: string[]) => __TAURI_INVOKE<null>("book_purge_many", { ids }),
   /**  `book.emptyTrash` — everything in the bin, gone. Returns how many books went. */
   bookEmptyTrash: () => __TAURI_INVOKE<number>("book_empty_trash"),
+  /**
+   *  `library.duplicates` — a read-only report of books that look like the same
+   *  book twice. It never merges or deletes; which copy to keep is the reader's.
+   */
+  libraryDuplicates: () => __TAURI_INVOKE<DuplicateGroup[]>("library_duplicates"),
   /**  `book.setFavorite` */
   bookSetFavorite: (id: string, favorite: boolean) =>
     __TAURI_INVOKE<null>("book_set_favorite", { id, favorite }),
@@ -1616,6 +1622,22 @@ export type Downloaded = {
   duplicate: boolean;
 };
 
+export type DuplicateBook = {
+  id: string;
+  title: string;
+  isbn: string | null;
+  format: string;
+  fileSize: number;
+  addedAt: number;
+};
+
+export type DuplicateGroup = {
+  /**  「同一 ISBN」 or 「书名相同」 — how strong the match is. */
+  reason: string;
+  /**  Oldest first: that is the copy the reader is most likely to keep. */
+  books: DuplicateBook[];
+};
+
 /**  One utterance: its audio, and where each word sits inside it. */
 export type EdgeClip = {
   /**
@@ -2080,14 +2102,20 @@ export type Proposal = {
    */
   ratingSource: string | null;
   /**
-   *  The catalogue's cover, when the book has none.
+   *  The catalogue's cover, when the book may take one.
    *
    *  Beside the fills rather than as one: a cover is a file to download, not
-   *  a string to write, and `None` here means either the catalogue had no
-   *  picture or the book already has one — both of which mean "nothing to do
-   *  about the cover".
+   *  a string to write. `None` means either the catalogue had no picture or
+   *  the book has one and the reader did not ask for replacements.
    */
   coverUrl: string | null;
+  /**
+   *  Whether this cover would **replace** a picture the book already has.
+   *  The row has to say so: 「补一张图」 and 「换掉你书架上的图」 are not the
+   *  same promise, and a batch is only allowed to make the second one when
+   *  the reader opened that switch.
+   */
+  coverReplaces: boolean;
   /**
    *  The fields this book already has, in the order the sheet shows them.
    *

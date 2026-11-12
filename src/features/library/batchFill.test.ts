@@ -39,6 +39,7 @@ const proposal = (over: Partial<Proposal>): Proposal => ({
   ratingSource: null,
   doubanUrl: null,
   coverUrl: null,
+  coverReplaces: false,
   existing: [],
   ...over,
 });

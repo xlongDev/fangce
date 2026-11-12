@@ -26,6 +26,7 @@ mod transfer;
 /// Not under `io/`: it neither reads nor writes the library, it asks somebody
 /// else a question. The write, when the reader accepts an answer, is the same
 /// `repository::update_metadata` every other edit uses.
+pub mod duplicates;
 pub mod metadata;
 
 /// The record of what changed.
@@ -109,6 +110,49 @@ pub const fn resource_origin() -> &'static str {
 /// disk changes and the shelf does not.
 pub fn cover_url(book_id: &str, version: i64) -> String {
     format!("{}/cover/{book_id}?v={version}", resource_origin())
+}
+
+/// Moves the picture a replacement is about to take away, so 撤销 can put it
+/// back.
+///
+/// `None` for no previous picture, and — the case that matters — for a path
+/// outside the covers directory: an imported cover is the reader's own file,
+/// and replacing what the shelf shows must not move it.
+///
+/// A rename rather than a copy: one file, not two, and the old path is free for
+/// a same-format replacement that would otherwise overwrite the bytes.
+///
+/// One book keeps **one** previous picture (`{id}.prev.<ext>`), not a stack of
+/// them: 撤销 is one step, and a copy per replacement would grow the covers
+/// directory forever. Replacing twice forgets the first picture, which is the
+/// honest limit of what a single undo can promise.
+pub fn move_aside(
+    previous: Option<&str>,
+    covers_dir: &Path,
+    id: &str,
+) -> Option<(PathBuf, PathBuf)> {
+    let old = PathBuf::from(previous?);
+    if old.parent() != Some(covers_dir) || !old.exists() {
+        return None;
+    }
+    forget_backups(covers_dir, id);
+    let extension = old.extension().and_then(|value| value.to_str()).unwrap_or("jpg");
+    let kept = covers_dir.join(format!("{id}.prev.{extension}"));
+    std::fs::rename(&old, &kept).ok().map(|()| (old, kept))
+}
+
+/// Removes whatever `{id}.prev.*` is lying around — the picture kept for a
+/// single undo, and the last thing to clean up when a book is purged.
+pub fn forget_backups(covers_dir: &Path, id: &str) {
+    let prefix = format!("{id}.prev.");
+    let Ok(entries) = std::fs::read_dir(covers_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Absolute URL for a generated character portrait.

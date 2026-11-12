@@ -51,6 +51,9 @@ export function BatchFillDialog({
   onClose: () => void;
 }) {
   const run = useFillRun();
+  /** 「连已有封面一起换」. Shared by the preview and the whole-shelf run: one
+   *  decision, two paths, and turning it on must re-ask the catalogue. */
+  const [replaceCovers, setReplaceCovers] = useState(false);
   // A run outlives this dialog — the reader can close it and watch the shelf —
   // so an open dialog shows the run it would otherwise be starting a second of.
   const showingRun = run.running || run.total > 0;
@@ -84,21 +87,67 @@ export function BatchFillDialog({
       }
       widthClass="w-[min(92vw,560px)]"
     >
-      {showingRun ? (
-        <RunBody onClose={close} />
-      ) : whole ? (
-        <WholeBody ids={ids} onClose={close} />
-      ) : (
-        /* Keyed by the selection: opening a different batch must not show the
-           previous one's proposals for a frame. */
-        <FillBody key={ids.join(",")} ids={ids} onClose={close} />
-      )}
+      <div className="space-y-3">
+        {/* Outside the two bodies so the switch stays visible while a new
+            answer is being fetched — a control that vanishes exactly when it
+            was just used reads as a broken click. */}
+        {!showingRun && <ReplaceCoversToggle checked={replaceCovers} onChange={setReplaceCovers} />}
+        {showingRun ? (
+          <RunBody onClose={close} />
+        ) : whole ? (
+          <WholeBody ids={ids} onClose={close} replaceCovers={replaceCovers} />
+        ) : (
+          /* Keyed by the selection: opening a different batch must not show the
+             previous one's proposals for a frame. */
+          <FillBody key={ids.join(",")} ids={ids} onClose={close} replaceCovers={replaceCovers} />
+        )}
+      </div>
     </GlassDialog>
   );
 }
 
+/**
+ * The switch that lets a batch replace a picture the book already has.
+ *
+ * Off by default: forty covers is a lot to lose to a bad match in one click.
+ * A native checkbox in a label: the whole line is the hit target, and the
+ * browser supplies the semantics and keyboard behaviour for free.
+ */
+function ReplaceCoversToggle({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <label className="flex w-full cursor-pointer items-start gap-2 rounded text-left">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="border-hairline accent-accent focus-visible:focus-ring mt-0.5 h-4 w-4 shrink-0 rounded"
+      />
+      <span className="text-text-2 text-xs leading-relaxed">
+        连已有封面一起换
+        <span className="text-text-3 block">
+          默认只给没有封面的书补图。打开后，目录里的标准封面会替换书架上的图；每本可在操作记录里撤销。
+        </span>
+      </span>
+    </label>
+  );
+}
+
 /** The start of a run over more books than a preview can hold. */
-function WholeBody({ ids, onClose }: { ids: string[]; onClose: () => void }) {
+function WholeBody({
+  ids,
+  onClose,
+  replaceCovers,
+}: {
+  ids: string[];
+  onClose: () => void;
+  replaceCovers: boolean;
+}) {
   const run = useFillRun();
   const batches = Math.ceil(ids.length / MAX_BATCH);
   // Measured at roughly a third of a second a book, four at a time. Rounded up
@@ -120,7 +169,7 @@ function WholeBody({ ids, onClose }: { ids: string[]; onClose: () => void }) {
         <GlassButton variant="subtle" onClick={onClose}>
           取消
         </GlassButton>
-        <GlassButton variant="primary" onClick={() => run.start(ids)}>
+        <GlassButton variant="primary" onClick={() => run.start(ids, replaceCovers)}>
           开始补全 {ids.length} 本
         </GlassButton>
       </div>
@@ -190,8 +239,16 @@ function RunBody({ onClose }: { onClose: () => void }) {
   );
 }
 
-function FillBody({ ids, onClose }: { ids: string[]; onClose: () => void }) {
-  const propose = useMetadataPropose(ids, true);
+function FillBody({
+  ids,
+  onClose,
+  replaceCovers,
+}: {
+  ids: string[];
+  onClose: () => void;
+  replaceCovers: boolean;
+}) {
+  const propose = useMetadataPropose(ids, true, replaceCovers);
   const apply = useMetadataApply();
   /** Ticked book ids. `null` until the first answer, then "everything with a
    *  fill" — the reader can untick, and an unticked row stays unticked. */
@@ -398,7 +455,11 @@ function Row({
               {/* A cover is written too, and it has no value to show — without
                   this line a book whose only gain is a picture rendered as an
                   empty row that looked like nothing would happen. */}
-              {proposal.coverUrl && <span>封面</span>}
+              {proposal.coverUrl && (
+                <span className={proposal.coverReplaces ? "text-accent" : undefined}>
+                  {proposal.coverReplaces ? "封面 → 替换" : "封面"}
+                </span>
+              )}
               {/* What this book already has, so 「只补两项」 reads as 「另外四项
                   本来就有」 rather than as a catalogue with thin data. */}
               {existingHint(proposal.existing) && (
@@ -447,7 +508,9 @@ function Row({
               )}
               {proposal.coverUrl && (
                 <div className="flex gap-3">
-                  <dt className="text-text-3 w-12 shrink-0 text-[11px] leading-5">封面</dt>
+                  <dt className="text-text-3 w-12 shrink-0 text-[11px] leading-5">
+                    {proposal.coverReplaces ? "封面（替换）" : "封面"}
+                  </dt>
                   {/* The picture itself, not its address: a URL is not
                       evidence that the cover is the right edition, and this
                       panel exists to be read. Fetched when the row opens, not

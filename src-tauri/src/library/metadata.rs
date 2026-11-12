@@ -314,13 +314,17 @@ pub struct Proposal {
     /// the number because they are different numbers from different people, and
     /// a label that has to be guessed later is a label that will be wrong.
     pub rating_source: Option<String>,
-    /// The catalogue's cover, when the book has none.
+    /// The catalogue's cover, when the book may take one.
     ///
     /// Beside the fills rather than as one: a cover is a file to download, not
-    /// a string to write, and `None` here means either the catalogue had no
-    /// picture or the book already has one — both of which mean "nothing to do
-    /// about the cover".
+    /// a string to write. `None` means either the catalogue had no picture or
+    /// the book has one and the reader did not ask for replacements.
     pub cover_url: Option<String>,
+    /// Whether this cover would **replace** a picture the book already has.
+    /// The row has to say so: 「补一张图」 and 「换掉你书架上的图」 are not the
+    /// same promise, and a batch is only allowed to make the second one when
+    /// the reader opened that switch.
+    pub cover_replaces: bool,
     /// The fields this book already has, in the order the sheet shows them.
     ///
     /// Shown beside what the fill would add, because 「只补了两项」 reads as a
@@ -392,12 +396,31 @@ pub fn propose_failed(target: &Target, reason: &str) -> Proposal {
         douban_url: None,
         rating_source: None,
         cover_url: None,
+        cover_replaces: false,
         existing: Vec::new(),
     }
 }
 
-/// Turns one book's best candidate into a proposal, or into a reason.
+/// [`propose_for_with`] without replacements.
+///
+/// Kept for the tests, which are almost all about one field at a time and have
+/// no business spelling out a flag they do not care about. The one caller that
+/// does — `metadata.propose` — passes the reader's answer through.
+#[cfg(test)]
 pub fn propose_for(target: &Target, best: Option<Candidate>) -> Proposal {
+    propose_for_with(target, best, false)
+}
+
+/// [`propose_for`], with the reader's answer to 「连已有封面一起换」.
+///
+/// `replace_covers` is the only reason a book that has a picture is offered
+/// another one. Off by default: a batch of forty is not the place to lose
+/// forty covers to a bad match, and 撤销 can only put one back per book.
+pub fn propose_for_with(
+    target: &Target,
+    best: Option<Candidate>,
+    replace_covers: bool,
+) -> Proposal {
     // What the book already has, in the sheet's order. Computed before the
     // match so an early return still reports it.
     let existing: Vec<String> = [
@@ -443,9 +466,12 @@ pub fn propose_for(target: &Target, best: Option<Candidate>) -> Proposal {
                 let rating_count = rating.and(candidate.rating_count);
                 let douban_url =
                     target.douban_url.is_none().then_some(candidate.douban_url).flatten();
-                // A book that already has a picture keeps it: replacing one the
-                // reader is used to seeing is not a fill.
-                let cover_url = if target.has_cover { None } else { candidate.cover_url };
+                // A book that already has a picture keeps it unless the reader
+                // asked for replacements: the picture on the shelf is what they
+                // have been looking at, and a batch is not the place to change
+                // forty of them by accident.
+                let cover_url =
+                    if target.has_cover && !replace_covers { None } else { candidate.cover_url };
                 let nothing_to_do = fills.is_empty()
                     && rating.is_none()
                     && douban_url.is_none()
@@ -466,6 +492,11 @@ pub fn propose_for(target: &Target, best: Option<Candidate>) -> Proposal {
                 )
             }
         };
+    // Only the book itself knows whether it had a picture. A flag rather than
+    // a guess from `replace_covers`: a batch with the switch on still contains
+    // books that never had a cover, and their rows must say 「补」 not 「替换」.
+    let cover_replaces = cover_url.is_some() && target.has_cover;
+
     Proposal {
         book_id: target.id.clone(),
         book_title: target.title.clone(),
@@ -477,6 +508,7 @@ pub fn propose_for(target: &Target, best: Option<Candidate>) -> Proposal {
         douban_url,
         rating_source,
         cover_url,
+        cover_replaces,
         existing,
     }
 }
@@ -2012,6 +2044,25 @@ mod tests {
         found.cover_url = Some("https://img3.doubanio.com/x.jpg".into());
         let proposal = propose_for(&target_with_cover(false), Some(found));
         assert_eq!(proposal.cover_url.as_deref(), Some("https://img3.doubanio.com/x.jpg"));
+    }
+
+    /// 「连已有封面一起换」 is the only way a book with a picture is offered
+    /// another one, and it is the reader's answer — never a default. A batch of
+    /// forty is not the place to lose forty covers to a bad match.
+    #[test]
+    fn a_book_with_a_picture_is_offered_another_only_when_asked() {
+        let book = target_with_cover(true);
+
+        let mut refused = candidate(Some("译林出版社"), None, 0.95);
+        refused.cover_url = Some("https://img3.doubanio.com/x.jpg".into());
+        assert_eq!(propose_for(&book, Some(refused)).cover_url, None);
+
+        let mut asked = candidate(Some("译林出版社"), None, 0.95);
+        asked.cover_url = Some("https://img3.doubanio.com/x.jpg".into());
+        assert_eq!(
+            propose_for_with(&book, Some(asked), true).cover_url.as_deref(),
+            Some("https://img3.doubanio.com/x.jpg")
+        );
     }
 
     /// Replacing a cover the reader is used to seeing is not a "fill".

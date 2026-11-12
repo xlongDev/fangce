@@ -183,49 +183,6 @@ pub async fn book_cover_save(
     .map_err(|err| AppError::Message(format!("保存封面任务被中断：{err}")))?
 }
 
-/// Moves the picture a replacement is about to take away, so 撤销 can put it
-/// back.
-///
-/// `None` for no previous picture, and — the case that matters — for a path
-/// outside the covers directory: an imported cover is the reader's own file,
-/// and replacing what the shelf shows must not move it.
-///
-/// A rename rather than a copy: one file, not two, and the old path is free for
-/// the new picture.
-///
-/// One book keeps **one** previous picture (`{id}.prev.<ext>`), not a stack of
-/// them: 撤销 is one step, and a copy per replacement would grow the covers
-/// directory forever. Replacing twice forgets the first picture, which is the
-/// honest limit of what a single undo can promise.
-fn move_aside(
-    previous: Option<&str>,
-    covers_dir: &std::path::Path,
-    id: &str,
-) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
-    let old = std::path::PathBuf::from(previous?);
-    if old.parent() != Some(covers_dir) || !old.exists() {
-        return None;
-    }
-    forget_backups(covers_dir, id);
-    let extension = old.extension().and_then(|value| value.to_str()).unwrap_or("jpg");
-    let kept = covers_dir.join(format!("{id}.prev.{extension}"));
-    std::fs::rename(&old, &kept).ok().map(|()| (old, kept))
-}
-
-/// Removes whatever `{id}.prev.*` is lying around — the picture kept for a
-/// single undo, and the last thing to clean up when a book is purged.
-fn forget_backups(covers_dir: &std::path::Path, id: &str) {
-    let prefix = format!("{id}.prev.");
-    let Ok(entries) = std::fs::read_dir(covers_dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().starts_with(&prefix) {
-            let _ = std::fs::remove_file(entry.path());
-        }
-    }
-}
-
 /// `book.import`
 ///
 /// Takes absolute paths chosen by the native file dialog or dropped onto the
@@ -482,7 +439,7 @@ pub async fn book_purge(state: State<'_, AppState>, id: String) -> AppResult<()>
         library::purge_book(&library, &id)?;
         // The picture kept for a single undo has nothing left to be restored
         // to.
-        forget_backups(&covers_dir, &id);
+        crate::library::forget_backups(&covers_dir, &id);
         Ok(())
     })
     .await
@@ -509,7 +466,7 @@ pub async fn book_purge_many(
             );
         })?;
         for id in &ids {
-            forget_backups(&covers_dir, id);
+            crate::library::forget_backups(&covers_dir, id);
         }
         Ok(())
     })
@@ -528,12 +485,22 @@ pub async fn book_empty_trash(state: State<'_, AppState>) -> AppResult<usize> {
         library
             .with(|conn| ops::record(conn, ops::Source::Ui, "empty_trash", &ids, "清空回收站"))?;
         for id in &ids {
-            forget_backups(&covers_dir, id);
+            crate::library::forget_backups(&covers_dir, id);
         }
         Ok(ids.len())
     })
     .await
     .map_err(|err| AppError::Message(format!("清空回收站被中断：{err}")))?
+}
+
+/// `library.duplicates` — a read-only report of books that look like the same
+/// book twice. It never merges or deletes; which copy to keep is the reader's.
+#[tauri::command]
+#[specta::specta]
+pub fn library_duplicates(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::library::duplicates::DuplicateGroup>> {
+    state.library.with(crate::library::duplicates::find)
 }
 
 /// `book.setFavorite`
@@ -629,8 +596,11 @@ fn write_update(
             // same-format replacement overwrites those bytes, and 撤销 needs
             // them to put the old cover back. A rename, not a copy: one file,
             // not two, and the old path is free for the new picture.
-            let moved =
-                move_aside(before.as_ref().and_then(|b| b.cover_path.as_deref()), covers_dir, id);
+            let moved = crate::library::move_aside(
+                before.as_ref().and_then(|b| b.cover_path.as_deref()),
+                covers_dir,
+                id,
+            );
             if let Err(err) = std::fs::write(&target, bytes) {
                 // Put the old picture back where the row still points to it.
                 if let Some((old, kept)) = &moved {
@@ -685,6 +655,7 @@ pub struct DeleteProgress {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::library::move_aside;
 
     #[test]
     fn progress_payload_is_camel_case() {

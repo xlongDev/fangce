@@ -3,6 +3,7 @@ import {
   ArrowDown,
   CaretDown,
   CheckSquare,
+  Copy,
   MagnifyingGlass,
   Rows,
   SortAscending,
@@ -42,6 +43,7 @@ export function ShelfToolbar({
   onLayout,
   managing,
   onToggleManaging,
+  onDuplicates,
   trash = false,
   stats,
 }: {
@@ -61,6 +63,9 @@ export function ShelfToolbar({
   onLayout: (value: "grid" | "list") => void;
   managing: boolean;
   onToggleManaging: () => void;
+  /** Opens the read-only 疑似重复 report — a whole-shelf action, not one that
+   *  depends on a selection. */
+  onDuplicates: () => void;
   /** The bin is always in selection mode — there is nothing else to do with a
    *  trashed book — so the 选择 switch has no second state to offer. */
   trash?: boolean;
@@ -293,6 +298,20 @@ export function ShelfToolbar({
           word beside it now carries the meaning.
 
           Absent in the bin, where selection is the only mode there is. */}
+      {/* Icon only: the toolbar already holds seven controls and wraps on a
+          narrow pane. A word here would move the count to a third line. */}
+      {!trash && (
+        <button
+          type="button"
+          aria-label="查找疑似重复"
+          title="查找疑似重复（只提示，不合并）"
+          onClick={onDuplicates}
+          className="glass text-text-2 hover:text-text-1 focus-visible:focus-ring press inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md"
+        >
+          <Copy size={15} />
+        </button>
+      )}
+
       {!trash && (
         <GlassButton size="md" onClick={onToggleManaging}>
           <CheckSquare size={15} /> {managing ? "完成" : "选择"}

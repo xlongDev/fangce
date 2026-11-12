@@ -33,11 +33,14 @@ export function useMetadataSearch() {
  * answer is keyed by that selection — reopening the same batch should show what
  * it showed a minute ago instead of asking the catalogue again.
  */
-export function useMetadataPropose(ids: string[], enabled: boolean) {
+export function useMetadataPropose(ids: string[], enabled: boolean, replaceCovers = false) {
   const demo = demoEnabled();
   return useQuery<Proposal[]>({
-    queryKey: ["metadata", "propose", demo, ids],
-    queryFn: () => (demo ? demoProposals(ids) : ipc.metadataPropose(ids)),
+    // The switch is part of the question, so it is part of the key: turning it
+    // on has to ask the catalogue again, not show the previous answer with a
+    // different label.
+    queryKey: ["metadata", "propose", demo, replaceCovers, ids],
+    queryFn: () => (demo ? demoProposals(ids) : ipc.metadataPropose(ids, replaceCovers)),
     enabled: enabled && ids.length > 0 && (isDesktopRuntime || demo),
     // A batch of thirty is thirty requests to somebody else's server. The
     // answer does not change while the dialog is open, and asking twice for a

@@ -33,7 +33,7 @@ export interface FillRun {
   failed: number;
   /** Why it stopped before the end, or `null` when it ran to completion. */
   stopped: string | null;
-  start: (ids: string[]) => void;
+  start: (ids: string[], replaceCovers?: boolean) => void;
   cancel: () => void;
   reset: () => void;
 }
@@ -71,16 +71,21 @@ export const useFillRun = create<FillRun>((set, get) => ({
   ...idle,
   reset: () => set(idle),
   cancel: () => set({ cancelled: true }),
-  start: (ids) => {
+  start: (ids, replaceCovers = false) => {
     // One run at a time: two loops would interleave transactions and report
     // progress that belongs to neither.
     if (get().running || ids.length === 0) return;
     set({ ...idle, running: true, total: ids.length });
-    void loop(ids, set, get);
+    void loop(ids, replaceCovers, set, get);
   },
 }));
 
-async function loop(ids: string[], set: (partial: Partial<FillRun>) => void, get: () => FillRun) {
+async function loop(
+  ids: string[],
+  replaceCovers: boolean,
+  set: (partial: Partial<FillRun>) => void,
+  get: () => FillRun,
+) {
   let done = 0;
   let written = 0;
   let skipped = 0;
@@ -97,12 +102,13 @@ async function loop(ids: string[], set: (partial: Partial<FillRun>) => void, get
         break;
       }
       const slice = ids.slice(at, at + CHUNK);
-      // oxlint-disable-next-line no-await-in-loop -- 一批一次事务，下一批要等这批写完
       // The demo build has no backend to ask; it serves canned proposals so the
       // progress panel is something a browser test can actually drive.
       const demo = demoEnabled();
-      // oxlint-disable-next-line no-await-in-loop -- 一批一次事务，下一批要等这批写完
-      const proposals = demo ? demoProposals(slice) : await ipc.metadataPropose(slice);
+      const proposals = demo
+        ? demoProposals(slice)
+        : // oxlint-disable-next-line no-await-in-loop -- 一批一次事务，下一批要等这批写完
+          await ipc.metadataPropose(slice, replaceCovers);
       const worth = proposals.filter(hasSomething);
       const broke = proposals.filter(isFailure);
 

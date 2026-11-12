@@ -575,6 +575,7 @@ export function demoProposals(ids: string[]): Proposal[] {
         ratingSource: null,
         doubanUrl: null,
         coverUrl: null,
+        coverReplaces: false,
         existing: [],
       };
     }
@@ -606,6 +607,7 @@ export function demoProposals(ids: string[]): Proposal[] {
       // row are something a browser test can see.
       coverUrl:
         index % 3 === 0 ? "https://img3.doubanio.com/view/subject/l/public/s35198069.jpg" : null,
+      coverReplaces: false,
       // What the book already has. Half the rows in a real batch look like
       // this — an EPUB carries an ISBN and a year, and nothing else.
       existing: index % 2 === 0 ? ["isbn", "publishedYear"] : [],
