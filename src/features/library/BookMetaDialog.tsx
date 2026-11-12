@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { ArrowSquareOut, MagnifyingGlass } from "@phosphor-icons/react";
+import { ArrowSquareOut, ImageSquare, MagnifyingGlass } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
@@ -260,7 +260,12 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
               // is a duplicate worth showing rather than silently dropping).
               <li
                 key={`${candidate.title}|${candidate.publishedYear ?? ""}|${candidate.isbn ?? ""}`}
+                className="hover:bg-surface-2 flex items-center gap-1 rounded"
               >
+                {/* Two targets, because there are two questions: 「用这条记录」
+                    and 「只要这张图」. Picking a candidate writes nine fields,
+                    and a reader who only wants the picture should not have to
+                    undo them one by one afterwards. */}
                 <button
                   type="button"
                   onClick={() => {
@@ -298,7 +303,7 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
                     setPendingCover(book.coverUrl ? null : offered);
                     setCandidates(null);
                   }}
-                  className="press focus-visible:focus-ring hover:bg-surface-2 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left"
+                  className="press focus-visible:focus-ring flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-left"
                 >
                   {/* The picture is what tells two editions apart. Nothing is
                       downloaded for it — see `CoverThumb`. */}
@@ -320,6 +325,23 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
                     {Math.round((candidate.matchScore ?? 0) * 100)}%
                   </span>
                 </button>
+                {candidate.coverUrl && (
+                  <button
+                    type="button"
+                    aria-label="只换封面"
+                    title="只换封面，不改其它字段"
+                    onClick={() => {
+                      // Asked for by name, so it is already accepted — no
+                      // second 「换成这张」 below.
+                      setOfferedCover(candidate.coverUrl);
+                      setPendingCover(candidate.coverUrl);
+                      setCandidates(null);
+                    }}
+                    className="press focus-visible:focus-ring text-text-3 hover:text-accent mr-1 shrink-0 rounded p-1"
+                  >
+                    <ImageSquare size={14} />
+                  </button>
+                )}
               </li>
             ))}
           </ul>

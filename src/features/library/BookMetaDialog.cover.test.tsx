@@ -139,6 +139,24 @@ describe("the cover a candidate brings", () => {
     expect(coverOfSave(onSave)).toBeNull();
   });
 
+  /**
+   * A reader who only wants the picture should not have to undo nine fields
+   * afterwards. 「只换封面」 takes the image and nothing else — the candidate's
+   * publisher (云南人民出版社) must not land in a book that has none.
+   */
+  it("takes only the picture when that is all the reader wants", async () => {
+    const { user, onSave } = open({ coverUrl: "fangce://localhost/cover/test-1" });
+    await user.click(screen.getByRole("button", { name: "豆瓣" }));
+    await user.click(await screen.findByRole("button", { name: "只换封面" }));
+
+    expect(screen.getByLabelText("出版社")).toHaveValue("");
+    expect(screen.getByLabelText("书名")).toHaveValue("存在主义及其他");
+    expect(screen.getByText("保存时替换")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    expect(coverOfSave(onSave)).toBe(COVER);
+  });
+
   it("replaces it once the reader asks", async () => {
     const { user, onSave } = open({ coverUrl: "fangce://localhost/cover/test-1" });
     await user.click(screen.getByRole("button", { name: "豆瓣" }));
