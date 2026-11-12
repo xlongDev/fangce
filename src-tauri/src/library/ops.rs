@@ -61,6 +61,10 @@ pub struct Before {
     /// The cover file this book had, if any. `None` means it had none — undo
     /// clears the column and removes the file the write created.
     pub cover_path: Option<String>,
+    /// Where the replaced picture was moved to before the write, when the
+    /// write replaced one. Undo needs these bytes: `cover_path` names a file
+    /// the replacement took away.
+    pub cover_previous: Option<String>,
 }
 
 /// Reads what a book looks like right now, for a write that is about to change
@@ -84,6 +88,9 @@ pub fn snapshot(
         rating_source: book.rating_source.clone(),
         douban_url: book.douban_url.clone(),
         cover_path,
+        // Filled by the caller that is about to replace a picture; a snapshot
+        // on its own does not know what a later step will move aside.
+        cover_previous: None,
     })
 }
 
@@ -156,8 +163,13 @@ pub fn record_before(
             // `v` is not decoration: rows written before this format have a
             // `before` object with two keys, and reading those as 「the other
             // nine were null」 would wipe nine fields on undo.
+            //
+            // v3 adds `cover_previous` — the picture moved aside before a
+            // replacement. v2 rows stay undoable: they simply cannot put a
+            // replaced cover back, and `restore` falls back to keeping the
+            // current one.
             let detail = json!({
-                "v": 2,
+                "v": 3,
                 "before": {
                     "subtitle": before.subtitle,
                     "publisher": before.publisher,
@@ -170,6 +182,7 @@ pub fn record_before(
                     "rating_source": before.rating_source,
                     "douban_url": before.douban_url,
                     "cover_path": before.cover_path,
+                    "cover_previous": before.cover_previous,
                 }
             });
             (before.book_id.clone(), Some(detail))
@@ -344,8 +357,26 @@ fn restore(
     crate::library::repository::update_metadata(tx, id, &patch)?;
 
     match text("cover_path") {
-        // There was a picture: put that file back.
-        Some(path) => crate::library::repository::set_cover(tx, id, &path)?,
+        // There was a picture: put that file back — but only while it is still
+        // there. A cover replaced since (the new file is a different format,
+        // and the old one is cleaned up) leaves the recorded path stale, and
+        // writing it back points the row at a file that no longer exists:
+        // 撤销 turned a book's cover into a question mark. Keeping the current
+        // picture is the honest partial restore — this call never changed the
+        // cover, so it has no business removing it either.
+        Some(path) if Path::new(&path).exists() => {
+            crate::library::repository::set_cover(tx, id, &path)?;
+        }
+        // The file is gone because this write replaced it. The copy moved aside
+        // before the write is the way back — that is why it is moved and not
+        // deleted.
+        Some(_) => {
+            if let Some(kept) = text("cover_previous").filter(|path| Path::new(path).exists()) {
+                crate::library::repository::set_cover(tx, id, &kept)?;
+            }
+            // Neither survives: keep the current picture rather than point the
+            // row at nothing.
+        }
         // There was none. Clearing the column is the restore; the file this
         // write created is garbage once nothing points at it.
         None => {
@@ -368,9 +399,11 @@ fn restore(
 fn before_fields(detail: Option<&str>) -> Option<serde_json::Map<String, Value>> {
     let detail: Value = serde_json::from_str(detail?).ok()?;
     // Rows written before this format have a `before` with two keys. Reading
-    // those as 「the other nine were null」 would wipe nine fields.
-    if detail.get("v").and_then(Value::as_u64) != Some(2) {
-        return None;
+    // those as 「the other nine were null」 would wipe nine fields. v3 only adds
+    // a key, so a v2 row is still complete enough to put back.
+    match detail.get("v").and_then(Value::as_u64) {
+        Some(2) | Some(3) => {}
+        _ => return None,
     }
     detail.get("before")?.as_object().cloned()
 }
@@ -609,6 +642,54 @@ mod tests {
         let path = library.with(|conn| repository::cover_path(conn, "b1")).expect("path");
         assert_eq!(path, None, "列清空了");
         assert!(!file.exists(), "文件也删了，不留垃圾");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 🔴 Undoing a metadata edit must not take the picture with it. The cover
+    /// recorded in the before-image was replaced afterwards and its file is
+    /// gone; writing that path back pointed the row at nothing, and the shelf
+    /// drew a question mark. A call that never touched the cover has no
+    /// business removing one.
+    #[test]
+    fn undo_keeps_the_picture_when_the_recorded_one_is_gone() {
+        let (dir, library) = harness("ops-undo-stale-cover");
+        let covers = covers_dir(&dir);
+        std::fs::create_dir_all(&covers).expect("covers dir");
+        let old = covers.join("b1.png");
+        let fresh = covers.join("b1.jpg");
+        std::fs::write(&old, b"\x89PNG\r\n\x1a\n").expect("old cover");
+        std::fs::write(&fresh, b"\xff\xd8\xff").expect("new cover");
+
+        library
+            .with(|conn| repository::set_cover(conn, "b1", old.to_str().expect("path")))
+            .expect("cover");
+        let before = library.with(|conn| snapshot_of(conn, "b1")).expect("snapshot").expect("b1");
+
+        // The reader replaces the picture, then edits a field. Only the edit is
+        // logged, and the replacement cleans the old file away.
+        library
+            .with_tx(|tx| {
+                repository::set_cover(tx, "b1", fresh.to_str().expect("path"))?;
+                repository::update_fields_many(
+                    tx,
+                    &["b1".into()],
+                    &crate::library::repository::BookFieldsPatch {
+                        publisher: Some("新出版社".into()),
+                        language: None,
+                    },
+                )?;
+                record_before(tx, Source::Ui, "update_metadata", &[before], "改了出版社")
+            })
+            .expect("write");
+        std::fs::remove_file(&old).expect("old cover cleaned up");
+
+        let call_id = library.with(|conn| list(conn, 10)).expect("list")[0].call_id.clone();
+        library.with_tx(|tx| undo(tx, &call_id, &covers)).expect("undo");
+
+        let book = library.with(|conn| repository::get(conn, "b1")).expect("get").expect("b1");
+        assert_eq!(book.publisher.as_deref(), Some("重庆出版社"), "字段照常还原");
+        assert!(book.cover_url.is_some(), "封面还在：指向不存在的图比不还原更糟");
+        assert!(fresh.exists(), "现在这张图没被删");
         std::fs::remove_dir_all(&dir).ok();
     }
 

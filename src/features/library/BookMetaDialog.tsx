@@ -1,15 +1,15 @@
 import { useState, type ReactNode } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { ArrowSquareOut, MagnifyingGlass } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
+import { CoverThumb } from "@/features/library/CoverThumb";
 import { type Source, useMetadataSearch } from "@/hooks/useMetadata";
 import { sourceLabel } from "@/lib/metadata";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { showToast } from "@/stores/toasts";
-import { ipc, isDesktopRuntime } from "@/lib/ipc";
+import { isDesktopRuntime } from "@/lib/ipc";
 import type { BookMetadataPatch, BookSummary, Candidate } from "@/types/ipc";
 
 /**
@@ -53,7 +53,9 @@ interface BookMetaDialogProps {
   book: BookSummary | null;
   busy?: boolean;
   onCancel: () => void;
-  onSave: (patch: BookMetadataPatch) => void;
+  /** `coverUrl` is the picture to fetch with this save, or `null` to leave the
+   *  one the book has alone. */
+  onSave: (patch: BookMetadataPatch, coverUrl: string | null) => void;
 }
 
 export function BookMetaDialog({ book, busy, onCancel, onSave }: BookMetaDialogProps) {
@@ -81,7 +83,9 @@ interface BookMetaFormProps {
   book: BookSummary;
   busy?: boolean;
   onCancel: () => void;
-  onSave: (patch: BookMetadataPatch) => void;
+  /** `coverUrl` is the picture to fetch with this save, or `null` to leave the
+   *  one the book has alone. */
+  onSave: (patch: BookMetadataPatch, coverUrl: string | null) => void;
 }
 
 /** One empty field is "unknown", not a deliberate blank, so the form sends
@@ -120,6 +124,10 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
     source: string | null;
   }>({ value: book.rating, count: book.ratingCount, source: book.ratingSource });
   const [douban, setDouban] = useState<string | null>(book.doubanUrl);
+  /** The cover the last candidate offered. Held separately from the one the
+   *  reader has accepted, because a book that already has a picture must not
+   *  lose it to a click that was about the title. */
+  const [offeredCover, setOfferedCover] = useState<string | null>(null);
   /** A cover to fetch on 保存. A cover is a file, not a column, so it cannot be
    *  part of the form's patch — and it must not be written the moment the
    *  reader clicks a candidate, because nothing is written before 保存. */
@@ -127,7 +135,6 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
   /** Candidates from the last 查找, or `null` when the reader has not asked. */
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   const search = useMetadataSearch();
-  const queryClient = useQueryClient();
 
   const yearText = year.trim();
   const yearValue = /^\d{1,4}$/.test(yearText) ? Number(yearText) : null;
@@ -153,6 +160,10 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
   // Compare against what the book holds, not against "has the user typed": a
   // field typed and then undone is not a change worth a round trip.
   const changed =
+    // A cover is a change on its own: replacing the picture and leaving every
+    // word alone is the whole point of 查找书目 for a badly-covered book, and a
+    // save button that stayed disabled would make it impossible.
+    pendingCover !== null ||
     patch.title !== book.title ||
     (patch.subtitle ?? "") !== (book.subtitle ?? "") ||
     (patch.description ?? "") !== (book.description ?? "") ||
@@ -172,28 +183,11 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
       // owes the keyboard.
       onSubmit={(event) => {
         event.preventDefault();
-        if (changed && valid && !busy) {
-          // The cover is a file, so it is not part of the patch. Fire it first
-          // and let it land on its own: a cover that will not download must not
-          // hold up the fields that did.
-          if (pendingCover) {
-            // 🔴 The shelf has to be refreshed **again** when the cover lands.
-            // `onSave` invalidates it within a few milliseconds, and the
-            // download takes about a second — so the refetch that follows the
-            // metadata save reads `cover_path = NULL` and nothing ever asks
-            // again. That is why a saved cover stayed a placeholder.
-            void ipc
-              .bookCoverFromUrl(book.id, pendingCover)
-              .then(() => queryClient.invalidateQueries({ queryKey: ["books"] }))
-              .catch((err: unknown) =>
-                showToast(
-                  "error",
-                  `封面没下载下来：${err instanceof Error ? err.message : String(err)}`,
-                ),
-              );
-          }
-          onSave(patch);
-        }
+        if (!changed || !valid || busy) return;
+        // One save, one record. The cover is a file and the fields are columns,
+        // but they are the same decision — sending them as two commands is what
+        // produced two log lines and two undo buttons for one click.
+        onSave(patch, pendingCover);
       }}
     >
       <div className="flex max-h-[62vh] flex-col gap-3 overflow-y-auto pr-1">
@@ -293,20 +287,31 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
                       });
                     }
                     if (candidate.doubanUrl) setDouban(candidate.doubanUrl);
-                    // Only when the book has none: replacing a cover the reader
-                    // is used to seeing is not a "fill".
-                    if (!book.coverUrl && candidate.coverUrl) setPendingCover(candidate.coverUrl);
+                    // 🔴 A book with no picture takes the catalogue's one as a
+                    // *fill* — there is nothing to lose, so it needs no second
+                    // click. A book that already has one is a *replacement*,
+                    // and the picture on its shelf is what the reader has been
+                    // looking at: that takes a deliberate 「换成这张」 below,
+                    // never a side effect of picking a better title.
+                    const offered = candidate.coverUrl ?? null;
+                    setOfferedCover(offered);
+                    setPendingCover(book.coverUrl ? null : offered);
                     setCandidates(null);
                   }}
-                  className="press focus-visible:focus-ring hover:bg-surface-2 flex w-full items-baseline gap-2 rounded px-2 py-1.5 text-left"
+                  className="press focus-visible:focus-ring hover:bg-surface-2 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left"
                 >
-                  <span className="text-text-1 min-w-0 flex-1 truncate text-[13px]">
-                    {candidate.title}
-                  </span>
-                  <span className="text-text-2 min-w-0 shrink-0 truncate text-[11px]">
-                    {[candidate.authors[0], candidate.publishedYear, candidate.publisher]
-                      .filter(Boolean)
-                      .join(" · ")}
+                  {/* The picture is what tells two editions apart. Nothing is
+                      downloaded for it — see `CoverThumb`. */}
+                  <CoverThumb url={candidate.coverUrl} className="h-11 w-8" />
+                  <span className="min-w-0 flex-1">
+                    <span className="text-text-1 block truncate text-[13px]">
+                      {candidate.title}
+                    </span>
+                    <span className="text-text-2 block truncate text-[11px]">
+                      {[candidate.authors[0], candidate.publishedYear, candidate.publisher]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
                   </span>
                   <span className="text-text-3 shrink-0 text-[11px] tabular-nums">
                     {/* `f64` crosses the IPC boundary as `number | null`, so a
@@ -422,7 +427,57 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
               {rating.count !== null && `（${rating.count} 人）`}
             </span>
           )}
-          {pendingCover && <span>封面：保存时下载</span>}
+          {/* A book that already has a picture is offered the catalogue's one
+              rather than given it: the picture on its shelf is what the reader
+              has been looking at, and picking a better title is not a request
+              to change it. Two thumbnails, because 「是不是这一版」 is a question
+              only the reader can answer. */}
+          {book.coverUrl && offeredCover && !pendingCover && (
+            <span className="inline-flex items-center gap-1.5">
+              <img
+                src={book.coverUrl}
+                alt="现在的封面"
+                className="h-7 w-[21px] rounded object-cover"
+                draggable={false}
+              />
+              <span aria-hidden>→</span>
+              <button
+                type="button"
+                onClick={() => setPendingCover(offeredCover)}
+                className="text-accent focus-visible:focus-ring inline-flex items-center gap-1.5 rounded hover:underline"
+              >
+                <CoverThumb url={offeredCover} className="h-7 w-[21px]" />
+                换成这张
+              </button>
+            </span>
+          )}
+
+          {pendingCover && (
+            <span className="inline-flex items-center gap-1.5">
+              {book.coverUrl && (
+                <>
+                  <img
+                    src={book.coverUrl}
+                    alt="现在的封面"
+                    className="h-7 w-[21px] rounded object-cover"
+                    draggable={false}
+                  />
+                  <span aria-hidden>→</span>
+                </>
+              )}
+              <CoverThumb url={pendingCover} className="h-7 w-[21px]" />
+              <span>{book.coverUrl ? "保存时替换" : "保存时下载"}</span>
+              {book.coverUrl && (
+                <button
+                  type="button"
+                  onClick={() => setPendingCover(null)}
+                  className="text-text-3 hover:text-text-1 focus-visible:focus-ring rounded underline"
+                >
+                  不换
+                </button>
+              )}
+            </span>
+          )}
           {douban && (
             <button
               type="button"

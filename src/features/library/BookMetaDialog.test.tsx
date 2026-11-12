@@ -109,20 +109,25 @@ describe("BookMetaDialog — 元数据编辑表", () => {
     await user.clear(screen.getByLabelText("出版社"));
     await user.click(saveButton());
 
-    expect(onSave).toHaveBeenCalledWith({
-      title: "三体 II",
-      subtitle: null,
-      description: null,
-      language: "zh",
-      publisher: null,
-      isbn: null,
-      publishedYear: null,
-      rating: null,
-      ratingCount: null,
-      ratingSource: null,
-      doubanUrl: null,
-      authors: ["刘慈欣"],
-    });
+    // `null` for the cover: this sheet never chose one, so the save must leave
+    // whatever picture the book has alone.
+    expect(onSave).toHaveBeenCalledWith(
+      {
+        title: "三体 II",
+        subtitle: null,
+        description: null,
+        language: "zh",
+        publisher: null,
+        isbn: null,
+        publishedYear: null,
+        rating: null,
+        ratingCount: null,
+        ratingSource: null,
+        doubanUrl: null,
+        authors: ["刘慈欣"],
+      },
+      null,
+    );
   });
 
   it("splits authors on both commas and drops the empty names", async () => {

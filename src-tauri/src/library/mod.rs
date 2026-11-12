@@ -100,8 +100,15 @@ pub const fn resource_origin() -> &'static str {
 }
 
 /// Absolute URL for a book's cover, valid only when the book has one.
-pub fn cover_url(book_id: &str) -> String {
-    format!("{}/cover/{book_id}", resource_origin())
+///
+/// 🔴 `version` is not decoration. The path is the same for every picture a
+/// book ever has — replacing a cover writes a new file behind the same id — and
+/// a webview that has already decoded `…/cover/<id>` will keep showing those
+/// bytes. The number comes from `updated_at`, which `set_cover` bumps, so a
+/// replaced cover gets a URL the browser has never seen. Without it the file on
+/// disk changes and the shelf does not.
+pub fn cover_url(book_id: &str, version: i64) -> String {
+    format!("{}/cover/{book_id}?v={version}", resource_origin())
 }
 
 /// Absolute URL for a generated character portrait.
@@ -327,9 +334,17 @@ mod tests {
 
     #[test]
     fn cover_urls_use_the_platform_origin() {
-        let url = cover_url("abc");
-        assert!(url.ends_with("/cover/abc"), "{url}");
+        let url = cover_url("abc", 42);
         assert!(url.starts_with(resource_origin()), "{url}");
+        assert!(url.contains("/cover/abc"), "{url}");
+    }
+
+    /// The version is what makes a replacement visible, so it has to be in the
+    /// URL — and two versions of one book's cover must not collide.
+    #[test]
+    fn a_cover_url_carries_its_version() {
+        assert_ne!(cover_url("abc", 1), cover_url("abc", 2));
+        assert!(cover_url("abc", 7).ends_with("/cover/abc?v=7"));
     }
 
     /// A library on disk with two real books in it: the rows and the files the

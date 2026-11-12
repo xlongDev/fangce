@@ -337,19 +337,6 @@ export const commands = {
   bookCoverSave: (id: string, bytes: number[]) =>
     __TAURI_INVOKE<null>("book_cover_save", { id, bytes }),
   /**
-   *  `book.cover_from_url` — fetches the cover a catalogue offered.
-   *
-   *  The single-book sheet needs this because its save path is `book.update`,
-   *  which writes columns: a cover is a file, and downloading it inside a
-   *  transaction is exactly what this file's other cover command avoids.
-   *
-   *  The bytes are checked before anything is written — https, a catalogue's own
-   *  image host, a real JPEG or PNG, under 8 MB — and the extension comes from
-   *  the bytes rather than from the URL.
-   */
-  bookCoverFromUrl: (id: string, url: string) =>
-    __TAURI_INVOKE<null>("book_cover_from_url", { id, url }),
-  /**
    *  `book.import`
    *
    *  Takes absolute paths chosen by the native file dialog or dropped onto the
@@ -469,6 +456,23 @@ export const commands = {
    */
   metadataApply: (items: MetadataFill[]) => __TAURI_INVOKE<number>("metadata_apply", { items }),
   /**
+   *  `metadata.cover_preview` — the picture a catalogue offers, as a data URL.
+   *
+   *  The candidate list has to show the cover **before** anything is saved. Two
+   *  editions of one title differ by their cover more than by their title, and
+   *  picking one blind is how a reader ends up with the wrong printing's blurb.
+   *
+   *  The bytes pass the same gate a real download does — https, a catalogue's own
+   *  image host, a real JPEG or PNG — but nothing is written: this is a question,
+   *  and the answer lives in the webview's memory until the query cache drops it.
+   *
+   *  `data:` rather than the URL itself for two reasons. The CSP allows
+   *  `img-src data:` and not the catalogues' CDNs, and Douban's image host
+   *  answers 418 to a bare `<img>`: it wants a referer, which only a request from
+   *  here can send.
+   */
+  metadataCoverPreview: (url: string) => __TAURI_INVOKE<string>("metadata_cover_preview", { url }),
+  /**
    *  `ops.undo` — puts back what one call changed.
    *
    *  One transaction: the writes and the marker row that stops the page from
@@ -503,14 +507,25 @@ export const commands = {
   bookSetFavoriteMany: (ids: string[], favorite: boolean) =>
     __TAURI_INVOKE<null>("book_set_favorite_many", { ids, favorite }),
   /**
-   *  `book.update` — rewrites title, authors and the descriptive fields.
+   *  `book.update` — rewrites title, authors and the descriptive fields, and
+   *  optionally the picture.
    *
-   *  Synchronous: it is a handful of row updates on an indexed table, far
-   *  cheaper than the round trip that asked for it. The reader keeps whatever
-   *  position it had — none of these columns are a reading anchor.
+   *  Async because of the cover: a download held inside the library's single
+   *  connection would freeze the shelf for as long as somebody else's server
+   *  takes. The bytes are fetched first; one transaction then writes the row, the
+   *  file and one log entry.
+   *
+   *  🔴 **One save is one record.** The cover used to be its own command with its
+   *  own call id, so every save that also replaced the picture produced two rows
+   *  — 「改了书籍信息」 and 「换了封面」 — two lines for one click, and two undo
+   *  buttons for one decision. The reader has no way to know those were the same
+   *  action, and the log stopped being readable.
+   *
+   *  Returns whether the picture landed. A cover that will not download is not a
+   *  reason to drop the fields that did.
    */
-  bookUpdate: (id: string, patch: BookMetadataPatch) =>
-    __TAURI_INVOKE<null>("book_update", { id, patch }),
+  bookUpdate: (id: string, patch: BookMetadataPatch, coverUrl: string | null) =>
+    __TAURI_INVOKE<boolean>("book_update", { id, patch, coverUrl }),
   /**  `bookmark.create` — pins the current position and returns it. */
   bookmarkCreate: (bookId: string, chapterIdx: number, fraction: number | null, label: string) =>
     __TAURI_INVOKE<Bookmark>("bookmark_create", { bookId, chapterIdx, fraction, label }),

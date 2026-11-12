@@ -5,6 +5,7 @@ import { CaretDown, Check } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
+import { CoverThumb } from "@/features/library/CoverThumb";
 import { useMetadataApply, useMetadataPropose } from "@/hooks/useMetadata";
 import { CHUNK, useFillRun } from "@/stores/fillRun";
 import { cn } from "@/lib/cn";
@@ -447,8 +448,12 @@ function Row({
               {proposal.coverUrl && (
                 <div className="flex gap-3">
                   <dt className="text-text-3 w-12 shrink-0 text-[11px] leading-5">封面</dt>
-                  <dd className="text-text-2 min-w-0 flex-1 truncate text-[12px] leading-5">
-                    {proposal.coverUrl}
+                  {/* The picture itself, not its address: a URL is not
+                      evidence that the cover is the right edition, and this
+                      panel exists to be read. Fetched when the row opens, not
+                      for all forty. */}
+                  <dd className="min-w-0 flex-1">
+                    <CoverThumb url={proposal.coverUrl} className="h-20 w-[60px]" />
                   </dd>
                 </div>
               )}

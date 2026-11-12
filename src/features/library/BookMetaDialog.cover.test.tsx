@@ -4,8 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  bookCoverFromUrl: vi.fn(),
   metadataSearch: vi.fn(),
+  metadataCoverPreview: vi.fn(),
 }));
 
 vi.mock("@/lib/ipc", () => ({
@@ -13,8 +13,8 @@ vi.mock("@/lib/ipc", () => ({
   // can be downloaded at all.
   isDesktopRuntime: true,
   ipc: {
-    bookCoverFromUrl: mocks.bookCoverFromUrl,
     metadataSearch: mocks.metadataSearch,
+    metadataCoverPreview: mocks.metadataCoverPreview,
   },
 }));
 
@@ -22,6 +22,8 @@ import { BookMetaDialog } from "@/features/library/BookMetaDialog";
 import type { BookSummary, Candidate } from "@/types/ipc";
 
 const COVER = "https://img3.doubanio.com/view/subject/l/public/s35198069.jpg";
+/** What the backend hands back: bytes, typed, inline. */
+const PREVIEW = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
 
 const book: BookSummary = {
   id: "test-1",
@@ -69,58 +71,101 @@ const candidate: Candidate = {
 function open(overrides: Partial<BookSummary> = {}) {
   const onSave = vi.fn();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const invalidate = vi.spyOn(client, "invalidateQueries");
   render(
     <QueryClientProvider client={client}>
       <BookMetaDialog book={{ ...book, ...overrides }} onCancel={vi.fn()} onSave={onSave} />
     </QueryClientProvider>,
   );
-  return { onSave, invalidate, user: userEvent.setup() };
+  return { onSave, user: userEvent.setup() };
+}
+
+/** The cover a save asks for: the second argument, or `null` for 「别动封面」. */
+function coverOfSave(onSave: ReturnType<typeof vi.fn>): string | null {
+  const call = onSave.mock.calls.at(-1);
+  return call ? (call[1] as string | null) : "never saved";
 }
 
 beforeEach(() => {
-  mocks.bookCoverFromUrl.mockReset();
-  mocks.bookCoverFromUrl.mockResolvedValue(undefined);
   mocks.metadataSearch.mockReset();
   mocks.metadataSearch.mockResolvedValue([candidate]);
+  mocks.metadataCoverPreview.mockReset();
+  mocks.metadataCoverPreview.mockResolvedValue(PREVIEW);
 });
 
 describe("the cover a candidate brings", () => {
-  it("is fetched on 保存, not when the candidate is clicked", async () => {
-    const { user } = open();
+  /**
+   * The list is where the choice is made, so the picture has to be there —
+   * 2014 年中信版 and 2017 年重印版 of one title are told apart by their covers,
+   * not by the words above them. This is a preview: nothing is written.
+   */
+  it("is shown in the candidate list, without writing anything", async () => {
+    const { user, onSave } = open();
+    await user.click(screen.getByRole("button", { name: "豆瓣" }));
+
+    await waitFor(() => expect(document.querySelector(`img[src="${PREVIEW}"]`)).not.toBeNull());
+    expect(mocks.metadataCoverPreview).toHaveBeenCalledWith(COVER);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  /** A book with no picture has nothing to lose: the catalogue's cover is a
+   *  fill, and it rides along with the save. */
+  it("rides along with the save for a book that has none", async () => {
+    const { user, onSave } = open();
     await user.click(screen.getByRole("button", { name: "豆瓣" }));
     await user.click(await screen.findByRole("button", { name: /存在主义及其他/ }));
 
-    // Nothing is written before the reader says so.
-    expect(mocks.bookCoverFromUrl).not.toHaveBeenCalled();
-    expect(screen.getByText("封面：保存时下载")).toBeInTheDocument();
-
+    expect(screen.getByText("保存时下载")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "保存" }));
-    expect(mocks.bookCoverFromUrl).toHaveBeenCalledWith("test-1", COVER);
+    expect(coverOfSave(onSave)).toBe(COVER);
   });
 
   /**
-   * The regression this exists for: the cover is downloaded *after* the save
-   * has already invalidated the shelf, so the refetch reads `cover_path = NULL`
-   * and the card keeps its placeholder forever. The shelf has to be asked
-   * again once the file is actually there.
+   * The picture a file carries is often not a cover — a 3-D mock-up of the
+   * whole jacket, a scan with a library sticker, a frame from the film — and
+   * the catalogue's flat scan is what belongs on the shelf. But the picture on
+   * the shelf is also what the reader has been looking at: picking a better
+   * title must not silently take it away.
    */
-  it("refreshes the shelf again once the file has landed", async () => {
-    const { user, invalidate } = open();
+  it("offers the catalogue's picture instead of taking it", async () => {
+    const { user, onSave } = open({ coverUrl: "fangce://localhost/cover/test-1" });
     await user.click(screen.getByRole("button", { name: "豆瓣" }));
     await user.click(await screen.findByRole("button", { name: /存在主义及其他/ }));
-    await user.click(screen.getByRole("button", { name: "保存" }));
 
-    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["books"] }));
+    expect(screen.getByRole("button", { name: /换成这张/ })).toBeInTheDocument();
+    expect(screen.queryByText("保存时替换")).not.toBeInTheDocument();
+    expect(screen.getByAltText("现在的封面")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    expect(coverOfSave(onSave)).toBeNull();
   });
 
-  it("leaves a book that already has a picture alone", async () => {
-    const { user } = open({ coverUrl: "fangce://localhost/cover/test-1" });
+  it("replaces it once the reader asks", async () => {
+    const { user, onSave } = open({ coverUrl: "fangce://localhost/cover/test-1" });
     await user.click(screen.getByRole("button", { name: "豆瓣" }));
     await user.click(await screen.findByRole("button", { name: /存在主义及其他/ }));
+    await user.click(screen.getByRole("button", { name: /换成这张/ }));
 
-    expect(screen.queryByText("封面：保存时下载")).not.toBeInTheDocument();
+    expect(screen.getByText("保存时替换")).toBeInTheDocument();
+
+    // A cover alone is a change: the save button must not stay disabled just
+    // because no word was touched.
+    const save = screen.getByRole("button", { name: "保存" });
+    expect(save).toBeEnabled();
+    await user.click(save);
+    expect(coverOfSave(onSave)).toBe(COVER);
+  });
+
+  it("lets the reader put the old picture back", async () => {
+    const { user, onSave } = open({ coverUrl: "fangce://localhost/cover/test-1" });
+    await user.click(screen.getByRole("button", { name: "豆瓣" }));
+    await user.click(await screen.findByRole("button", { name: /存在主义及其他/ }));
+    await user.click(screen.getByRole("button", { name: /换成这张/ }));
+    await user.click(screen.getByRole("button", { name: "不换" }));
+
+    expect(screen.queryByText("保存时替换")).not.toBeInTheDocument();
+    // The offer is still on the table, and saving must not fetch anything.
+    expect(screen.getByRole("button", { name: /换成这张/ })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "保存" }));
-    expect(mocks.bookCoverFromUrl).not.toHaveBeenCalled();
+    expect(coverOfSave(onSave)).toBeNull();
   });
 });

@@ -520,7 +520,16 @@ export async function bookSetFavoriteMany(ids: string[], favorite: boolean): Pro
   for (const id of ids) await bookSetFavorite(id, favorite);
 }
 
-export async function bookUpdate(id: string, patch: BookMetadataPatch): Promise<void> {
+/** `coverUrl` is the picture to fetch with this save.
+ *
+ * The browser build has no catalogue lookup (the candidate list is desktop
+ * only), so it is always `null` here — and `false` says honestly that no
+ * picture was written, rather than pretending. */
+export async function bookUpdate(
+  id: string,
+  patch: BookMetadataPatch,
+  _coverUrl?: string | null,
+): Promise<boolean> {
   await patchBook(id, {
     title: patch.title,
     subtitle: patch.subtitle,
@@ -539,6 +548,7 @@ export async function bookUpdate(id: string, patch: BookMetadataPatch): Promise<
     doubanUrl: patch.doubanUrl,
     authors: patch.authors,
   });
+  return false;
 }
 
 /** The batch sheet's two fields, on a whole selection.

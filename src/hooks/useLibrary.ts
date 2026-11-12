@@ -332,8 +332,17 @@ export function useSetFavorites() {
 export function useUpdateBook() {
   const invalidate = useInvalidateShelf();
   return useMutation({
-    mutationFn: ({ id, patch }: { id: string; patch: BookMetadataPatch }) =>
-      ipc.bookUpdate(id, patch),
+    // The cover travels with the fields — one command, one transaction, one
+    // log entry. `null` leaves the picture alone.
+    mutationFn: ({
+      id,
+      patch,
+      coverUrl,
+    }: {
+      id: string;
+      patch: BookMetadataPatch;
+      coverUrl?: string | null;
+    }) => ipc.bookUpdate(id, patch, coverUrl ?? null),
     onSuccess: invalidate,
   });
 }

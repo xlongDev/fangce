@@ -465,9 +465,11 @@ mod tests {
         assert_eq!(books[0].title, "三体");
         assert_eq!(books[0].authors, ["刘慈欣"]);
         assert_eq!(books[0].format, crate::document::BookFormat::Epub);
+        // The URL carries the row's version, so a cover replaced later is a
+        // URL the webview has not cached.
         assert_eq!(
             books[0].cover_url.as_deref(),
-            Some(crate::library::cover_url(&imported.0).as_str())
+            Some(crate::library::cover_url(&imported.0, books[0].updated_at).as_str())
         );
 
         // The cover bytes must be on disk, not just referenced.

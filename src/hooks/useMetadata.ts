@@ -47,6 +47,32 @@ export function useMetadataPropose(ids: string[], enabled: boolean) {
   });
 }
 
+/**
+ * A catalogue's cover, as a data URL, for showing it before anything is saved.
+ *
+ * Its own key rather than the proposal's: the same picture is asked for by a
+ * candidate row and by an expanded batch row, and it must be fetched once. A
+ * cover URL names one picture and that picture does not change, so the cache
+ * never goes stale — a reopened dialog shows what it showed a minute ago
+ * without asking anybody's server again.
+ *
+ * `enabled` is the caller's throttle. The single-book list shows three
+ * candidates and fetches all three; the batch list can hold forty rows, and a
+ * closed row has no reason to cost a request.
+ */
+export function useCoverPreview(url: string | null | undefined, enabled: boolean) {
+  return useQuery<string>({
+    queryKey: ["metadata", "cover", url],
+    queryFn: () => ipc.metadataCoverPreview(url!),
+    enabled: enabled && !!url && isDesktopRuntime,
+    staleTime: Infinity,
+    // A thumbnail that will not load is not a reason to ask again — the URL
+    // names one file, and the answer will be the same. The row keeps its
+    // placeholder, and the reader can still apply.
+    retry: false,
+  });
+}
+
 /** Writes the proposals the reader accepted. One transaction, one log entry. */
 export function useMetadataApply() {
   const queryClient = useQueryClient();

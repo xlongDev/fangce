@@ -3,6 +3,8 @@
 //! Read-only, and deliberately not part of the write path: a candidate is a
 //! suggestion, and applying it goes through `book.update` like any other edit.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use futures_util::StreamExt;
 use tauri::State;
 
@@ -241,4 +243,37 @@ pub async fn metadata_apply(
         )?;
         Ok(written)
     })
+}
+
+/// A preview is a thumbnail in a 40-pixel box. Past this it is not a thumbnail,
+/// and base64 makes it a third larger again while it crosses the IPC boundary —
+/// the sheet would stall for a picture the reader is about to see at a tenth of
+/// the size. The real download keeps its own, larger, limit.
+const PREVIEW_LIMIT: usize = 4 * 1024 * 1024;
+
+/// `metadata.cover_preview` — the picture a catalogue offers, as a data URL.
+///
+/// The candidate list has to show the cover **before** anything is saved. Two
+/// editions of one title differ by their cover more than by their title, and
+/// picking one blind is how a reader ends up with the wrong printing's blurb.
+///
+/// The bytes pass the same gate a real download does — https, a catalogue's own
+/// image host, a real JPEG or PNG — but nothing is written: this is a question,
+/// and the answer lives in the webview's memory until the query cache drops it.
+///
+/// `data:` rather than the URL itself for two reasons. The CSP allows
+/// `img-src data:` and not the catalogues' CDNs, and Douban's image host
+/// answers 418 to a bare `<img>`: it wants a referer, which only a request from
+/// here can send.
+#[tauri::command]
+#[specta::specta]
+pub async fn metadata_cover_preview(url: String) -> AppResult<String> {
+    let client = metadata::client();
+    let bytes = metadata::download_cover(&client, &url).await?;
+    if bytes.len() > PREVIEW_LIMIT {
+        return Err(AppError::Message("封面太大，预览不了".into()));
+    }
+    let mime =
+        metadata::preview_mime(&bytes).ok_or_else(|| AppError::Parse("拿到的不是图片".into()))?;
+    Ok(format!("data:{mime};base64,{}", STANDARD.encode(&bytes)))
 }

@@ -590,7 +590,10 @@ pub fn get(conn: &Connection, id: &str) -> AppResult<Option<BookSummary>> {
 fn summary_from_row(row: &rusqlite::Row<'_>) -> AppResult<BookSummary> {
     let id: String = row.get("id")?;
     let has_cover = row.get::<_, Option<String>>("cover_path")?.is_some();
-    let cover_url = has_cover.then(|| crate::library::cover_url(&id));
+    // The version travels with the URL so a replaced picture is not served
+    // from the webview's cache under an unchanged path — see `cover_url`.
+    let version: i64 = row.get("updated_at").unwrap_or_default();
+    let cover_url = has_cover.then(|| crate::library::cover_url(&id, version));
     Ok(BookSummary {
         id,
         title: row.get("title")?,
@@ -1626,6 +1629,29 @@ mod tests {
         add(&conn, "b1", "无封面", &[], "h1");
         assert_eq!(cover_path(&conn, "b1").expect("query"), None);
         assert_eq!(cover_path(&conn, "missing").expect("query"), None);
+    }
+
+    /// 🔴 The URL is the only thing the webview keys its image cache on. A
+    /// replacement writes a new file behind the same id, so if the URL stayed
+    /// put the shelf would keep showing the old picture forever — which is
+    /// exactly what happened: the file on disk was the catalogue's cover and
+    /// the card still showed the 3-D mock-up.
+    #[test]
+    fn a_cover_url_changes_when_the_picture_does() {
+        let conn = seed();
+        add(&conn, "b1", "有封面", &[], "h1");
+        set_cover(&conn, "b1", "/lib/covers/b1.png").expect("cover");
+
+        let first = get(&conn, "b1").expect("query").expect("book").cover_url.expect("url");
+        assert!(first.contains("?v="), "版本必须在 URL 里：{first}");
+
+        // `updated_at` has one-second resolution, so two writes in the same
+        // second would keep the URL. Bump it the way a later save would.
+        conn.execute("UPDATE books SET updated_at = updated_at + 60 WHERE id = 'b1'", [])
+            .expect("bump");
+
+        let second = get(&conn, "b1").expect("query").expect("book").cover_url.expect("url");
+        assert_ne!(first, second, "换了图就该换 URL");
     }
 
     #[test]

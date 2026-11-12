@@ -1051,6 +1051,17 @@ pub fn image_extension(bytes: &[u8]) -> Option<&'static str> {
     None
 }
 
+/// The MIME a `data:` URL has to declare, derived from the bytes for the same
+/// reason the extension is: Douban serves `.jpg` paths that are sometimes PNG,
+/// and a data URL whose type disagrees with its payload renders as nothing.
+pub fn preview_mime(bytes: &[u8]) -> Option<&'static str> {
+    match image_extension(bytes) {
+        Some("jpg") => Some("image/jpeg"),
+        Some("png") => Some("image/png"),
+        _ => None,
+    }
+}
+
 /// The subject page this record points at, when it points at one.
 fn douban_subject(body: &Value) -> Option<String> {
     let url = text(body, "url")?;
@@ -1956,6 +1967,20 @@ mod tests {
         assert_eq!(image_extension(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]), Some("png"));
         assert_eq!(image_extension(b"<html>not an image</html>"), None);
         assert_eq!(image_extension(b""), None);
+    }
+
+    /// A data URL's declared type has to match its payload, and the payload is
+    /// the only thing that knows. `image/jpeg` is not spelled `image/jpg` — the
+    /// browser drops a data URL whose type it does not recognise, and the row
+    /// would keep its placeholder with nothing in the console to say why.
+    #[test]
+    fn a_preview_declares_the_type_the_bytes_are() {
+        assert_eq!(preview_mime(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("image/jpeg"));
+        assert_eq!(
+            preview_mime(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]),
+            Some("image/png")
+        );
+        assert_eq!(preview_mime(b"<html>not an image</html>"), None);
     }
 
     /// The URL comes out of somebody else's JSON. Anything but a catalogue's

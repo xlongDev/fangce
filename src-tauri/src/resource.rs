@@ -50,6 +50,14 @@ const PORTRAIT_PREFIX: &str = "/portrait/";
 /// import, so this content can never change under it.
 const FONT_CACHE: &str = "public, max-age=31536000, immutable";
 
+/// How long a cover response may be reused.
+///
+/// Immutable because the URL is versioned: `cover_url` appends the row's
+/// `updated_at`, and `set_cover` bumps it, so replacing a picture produces a
+/// URL the browser has never fetched. Without the version this header would
+/// freeze a stale cover on the shelf for a year.
+const COVER_CACHE: &str = "public, max-age=31536000, immutable";
+
 /// Slot the protocol handler reads from.
 ///
 /// Tauri runs the setup hook on the event loop's `Ready` event, which is after
@@ -140,6 +148,7 @@ impl Registry {
                 response
                     .headers_mut()
                     .insert(CONTENT_TYPE, HeaderValue::from_static(mime_of(&path)));
+                response.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static(COVER_CACHE));
                 response
             }
             Err(err) => {
