@@ -1,8 +1,7 @@
 //! A read-only answer to 「书架上是不是有同一本书的两个文件」.
 //!
-//! Two imports of the same novel — one EPUB, one AZW3, one with a subtitle and
-//! one without — are different rows, different files and different cover
-//! tiles. Import-time dedupe cannot see them: it compares the bytes of a file
+//! Two imports of the same novel — one EPUB, one AZW3 — are different rows,
+//! different files and different cover tiles. Import-time dedupe cannot see them: it compares the bytes of a file
 //! being added against files already on disk, not the identity of the books.
 //!
 //! **This report never merges or deletes anything.** Deciding which copy to
@@ -88,7 +87,7 @@ fn group(books: Vec<DuplicateBook>) -> Vec<DuplicateGroup> {
         by_title
             .into_values()
             .filter(|items| items.len() > 1)
-            .map(|items| DuplicateGroup { reason: "书名相同".into(), books: items }),
+            .map(|items| DuplicateGroup { reason: "书名完全一致".into(), books: items }),
     );
 
     for group in &mut groups {
@@ -113,15 +112,24 @@ fn normalized_isbn(raw: Option<&str>) -> Option<String> {
     (cleaned.len() == 10 || cleaned.len() == 13).then_some(cleaned)
 }
 
-/// Title without its subtitle, punctuation or spacing, lower-cased.
+/// The whole title, with only punctuation, spacing and case removed.
 ///
-/// 「三体：地球往事」 and 「三体」 are the same book with two cataloguing
-/// habits; 「三体Ⅱ·黑暗森林」 survives as its own title because the numeral
-/// and the words after it are kept. Chinese characters count as alphanumeric,
-/// so nothing here strips the title itself away.
+/// 🔴 **No subtitle is cut off.** The first version split at `: · - (` and
+/// friends, and a real 1537-book shelf showed what that means in Chinese:
+/// `·` separates a person's given name (彼得·林奇 / 彼得·德汉克) or a series
+/// volume (大唐狄公案·第一辑), `-` separates a subtitle (玩转ChatGPT-秒变AI…),
+/// and `（）` carries an issue or volume number (单读（11-15） / （01-10）).
+/// Cutting there left two-character prefixes like 「彼得」 and 「大卫」, and
+/// merged books that have nothing to do with each other. That is a false
+/// positive, which is worse than a miss: it sends the reader looking for a
+/// problem that is not there.
+///
+/// Two files of one book almost always carry the same title, so exact equality
+/// after normalisation finds them. A copy whose cataloguer added a subtitle is
+/// missed — an honest, visible limit, and the reader can still see it on the
+/// shelf.
 fn normalized_title(raw: &str) -> String {
-    let head = raw.split([':', '：', '(', '（', '·', '—', '-']).next().unwrap_or(raw);
-    head.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+    raw.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
 }
 
 #[cfg(test)]
@@ -153,11 +161,36 @@ mod tests {
     }
 
     #[test]
-    fn a_title_pairs_books_with_and_without_a_subtitle() {
-        let groups =
-            group(vec![book("a", "百年孤独", None, 2), book("b", "百年孤独：1967 年版", None, 1)]);
+    fn two_files_with_the_same_title_are_still_found() {
+        let groups = group(vec![
+            book("a", "宝贵的人生建议", None, 2),
+            book("b", "宝贵的人生建议", None, 1),
+            book("c", "东方的智慧", None, 3),
+        ]);
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].reason, "书名相同");
+        assert_eq!(groups[0].reason, "书名完全一致");
+        assert_eq!(groups[0].books.len(), 2);
+    }
+
+    /// The shelf that made the old rule untenable. Every pair here was reported
+    /// as one book by a rule that cut the title at punctuation.
+    #[test]
+    fn real_shelf_titles_are_not_merged_by_a_shared_prefix() {
+        let pairs = [
+            ("彼得·林奇的成功投资", "彼得·德汉克：经典作品合集"),
+            ("阿瑟·克拉克科幻短篇全集", "阿瑟·米勒戏剧经典（套装5册）"),
+            ("大卫·贝尔", "大卫·科波菲尔：全2册"),
+            ("玩转ChatGPT-秒变AI提问和追问高手", "玩转ChatGPT-秒变AI写作高手"),
+            ("万万没想到：用理工科思维理解世界", "万万没想到：《西游记》可以这样读"),
+            ("单读（11-15）", "单读（01-10）"),
+            ("安娜·卡列尼娜（于大卫译）", "安娜·卡列尼娜回忆录（文学纪念碑）"),
+            ("人类的终极问题", "人类的终极问题：未来篇"),
+            ("神曲（全三册）", "神曲：插图珍藏本"),
+        ];
+        for (left, right) in pairs {
+            let groups = group(vec![book("a", left, None, 1), book("b", right, None, 2)]);
+            assert!(groups.is_empty(), "「{left}」和「{right}」不是同一本");
+        }
     }
 
     /// A book already identified by ISBN must not be listed twice.
@@ -168,7 +201,7 @@ mod tests {
             book("b", "三体：地球往事", Some("9787536692930"), 1),
             book("c", "三体", None, 3),
         ]);
-        assert_eq!(groups.len(), 1, "只有一组，没有第二份「书名相同」");
+        assert_eq!(groups.len(), 1, "只有一组，没有第二份「书名完全一致」");
         assert_eq!(groups[0].reason, "同一 ISBN");
         assert_eq!(groups[0].books.len(), 2);
     }
