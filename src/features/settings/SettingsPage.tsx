@@ -4,6 +4,7 @@ import {
   ArrowsClockwise,
   ArrowSquareOut,
   BookOpenText,
+  CaretDown,
   ClockCounterClockwise,
   CloudArrowUp,
   Monitor,
@@ -14,7 +15,7 @@ import {
   Trash,
   TextAa,
 } from "@phosphor-icons/react";
-import { motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useLocation } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -54,7 +55,7 @@ import { KeymapSection } from "@/features/settings/KeymapSection";
 import { SecretsNotice } from "@/features/settings/SecretsNotice";
 import type { Operation, SyncChange, SyncConfig, SyncReport, SyncTally } from "@/types/ipc";
 import { cn } from "@/lib/cn";
-import { SPRING } from "@/lib/motion";
+import { EASE_OUT, SPRING } from "@/lib/motion";
 
 /**
  * Whether the pane has nowhere left to scroll.
@@ -631,10 +632,60 @@ function stamp(): string {
  * own doing, which needs no label — a log that says 「你」 on every line of a
  * page you just turned is noise.
  */
+/** One entry per question a reader comes to this page with. */
+export interface OperationKind {
+  key: string;
+  label: string;
+  matches: (action: string) => boolean;
+}
+
+/**
+ * The filter chips, in the order they are offered.
+ *
+ * A record may answer to two kinds: `update_metadata_cover` is one save that
+ * changed the fields *and* the picture, and 「我什么时候换过封面」 and 「谁改了
+ * 出版社」 are both questions about the same line. Filtering is used instead of
+ * grouping by kind because grouping by kind would fight the day headings — two
+ * grouping dimensions nested is a fold inside a fold, and a reader would have
+ * to open two things to see one row.
+ */
+export const KINDS: OperationKind[] = [
+  { key: "all", label: "全部", matches: () => true },
+  {
+    key: "metadata",
+    label: "改信息",
+    matches: (action) =>
+      action === "update_metadata" ||
+      action === "batch_metadata" ||
+      action === "update_metadata_cover",
+  },
+  { key: "fill", label: "补全", matches: (action) => action === "fill_metadata" },
+  {
+    key: "cover",
+    label: "换封面",
+    // `cover` is the rows written before a save and a cover were one call.
+    matches: (action) => action === "cover" || action === "update_metadata_cover",
+  },
+  {
+    key: "delete",
+    label: "删除",
+    matches: (action) => action === "trash" || action === "purge" || action === "empty_trash",
+  },
+];
+
 function OperationsSection() {
-  const { data, isPending, isError } = useOperations(50);
+  // A list that scrolls and groups by day can hold more than a screenful:
+  // fifty rows was one afternoon of fills, which made 「上周」 unreachable.
+  const { data, isPending, isError } = useOperations(200);
   const undo = useUndoOperation();
   const calls = useMemo(() => groupByCall(data ?? []), [data]);
+  const [picked, setPicked] = useState("all");
+  const kind = KINDS.find((entry) => entry.key === picked) ?? KINDS[0]!;
+  const visible = useMemo(() => calls.filter((call) => kind.matches(call.action)), [calls, kind]);
+  const days = useMemo(() => groupByDay(visible), [visible]);
+  /** Per-day overrides; a day not named here follows `day.recent`. Keyed by the
+   *  day, not by index, so the state survives a refetch that adds a new day. */
+  const [closed, setClosed] = useState<Record<string, boolean>>({});
 
   return (
     <SettingsGroup
@@ -656,42 +707,161 @@ function OperationsSection() {
           还没有记录。改一本书的信息、贴个标签、或者删一本书，都会记在这里。
         </p>
       ) : (
-        <ul className="divide-hairline divide-y">
-          {calls.map((call) => (
-            <li key={call.callId} className="flex items-center gap-3 px-5 py-2 text-[13px]">
-              <time className="text-text-3 w-24 shrink-0 tabular-nums">
-                {WHEN.format(new Date(call.at * 1000))}
-              </time>
-              <span className="text-text-1 min-w-0 flex-1 truncate">{call.summary}</span>
-              <span
-                className="text-text-2 max-w-36 shrink-0 truncate"
-                title={call.title ?? undefined}
-              >
-                {call.count > 1 ? `共 ${call.count} 本` : (call.title ?? "—")}
-              </span>
-              {call.source === "mcp" && (
-                <span className="border-hairline text-text-3 shrink-0 rounded-full border px-1.5 text-[11px]">
-                  MCP
-                </span>
-              )}
-              {/* Only for a change that stored what it replaced. A deleted book
-                  is not "undone" here — 回收站 is the way back from that, and
-                  two undos for one action would be one too many. */}
-              {call.undoable && (
-                <GlassButton
-                  size="sm"
-                  variant="subtle"
-                  disabled={undo.isPending}
-                  onClick={() => undo.mutate(call.callId)}
+        <>
+          {/* Filtering, not grouping. The day headings are already one
+              dimension; a second fold inside them would mean opening two
+              things to see one row. The count is on each chip so 「补全」 says
+              how much it is hiding before it is clicked. */}
+          <div className="border-hairline flex flex-wrap items-center gap-1.5 border-b px-5 py-2">
+            {KINDS.map((entry) => {
+              const count = calls.filter((call) => entry.matches(call.action)).length;
+              const active = entry.key === picked;
+              return (
+                <button
+                  key={entry.key}
+                  type="button"
+                  onClick={() => setPicked(entry.key)}
+                  aria-pressed={active}
+                  className={cn(
+                    "focus-visible:focus-ring flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] transition-colors",
+                    active
+                      ? "border-accent bg-accent text-on-accent"
+                      : "border-hairline text-text-2 hover:bg-surface-2",
+                  )}
                 >
-                  撤销
-                </GlassButton>
-              )}
-            </li>
-          ))}
-        </ul>
+                  {entry.label}
+                  <span className="tabular-nums opacity-70">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {visible.length === 0 ? (
+            <p className="text-text-3 px-5 py-3 text-[13px]">这一类还没有记录。</p>
+          ) : (
+            // A log is read top-down and it grows without bound, so the list
+            // owns its own scroll: the page keeps its settings around it, and a
+            // week of batch fills no longer pushes everything else off screen.
+            <div className="max-h-[58vh] overflow-y-auto">
+              {days.map((day) => (
+                <OperationsDay
+                  key={day.key}
+                  day={day}
+                  expanded={closed[day.key] ?? day.recent}
+                  onToggle={() =>
+                    setClosed((current) => ({
+                      ...current,
+                      [day.key]: !(current[day.key] ?? day.recent),
+                    }))
+                  }
+                  undoPending={undo.isPending}
+                  onUndo={(callId) => undo.mutate(callId)}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </SettingsGroup>
+  );
+}
+
+interface OperationsDayProps {
+  day: OperationDay;
+  expanded: boolean;
+  onToggle: () => void;
+  undoPending: boolean;
+  onUndo: (callId: string) => void;
+}
+
+/**
+ * One day of the log, collapsible.
+ *
+ * 今天 and 昨天 start open — they are what a reader opens this page for — and
+ * everything older starts closed, because the page answers 「最近发生了什么」,
+ * not 「全部历史」. The count on the heading says how much is behind a folded
+ * day, so folding one is never a way to lose something silently.
+ *
+ * The open/close is a short ease-out on `height`, the same curve the batch
+ * sheet's rows use: this is a block becoming visible, not something travelling
+ * through space. A spring here would overshoot past its own content.
+ */
+function OperationsDay({ day, expanded, onToggle, undoPending, onUndo }: OperationsDayProps) {
+  const reduce = useReducedMotion();
+  const transition = reduce ? { duration: 0 } : { duration: 0.18, ease: EASE_OUT };
+
+  return (
+    <section>
+      {/* Sticky, because once the list scrolls 「这是哪一天」 has to stay
+          answerable. Opaque (`surface-3`): a translucent band would let the
+          rows show through the heading. */}
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="bg-surface-3 hover:bg-surface-2 focus-visible:focus-ring sticky top-0 z-1 flex w-full items-center gap-2 px-5 py-1.5 text-left"
+      >
+        <CaretDown
+          size={10}
+          aria-hidden
+          className={cn(
+            "text-text-3 shrink-0 transition-transform duration-150",
+            expanded && "rotate-180",
+          )}
+        />
+        <span className="text-text-3 text-[11px] font-medium tracking-wide">{day.label}</span>
+        <span className="text-text-3 text-[11px] tabular-nums">{day.calls.length}</span>
+      </button>
+
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            key="body"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={transition}
+            className="overflow-hidden"
+          >
+            <ul className="divide-hairline divide-y">
+              {day.calls.map((call) => (
+                <li key={call.callId} className="flex items-center gap-3 px-5 py-2 text-[13px]">
+                  <time className="text-text-3 w-11 shrink-0 tabular-nums">
+                    {TIME.format(new Date(call.at * 1000))}
+                  </time>
+                  <span className="text-text-1 min-w-0 flex-1 truncate">{call.summary}</span>
+                  <span
+                    className="text-text-2 max-w-36 shrink-0 truncate"
+                    title={call.title ?? undefined}
+                  >
+                    {call.count > 1 ? `共 ${call.count} 本` : (call.title ?? "—")}
+                  </span>
+                  {call.source === "mcp" && (
+                    <span className="border-hairline text-text-3 shrink-0 rounded-full border px-1.5 text-[11px]">
+                      MCP
+                    </span>
+                  )}
+                  {/* Only for a change that stored what it replaced. A deleted
+                      book is not "undone" here — 回收站 is the way back from
+                      that, and two undos for one action would be one too
+                      many. */}
+                  {call.undoable && (
+                    <GlassButton
+                      size="sm"
+                      variant="subtle"
+                      disabled={undoPending}
+                      onClick={() => onUndo(call.callId)}
+                    >
+                      撤销
+                    </GlassButton>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </section>
   );
 }
 
@@ -708,6 +878,9 @@ function OperationsSection() {
 export interface OperationCall {
   callId: string;
   at: number;
+  /** What the call did: `update_metadata`, `fill_metadata`, `trash`, … The
+   *  filter chips read this, so a new action is one line here and one there. */
+  action: string;
   summary: string;
   source: string;
   title: string | null;
@@ -729,6 +902,7 @@ export function groupByCall(rows: Operation[]): OperationCall[] {
     out.push({
       callId: row.callId,
       at: row.at,
+      action: row.action,
       summary: row.summary,
       source: row.source,
       title: row.bookTitle,
@@ -739,13 +913,68 @@ export function groupByCall(rows: Operation[]): OperationCall[] {
   return out;
 }
 
-/** Month and minute: the year is almost always this one, and a log that
- *  repeats it on every line spends the widest column on the least useful part. */
-const WHEN = new Intl.DateTimeFormat("zh-CN", {
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
+/** One day of calls, in the order the list arrived (newest first). */
+export interface OperationDay {
+  /** `2026-10-31` — the grouping key, not something the reader sees. */
+  key: string;
+  /** 「今天」「昨天」「10 月 31 日」. */
+  label: string;
+  /** 今天 or 昨天: the two days a reader opens this page to look at, and the
+   *  two that start expanded. */
+  recent: boolean;
+  calls: OperationCall[];
+}
+
+/**
+ * Splits the calls into days.
+ *
+ * The list is already newest-first, so a single walk is enough — no map, no
+ * re-sort. Grouping is what makes a week of fills readable: thirty rows under
+ * one heading say 「那天下午你整理过书架」, the same thirty rows with a date on
+ * each say nothing new thirty times.
+ */
+export function groupByDay(calls: OperationCall[]): OperationDay[] {
+  const out: OperationDay[] = [];
+  for (const call of calls) {
+    const key = dayKeyOf(new Date(call.at * 1000));
+    const last = out.at(-1);
+    if (last?.key === key) {
+      last.calls.push(call);
+      continue;
+    }
+    const { label, recent } = dayLabel(call.at);
+    out.push({ key, label, recent, calls: [call] });
+  }
+  return out;
+}
+
+function dayKeyOf(date: Date): string {
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+/** 「今天」 and 「昨天」 are how a reader thinks about the last two days; past
+ *  that the date is the only honest label. The year appears only when it is not
+ *  this one — a log that says 2026 on every heading spends the widest part of
+ *  the line on the part that never changes. */
+function dayLabel(at: number): { label: string; recent: boolean } {
+  const date = new Date(at * 1000);
+  const now = new Date();
+  if (dayKeyOf(date) === dayKeyOf(now)) return { label: "今天", recent: true };
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (dayKeyOf(date) === dayKeyOf(yesterday)) return { label: "昨天", recent: true };
+  const label = date.getFullYear() === now.getFullYear() ? DAY.format(date) : DAY_FULL.format(date);
+  return { label, recent: false };
+}
+
+/** Only the clock: the day is the group heading now. */
+const TIME = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" });
+
+const DAY = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" });
+const DAY_FULL = new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric",
+  month: "long",
+  day: "numeric",
 });
 
 function ResetSection() {
