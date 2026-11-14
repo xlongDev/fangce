@@ -132,4 +132,53 @@ printf '%s\n' \
 | ./src-tauri/target/debug/fangce --mcp
 ```
 
-默认应当看到五个工具；加 `FANGCE_MCP_PERMISSIONS=all` 是八个。在真实书库上跑过：985 本书，`search_books` 返回 `total: 985`，`search_book_content` 返回带 `offset` 的片段。
+默认应当看到五个工具；加 `FANGCE_MCP_PERMISSIONS=all` 是八个。在真实书库上跑过（当时 985 本）：`search_books` 返回 `total: 985`，`search_book_content` 返回带 `offset` 的片段。
+
+## 真实客户端验收（2026-11-13）
+
+计划 §1 的 Phase 3 出口要求「至少一个真实 MCP 客户端连上」。上面那节是**手工喂 JSON**，不是客户端——`printf` 不会做握手、不校验 `protocolVersion`、不发 `notifications/initialized`，也不会检查 `inputSchema`。这次用官方 SDK 的客户端跑完整流程。
+
+| 项            | 结果                                                                                                                     |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 客户端        | `@modelcontextprotocol/sdk` **1.32.2** 的 `Client` + `StdioClientTransport`（装在 `/tmp`，不进项目依赖）                 |
+| 服务端 / 数据 | `src-tauri/target/debug/fangce --mcp`，连**默认数据目录的真实书库**（1.7 GB），权限为默认 `read,search`                  |
+| 握手          | `initialize` / `notifications/initialized` / `ping` 全过；`serverInfo` = `fangce 0.1.0`、`capabilities` = `{"tools":{}}` |
+| `tools/list`  | 5 个只读工具，逐个校验 `inputSchema.type === "object"`                                                                   |
+| 查真实书库    | `search_books("三体", limit 2)` 返回真实条目（刘慈欣《超新星纪元》等），不是夹具                                         |
+| 可定位原文    | `search_book_content("宇宙")` 的片段带 `chapterIdx` 与 `offset`——与 `readerPathForHit()` 是同一组参数                    |
+| 越权被拒      | 直接调未授予的 `remove_books` → `isError: true`，正文给出可照抄的 `"read,search,delete"` 配置                            |
+
+**一个容易漏掉的点**：写工具不出现在 `tools/list` 里，但直接 `tools/call` 它并不会绕过权限。`call_tool` 先查 grants 再执行 `tool.run`，越权返回的是**结果错误**（模型能读懂、会话不断），不是协议错误。这次验的就是这条路径。
+
+复现（临时目录，不动项目依赖）：
+
+```sh
+mkdir -p /tmp/fangce-mcp-check && cd /tmp/fangce-mcp-check
+npm init -y && npm i @modelcontextprotocol/sdk@1.32.2
+```
+
+```js
+// acceptance.mjs
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
+const transport = new StdioClientTransport({
+  command: "/abs/path/to/src-tauri/target/debug/fangce",
+  args: ["--mcp"],
+});
+const client = new Client({ name: "fangce-acceptance", version: "1.0.0" });
+await client.connect(transport);
+await client.ping();
+const { tools } = await client.listTools();
+console.log(tools.map((t) => `${t.name}:${t.inputSchema.type}`).join("\n"));
+const shelf = await client.callTool({
+  name: "search_books",
+  arguments: { query: "三体", limit: 2 },
+});
+console.log(shelf.content[0].text.slice(0, 200));
+const denied = await client.callTool({ name: "remove_books", arguments: { ids: ["__never__"] } });
+console.log("denied:", denied.isError, denied.content[0].text);
+await client.close();
+```
+
+> 🔴 复现时**不要**设 `FANGCE_MCP_PERMISSIONS=all`：那会打开写工具。验收只该读真实书库。

@@ -8,6 +8,7 @@ pub mod annotation;
 pub mod backup;
 pub mod book;
 pub mod bookmark;
+pub mod calibre;
 pub mod clippings;
 pub mod conversation;
 pub mod dictionary;

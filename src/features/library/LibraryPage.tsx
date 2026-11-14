@@ -95,6 +95,11 @@ const DuplicateDialog = lazy(() =>
     default: m.DuplicateDialog,
   })),
 );
+/** Also a hand-opened whole-shelf report; it needs a directory picker, which
+ *  the web build never loads. */
+const CalibreDialog = lazy(() =>
+  import("@/features/library/CalibreDialog").then((m) => ({ default: m.CalibreDialog })),
+);
 /** Only ever shown after a successful import, so it is worth its own chunk. */
 const MigrateEditionDialog = lazy(() =>
   import("@/features/library/MigrateEditionDialog").then((m) => ({
@@ -249,6 +254,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   /** The import-clippings sheet; a file picker plus a preview lives inside. */
   const [clippingsOpen, setClippingsOpen] = useState(false);
   const [duplicatesOpen, setDuplicatesOpen] = useState(false);
+  const [calibreOpen, setCalibreOpen] = useState(false);
   /** True when the import button was clicked in the browser, which has no backend. */
   /** Books the label sheet is open for; one book = edit, several = add. */
   const [tagTarget, setTagTarget] = useState<BookSummary[] | null>(null);
@@ -497,6 +503,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         onClippings={() => setClippingsOpen(true)}
         onSource={() => setSourceOpen(true)}
         onImport={startImport}
+        onCalibre={() => setCalibreOpen(true)}
         trashEmpty={!stats.data || stats.data.trashed === 0}
         onEmptyTrash={() => setEmptyTrashOpen(true)}
       />
@@ -637,6 +644,14 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
               update({ search: term });
             }}
           />
+        </Suspense>
+      )}
+
+      {calibreOpen && (
+        <Suspense fallback={null}>
+          {/* Unmounted when closed: the picked path belongs to this visit, not
+              to the next one. */}
+          <CalibreDialog open onClose={() => setCalibreOpen(false)} />
         </Suspense>
       )}
 

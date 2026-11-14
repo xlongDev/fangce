@@ -506,6 +506,14 @@ export const commands = {
    *  book twice. It never merges or deletes; which copy to keep is the reader's.
    */
   libraryDuplicates: () => __TAURI_INVOKE<DuplicateGroup[]>("library_duplicates"),
+  /**
+   *  `calibre.scan` — never opens the directory for writing.
+   *
+   *  A scan reads one directory per book, so a large library is thousands of
+   *  filesystem calls. Blocking the UI thread for that would freeze the shelf;
+   *  `book.import` uses the same `spawn_blocking` shape.
+   */
+  calibreScan: (path: string) => __TAURI_INVOKE<CalibreScan>("calibre_scan", { path }),
   /**  `book.setFavorite` */
   bookSetFavorite: (id: string, favorite: boolean) =>
     __TAURI_INVOKE<null>("book_set_favorite", { id, favorite }),
@@ -1396,6 +1404,65 @@ export type Bookmark = {
   fraction: number | null;
   label: string;
   createdAt: number;
+};
+
+export type CalibreBook = {
+  id: number;
+  title: string;
+  authors: string[];
+  /**  Upper-case format names as Calibre stores them (`EPUB`, `AZW3`, ...). */
+  formats: string[];
+  /**
+   *  Relative book directory under the library root. Empty when Calibre's
+   *  value was missing or tried to climb out of the library.
+   */
+  path: string;
+  /**  Real files on disk, in preference order. Empty means "cannot import". */
+  files: CalibreFile[];
+  /**  Whatever optional metadata this library happened to have. */
+  metadata: CalibreMetadata;
+};
+
+export type CalibreFile = {
+  /**  Absolute, canonical path, verified to stay under the library root. */
+  path: string;
+  /**  `BookFormat::as_str()` — the same stable value the shelf stores. */
+  format: string;
+};
+
+/**
+ *  Optional metadata. The four tables in [`REQUIRED`] are what makes a file a
+ *  Calibre library; everything here is a bonus that older, trimmed or
+ *  hand-built libraries may not carry. Values stay as text on purpose: this
+ *  slice reports what a library *has*, it does not guess how a rating or a
+ *  date is typed across Calibre versions.
+ */
+export type CalibreMetadata = {
+  publisher: string | null;
+  tags: string[];
+  series: string | null;
+  rating: string | null;
+  language: string | null;
+  description: string | null;
+  isbn: string | null;
+  published: string | null;
+};
+
+export type CalibreScan = {
+  root: string;
+  dbPath: string;
+  books: CalibreBook[];
+  /**
+   *  Per-book problems that did not abort the scan. A library with a few odd
+   *  rows is still a library; silently dropping those books is the bug.
+   */
+  warnings: string[];
+  /**
+   *  Which optional metadata fields this library actually exposed. What is
+   *  *absent* is just as useful: it tells the reader (and us) that a table
+   *  or column differs from what 方册 expected, instead of silently losing it.
+   */
+  metadataFields: string[];
 };
 
 /**

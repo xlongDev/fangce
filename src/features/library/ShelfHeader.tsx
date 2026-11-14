@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { FilePlus, Globe, Highlighter, Trash } from "@phosphor-icons/react";
+import { FilePlus, FolderOpen, Globe, Highlighter, Trash } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { DURATION, EASE_OUT, useMotion } from "@/lib/motion";
@@ -44,6 +44,7 @@ export function ShelfHeader({
   onClippings,
   onSource,
   onImport,
+  onCalibre,
   trashEmpty = true,
   onEmptyTrash,
 }: {
@@ -53,6 +54,9 @@ export function ShelfHeader({
   onClippings: () => void;
   onSource: () => void;
   onImport: () => void;
+  /** Scan an external Calibre library. Icon-only: the three worded buttons
+   *  already wrap on a narrow pane, and this one starts a read-only report. */
+  onCalibre: () => void;
   /** Whether the bin is empty — the only state in which 清空回收站 has nothing
    *  to do. Defaults to `true` so a caller that forgets cannot offer a button
    *  that empties a bin it never measured. */
@@ -96,6 +100,15 @@ export function ShelfHeader({
             </GlassButton>
           ) : (
             <>
+              <button
+                type="button"
+                aria-label="扫描 Calibre 书库"
+                title="扫描 Calibre 书库（只读，不导入）"
+                onClick={onCalibre}
+                className="glass text-text-2 hover:text-text-1 focus-visible:focus-ring press inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md"
+              >
+                <FolderOpen size={15} />
+              </button>
               <GlassButton size="md" onClick={onClippings}>
                 <Highlighter size={15} /> 导入摘录
               </GlassButton>
