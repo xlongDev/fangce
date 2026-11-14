@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { open as pickDirectory } from "@tauri-apps/plugin-dialog";
 import { CaretDown, FolderOpen, Warning } from "@phosphor-icons/react";
 
@@ -10,7 +10,14 @@ import { failedMessage, summarizeOutcomes } from "@/features/library/format";
 import { useImportBooks } from "@/hooks/useLibrary";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { isDesktopRuntime, ipc, onImportProgress } from "@/lib/ipc";
-import type { CalibreBook, CalibreFile, CalibreScan, ImportOutcome } from "@/types/ipc";
+import type {
+  CalibreApplyResult,
+  CalibreBook,
+  CalibreFile,
+  CalibreFill,
+  CalibreScan,
+  ImportOutcome,
+} from "@/types/ipc";
 
 /** A page of a 1,500-book library is still a page. Rendering all of it into a
  *  640px sheet would cost more than the selection is worth. */
@@ -25,6 +32,10 @@ const AUTO_FORMAT = "";
  *  what it has — that is the diagnosis a real library brings back. */
 const OPTIONAL_FIELDS = ["ISBN", "出版日期", "出版社", "标签", "系列", "评分", "语言", "简介"];
 
+/** The tooltip is a preview; the scan now keeps the whole description so the
+ *  write half can put it on the book. Cut it here, not in the scan. */
+const TOOLTIP_DESCRIPTION_LIMIT = 200;
+
 /**
  * 「Calibre 书库扫描」 — read-only scan, then an opt-in import.
  *
@@ -33,6 +44,12 @@ const OPTIONAL_FIELDS = ["ISBN", "出版日期", "出版社", "标签", "系列"
  * so hash-dedupe cannot see them). Rust orders `files` with EPUB first; the
  * reader may pick a preferred format for the whole batch, and books that lack
  * it fall back to their own first file (the sheet says how many).
+ *
+ * A successful import can also copy the scanned metadata onto the new rows.
+ * `bookImport` answers with one id per path, which is the only link back to
+ * the scan: pairing by path is what keeps a book's fields on the right book.
+ * Rust fills blanks only, so a reader's own edits and a second (duplicate)
+ * import are both safe.
  *
  * The browser build has no filesystem, so it says so instead of answering
  * with an empty list — the same rule the duplicate report follows.
@@ -47,9 +64,13 @@ export function CalibreDialog({ open, onClose }: { open: boolean; onClose: () =>
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
   const [preferredFormat, setPreferredFormat] = useState(AUTO_FORMAT);
+  const [withMetadata, setWithMetadata] = useState(true);
+  const [applied, setApplied] = useState<CalibreApplyResult | null>(null);
+  const [metadataError, setMetadataError] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const importing = useRef(false);
   const importBooks = useImportBooks();
+  const queryClient = useQueryClient();
 
   // `book://import-progress` is global. Only count it while our own batch is
   // in flight, so an unrelated import cannot paint a number in this sheet.
@@ -84,6 +105,8 @@ export function CalibreDialog({ open, onClose }: { open: boolean; onClose: () =>
         setQuery("");
         setPage(0);
         setPreferredFormat(AUTO_FORMAT);
+        setApplied(null);
+        setMetadataError(null);
       }
     } catch (error) {
       setPickError(error instanceof Error ? error.message : String(error));
@@ -140,6 +163,8 @@ export function CalibreDialog({ open, onClose }: { open: boolean; onClose: () =>
   const run = async () => {
     if (paths.length === 0) return;
     setImportError(null);
+    setMetadataError(null);
+    setApplied(null);
     importing.current = true;
     setProgress({ done: 0, total: paths.length });
     try {
@@ -149,6 +174,37 @@ export function CalibreDialog({ open, onClose }: { open: boolean; onClose: () =>
       // would catch it, but "N 本已在书架上" is a confusing answer to a
       // button the reader believes they pressed once.
       setSelected(new Set());
+
+      if (!withMetadata) return;
+      // `bookImport` answers in the order it was given paths, and echoes the
+      // path on every outcome. That path is the only link back to the scan;
+      // a failed file has no id and must not be written to.
+      const byPath = new Map<string, CalibreBook>();
+      for (const book of chosen) {
+        const path = fileFor(book)?.path;
+        if (path) byPath.set(path, book);
+      }
+      const fills: CalibreFill[] = result.flatMap((outcome) => {
+        if (outcome.kind === "failed") return [];
+        const book = byPath.get(outcome.path);
+        return book ? [{ bookId: outcome.id, authors: book.authors, metadata: book.metadata }] : [];
+      });
+      if (fills.length === 0) return;
+
+      try {
+        const writeResult = await ipc.calibreApplyMetadata(fills);
+        setApplied(writeResult);
+        // `useImportBooks` invalidated the shelf when the import settled,
+        // which is *before* this write. Refetch so the new fields show up,
+        // and refresh the tag bar and the operation log we just wrote to.
+        for (const key of [["books"], ["tags"], ["operations"]]) {
+          void queryClient.invalidateQueries({ queryKey: key });
+        }
+      } catch (error) {
+        // The books are on the shelf already. Say the import succeeded and
+        // only the metadata step failed, rather than reporting a failed batch.
+        setMetadataError(error instanceof Error ? error.message : String(error));
+      }
     } catch (error) {
       setImportError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -187,6 +243,11 @@ export function CalibreDialog({ open, onClose }: { open: boolean; onClose: () =>
           {pickError && <p className="text-danger mt-3 text-[13px] leading-relaxed">{pickError}</p>}
           {importError && (
             <p className="text-danger mt-3 text-[13px] leading-relaxed">{importError}</p>
+          )}
+          {metadataError && (
+            <p className="text-danger mt-3 text-[13px] leading-relaxed">
+              书已导入，但元数据没写进去：{metadataError}
+            </p>
           )}
           {!root && !pickError && (
             <p className="text-text-2 mt-3 text-[13px] leading-relaxed">
@@ -244,9 +305,11 @@ export function CalibreDialog({ open, onClose }: { open: boolean; onClose: () =>
               outcomes={outcomes}
               preferredFormat={preferredFormat}
               fallbackCount={fallbackCount}
+              withMetadata={withMetadata}
               fileFor={fileFor}
               onToggle={toggle}
               onToggleAll={toggleAll}
+              onWithMetadataChange={setWithMetadata}
             />
           )}
 
@@ -276,8 +339,18 @@ export function CalibreDialog({ open, onClose }: { open: boolean; onClose: () =>
             正在导入 {progress.done} / {progress.total}…
           </p>
         )}
-        {!progress && outcomes && (
-          <p className="text-text-2 mr-auto text-[13px]">{summarizeOutcomes(outcomes)}</p>
+        {!progress && (outcomes || applied) && (
+          <p className="text-text-2 mr-auto text-[13px]">
+            {outcomes && summarizeOutcomes(outcomes)}
+            {outcomes && applied && " · "}
+            {applied && (
+              <>
+                已补全 {applied.written} 本
+                {applied.tagged > 0 && ` · 加了 ${applied.tagged} 本的标签`}
+                {applied.skippedTags > 0 && ` · 跳过 ${applied.skippedTags} 个过长标签`}
+              </>
+            )}
+          </p>
         )}
         {isDesktopRuntime && scan && (
           <GlassButton
@@ -332,7 +405,8 @@ function metadataSummary(book: CalibreBook): string {
     m.rating && `评分 ${m.rating}`,
     m.language && `语言 ${m.language}`,
     m.tags.length > 0 && `标签 ${m.tags.join("、")}`,
-    m.description && `简介 ${m.description}`,
+    m.description &&
+      `简介 ${m.description.slice(0, TOOLTIP_DESCRIPTION_LIMIT)}${m.description.length > TOOLTIP_DESCRIPTION_LIMIT ? "…" : ""}`,
   ]
     .filter((part): part is string => Boolean(part))
     .join(" · ");
@@ -349,9 +423,11 @@ function Report({
   outcomes,
   preferredFormat,
   fallbackCount,
+  withMetadata,
   fileFor,
   onToggle,
   onToggleAll,
+  onWithMetadataChange,
 }: {
   scan: CalibreScan;
   shown: CalibreBook[];
@@ -363,9 +439,11 @@ function Report({
   outcomes: ImportOutcome[] | null;
   preferredFormat: string;
   fallbackCount: number;
+  withMetadata: boolean;
   fileFor: (book: CalibreBook) => CalibreFile | undefined;
   onToggle: (id: number) => void;
   onToggleAll: () => void;
+  onWithMetadataChange: (next: boolean) => void;
 }) {
   const formats = new Map<string, number>();
   for (const book of scan.books) {
@@ -400,8 +478,22 @@ function Report({
         扩展元数据：
         {found.length > 0 ? `读到 ${found.join("、")}` : "这个库没有可识别的扩展字段"}
         {absent.length > 0 && ` · 没有 ${absent.join("、")}（表或列名不同，已跳过）`}
-        。这里只预览，还没有写进方册。
+        。扫描本身只预览，还没有写进方册。
       </p>
+
+      {scan.books.length > 0 && (
+        <label className="text-text-2 flex items-start gap-2 text-xs leading-relaxed">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={withMetadata}
+            onChange={(event) => onWithMetadataChange(event.target.checked)}
+          />
+          <span>
+            导入时补进方册：只填空、不覆盖已有值，标签只追加。系列和评分与方册的字段语义不同，不写入；字段改动可在操作日志撤销。
+          </span>
+        </label>
+      )}
 
       {scan.warnings.length > 0 && (
         <ul className="space-y-1">

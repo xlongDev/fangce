@@ -36,7 +36,7 @@ pub mod metadata;
 pub mod ops;
 
 pub use assist::{conversation, graph, guide, ocr, summary};
-pub use io::{calibre, characters, clippings, export, import, pack, source};
+pub use io::{calibre, calibre_fill, characters, clippings, export, import, pack, source};
 pub use lookup::{dictionaries, markup, mdict, stardict};
 pub use marks::{annotations, bookmarks, migrate};
 pub use retrieval::{rag, search};

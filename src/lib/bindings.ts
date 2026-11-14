@@ -514,6 +514,16 @@ export const commands = {
    *  `book.import` uses the same `spawn_blocking` shape.
    */
   calibreScan: (path: string) => __TAURI_INVOKE<CalibreScan>("calibre_scan", { path }),
+  /**
+   *  `calibre.applyMetadata` — copies the scanned metadata onto imported books.
+   *
+   *  Synchronous like `metadata.apply`: this is one transaction over rows that
+   *  are already in the library, not disk IO over a thousand directories. The
+   *  caller sends only the outcomes that succeeded; failed paths have no id and
+   *  must not be written to.
+   */
+  calibreApplyMetadata: (fills: CalibreFill[]) =>
+    __TAURI_INVOKE<CalibreApplyResult>("calibre_apply_metadata", { fills }),
   /**  `book.setFavorite` */
   bookSetFavorite: (id: string, favorite: boolean) =>
     __TAURI_INVOKE<null>("book_set_favorite", { id, favorite }),
@@ -1406,6 +1416,18 @@ export type Bookmark = {
   createdAt: number;
 };
 
+export type CalibreApplyResult = {
+  /**  Rows whose metadata was rewritten. Books deleted in between are skipped. */
+  written: number;
+  /**  Books that received at least one tag. */
+  tagged: number;
+  /**
+   *  Tag names dropped for exceeding `tags::MAX_TAG_CHARS`. Reported rather
+   *  than silently lost, and never fatal to the batch.
+   */
+  skippedTags: number;
+};
+
 export type CalibreBook = {
   id: number;
   title: string;
@@ -1428,6 +1450,20 @@ export type CalibreFile = {
   path: string;
   /**  `BookFormat::as_str()` — the same stable value the shelf stores. */
   format: string;
+};
+
+/**
+ *  One imported book and the Calibre record it came from.
+ *
+ *  `book_id` is what `book_import` returned, not Calibre's numeric id — the
+ *  write targets 方册's row, and a `Duplicate` outcome points at an existing
+ *  one. `authors` is separate from `metadata` because on the scan it is a
+ *  first-class field of `CalibreBook`, not one of the optional probes.
+ */
+export type CalibreFill = {
+  bookId: string;
+  authors: string[];
+  metadata: CalibreMetadata;
 };
 
 /**

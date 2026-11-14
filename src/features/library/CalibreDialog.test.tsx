@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   calibreScan: vi.fn(),
+  applyMetadata: vi.fn(),
   importBooks: vi.fn(),
   pickDirectory: vi.fn(),
   onImportProgress: vi.fn(),
@@ -15,7 +16,7 @@ vi.mock("@/lib/ipc", () => ({
   get isDesktopRuntime() {
     return mocks.desktop;
   },
-  ipc: { calibreScan: mocks.calibreScan },
+  ipc: { calibreScan: mocks.calibreScan, calibreApplyMetadata: mocks.applyMetadata },
   onImportProgress: mocks.onImportProgress,
 }));
 vi.mock("@/hooks/useLibrary", () => ({
@@ -77,6 +78,15 @@ const scan: CalibreScan = {
   warnings: ["有 1 本书在 data 表里没有格式文件记录（仍会从书库目录找文件）。"],
 };
 
+/** `noUncheckedIndexedAccess` makes `scan.books[0]` possibly undefined. The
+ *  fixture always has both books; name it once rather than asserting in every
+ *  expectation. */
+function bookAt(index: number): CalibreBook {
+  const book = scan.books[index];
+  if (!book) throw new Error(`fixture has no book ${index}`);
+  return book;
+}
+
 const imported: ImportOutcome = { kind: "imported", path: EPUB, id: "a", title: "三体" };
 
 /** 150 books: enough to cross the 100-row page boundary. */
@@ -107,13 +117,25 @@ async function pick(path: string | null = "/books/calibre") {
 beforeEach(() => {
   mocks.desktop = true;
   mocks.calibreScan.mockReset();
+  mocks.applyMetadata.mockReset();
   mocks.pickDirectory.mockReset();
   mocks.importBooks.mockReset();
   mocks.onImportProgress.mockReset();
   mocks.onImportProgress.mockImplementation(() => Promise.resolve(undefined));
   mocks.calibreScan.mockResolvedValue(scan);
   mocks.importBooks.mockResolvedValue([imported]);
+  mocks.applyMetadata.mockResolvedValue({ written: 1, tagged: 1, skippedTags: 0 });
 });
+
+/** Pick a directory, wait for the scan, select one book and import it. */
+async function importOne() {
+  open();
+  await pick();
+  await waitFor(() => expect(screen.getByText(/共 2 本/)).toBeInTheDocument());
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("checkbox", { name: "选择《三体》" }));
+  await user.click(screen.getByRole("button", { name: "导入选中的 1 本" }));
+}
 
 describe("the Calibre scan", () => {
   it("says so in the browser build instead of answering with an empty list", () => {
@@ -375,5 +397,115 @@ describe("the Calibre scan", () => {
     await pick();
 
     await waitFor(() => expect(screen.getByText(/一本书都没有/)).toBeInTheDocument());
+  });
+
+  describe("copying the scanned metadata onto the shelf", () => {
+    it("pairs each successful outcome with its scanned book by path", async () => {
+      await importOne();
+
+      await waitFor(() =>
+        expect(mocks.applyMetadata).toHaveBeenCalledWith([
+          { bookId: "a", authors: ["刘慈欣"], metadata: bookAt(0).metadata },
+        ]),
+      );
+      expect(await screen.findByText(/已补全 1 本/)).toBeInTheDocument();
+    });
+
+    it("can be turned off, leaving the import itself untouched", async () => {
+      open();
+      await pick();
+      await waitFor(() => expect(screen.getByText(/共 2 本/)).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("checkbox", { name: /导入时补进方册/ }));
+      await user.click(screen.getByRole("checkbox", { name: "选择《三体》" }));
+      await user.click(screen.getByRole("button", { name: "导入选中的 1 本" }));
+
+      await waitFor(() => expect(mocks.importBooks).toHaveBeenCalledWith({ paths: [EPUB] }));
+      expect(mocks.applyMetadata).not.toHaveBeenCalled();
+      expect(screen.queryByText(/已补全/)).not.toBeInTheDocument();
+    });
+
+    it("writes duplicates but never a file that failed to import", async () => {
+      mocks.importBooks.mockResolvedValue([
+        { kind: "failed", path: EPUB, message: "文件损坏" },
+        { kind: "duplicate", path: LIVING, id: "b", title: "活着" },
+      ]);
+      open();
+      await pick();
+      await waitFor(() => expect(screen.getByText(/共 2 本/)).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("checkbox", { name: /选中筛选结果中可导入的 2 本/ }));
+      await user.click(screen.getByRole("button", { name: "导入选中的 2 本" }));
+
+      await waitFor(() =>
+        expect(mocks.applyMetadata).toHaveBeenCalledWith([
+          { bookId: "b", authors: ["余华"], metadata: bookAt(1).metadata },
+        ]),
+      );
+    });
+
+    it("uses the preferred format's path when pairing, not the first file", async () => {
+      open();
+      await pick();
+      await waitFor(() => expect(screen.getByText(/共 2 本/)).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.selectOptions(screen.getByRole("combobox", { name: "优先导入格式" }), "azw3");
+      mocks.importBooks.mockResolvedValue([
+        { kind: "imported", path: AZW3, id: "a", title: "三体" },
+      ]);
+      await user.click(screen.getByRole("checkbox", { name: "选择《三体》" }));
+      await user.click(screen.getByRole("button", { name: "导入选中的 1 本" }));
+
+      await waitFor(() => expect(mocks.applyMetadata).toHaveBeenCalledTimes(1));
+      expect(mocks.applyMetadata.mock.calls[0]?.[0]?.[0]?.bookId).toBe("a");
+    });
+
+    it("says the books landed when only the metadata write failed", async () => {
+      mocks.applyMetadata.mockRejectedValue(new Error("数据库忙"));
+      await importOne();
+
+      expect(await screen.findByText(/书已导入，但元数据没写进去：数据库忙/)).toBeInTheDocument();
+      expect(screen.getByText(/1 本已导入/)).toBeInTheDocument();
+    });
+
+    it("reports tagged books and skipped overlong tags", async () => {
+      mocks.applyMetadata.mockResolvedValue({ written: 1, tagged: 1, skippedTags: 2 });
+      await importOne();
+
+      expect(await screen.findByText(/加了 1 本的标签 · 跳过 2 个过长标签/)).toBeInTheDocument();
+    });
+
+    it("does not write metadata when the whole import failed", async () => {
+      mocks.importBooks.mockRejectedValue(new Error("导入器崩了"));
+      await importOne();
+
+      expect(await screen.findByText("导入器崩了")).toBeInTheDocument();
+      expect(mocks.applyMetadata).not.toHaveBeenCalled();
+    });
+
+    it("keeps the full description in the data and cuts only the tooltip", async () => {
+      const long = "简介文本".repeat(100);
+      mocks.calibreScan.mockResolvedValue({
+        ...scan,
+        books: [{ ...scan.books[0], metadata: { ...emptyMetadata, description: long } }],
+      });
+      open();
+      await pick();
+      await waitFor(() => expect(screen.getByText(/共 1 本/)).toBeInTheDocument());
+
+      const tooltip = screen.getByTitle(/简介/).getAttribute("title") ?? "";
+      expect(tooltip).toContain("…");
+      expect(tooltip.length).toBeLessThan(long.length);
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("checkbox", { name: "选择《三体》" }));
+      await user.click(screen.getByRole("button", { name: "导入选中的 1 本" }));
+      await waitFor(() => expect(mocks.applyMetadata).toHaveBeenCalledTimes(1));
+      // The value handed to the backend is the uncut one; the tooltip is a view.
+      expect(mocks.applyMetadata.mock.calls[0]?.[0]?.[0]?.metadata.description).toBe(long);
+    });
   });
 });

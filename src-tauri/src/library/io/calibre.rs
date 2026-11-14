@@ -20,12 +20,19 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path};
 
 use rusqlite::{Connection, OpenFlags, types::Value};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::document::BookFormat;
 use crate::error::{AppError, AppResult};
 
 const DB_FILE: &str = "metadata.db";
+
+/// Calibre's `comments.text` can be a whole essay. The scan keeps as much as
+/// 方册's own edit sheet accepts, because 5.4's write half copies this value
+/// into the book's description; the preview tooltip does its own, shorter cut.
+/// Truncating here would have silently written a 200-character blurb into the
+/// library.
+const DESCRIPTION_LIMIT: usize = 4000;
 
 /// The tables and the *columns we use*, not Calibre's full schema.
 const REQUIRED: &[(&str, &[&str])] = &[
@@ -46,7 +53,7 @@ const FORMAT_ORDER: &[&str] =
 /// hand-built libraries may not carry. Values stay as text on purpose: this
 /// slice reports what a library *has*, it does not guess how a rating or a
 /// date is typed across Calibre versions.
-#[derive(specta::Type, Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CalibreMetadata {
     pub publisher: Option<String>,
@@ -316,7 +323,7 @@ fn read_optional(conn: &Connection, books: &mut [CalibreBook]) -> Vec<String> {
     if let Some(values) = linked(conn, "SELECT book, text FROM comments") {
         for book in books.iter_mut() {
             book.metadata.description = first(&values, book.id)
-                .map(|html| plain_text(&html).chars().take(200).collect::<String>());
+                .map(|html| plain_text(&html).chars().take(DESCRIPTION_LIMIT).collect::<String>());
         }
         found.push("简介".into());
     }

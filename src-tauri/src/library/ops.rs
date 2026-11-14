@@ -48,6 +48,11 @@ impl Source {
 /// than no button.
 pub struct Before {
     pub book_id: String,
+    /// `update_metadata` replaces the author list wholesale. A Calibre fill
+    /// writes it when the imported file had none, so the before-image has to
+    /// remember it too — otherwise undo restores nine fields and reports
+    /// success with the tenth still changed.
+    pub authors: Vec<String>,
     pub subtitle: Option<String>,
     pub publisher: Option<String>,
     pub language: Option<String>,
@@ -77,6 +82,7 @@ pub fn snapshot(
         .map(|path| path.to_string_lossy().into_owned());
     Ok(Before {
         book_id: book.id.clone(),
+        authors: book.authors.clone(),
         subtitle: book.subtitle.clone(),
         publisher: book.publisher.clone(),
         language: book.language.clone(),
@@ -167,10 +173,12 @@ pub fn record_before(
             // v3 adds `cover_previous` — the picture moved aside before a
             // replacement. v2 rows stay undoable: they simply cannot put a
             // replaced cover back, and `restore` falls back to keeping the
-            // current one.
+            // current one. `authors` is another optional key at v3: older
+            // rows lack it, and `restore` keeps the current list for those.
             let detail = json!({
                 "v": 3,
                 "before": {
+                    "authors": before.authors,
                     "subtitle": before.subtitle,
                     "publisher": before.publisher,
                     "language": before.language,
@@ -336,13 +344,23 @@ fn restore(
     let number = |key: &str| fields.get(key).and_then(Value::as_f64);
     let count = |key: &str| fields.get(key).and_then(Value::as_i64).map(|value| value as i32);
 
+    let authors = fields
+        .get("authors")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()
+        })
+        // Rows written before the key existed cannot say what the list was.
+        // Those writes never changed it, so keeping the current one is honest.
+        .unwrap_or_else(|| book.authors.clone());
+
     // A whole record: `update_metadata` writes every column, and `None` here
     // means 「it had no value」, which is exactly what the log recorded.
     let patch = crate::library::repository::BookMetadataPatch {
-        // The title and the author list are not things a fill writes, so they
-        // are carried through untouched rather than restored.
+        // The title is not something a fill writes, so it is carried through
+        // untouched rather than restored.
         title: book.title,
-        authors: book.authors,
+        authors,
         subtitle: text("subtitle"),
         publisher: text("publisher"),
         language: text("language"),
@@ -719,6 +737,41 @@ mod tests {
 
         let book = library.with(|conn| repository::get(conn, "b1")).expect("get").expect("b1");
         assert_eq!(book.publisher.as_deref(), Some("重庆出版社"), "一个字段都没被改");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `authors` joined the before-image after v3 shipped. An old v3 row has
+    /// no such key; it must stay undoable for the nine fields it *does* know,
+    /// and leave the author list alone rather than reading a missing key as
+    /// "the book had no authors".
+    #[test]
+    fn a_v3_row_without_authors_keeps_the_current_list() {
+        let (dir, library) = harness("ops-v3-no-authors");
+        library
+            .with(|conn| {
+                conn.execute_batch(
+                    "INSERT INTO authors (id, name, sort_name) VALUES ('a1', '曹雪芹', '曹雪芹');
+                     INSERT INTO book_authors (book_id, author_id, position) VALUES ('b1', 'a1', 0);",
+                )?;
+                conn.execute(
+                    "INSERT INTO operations \
+                     (at, source, action, book_id, book_title, summary, detail, call_id) \
+                     VALUES (1, 'ui', 'fill_metadata', 'b1', '三体', '旧 v3', ?1, 'no-authors')",
+                    params![r#"{"v":3,"before":{"subtitle":null,"publisher":"重庆出版社","language":"zh","isbn":null,"published_year":null,"description":null,"rating":null,"rating_count":null,"rating_source":null,"douban_url":null,"cover_path":null,"cover_previous":null}}"#],
+                )?;
+                Ok(())
+            })
+            .expect("write an old-format row");
+
+        let rows = library.with(|conn| list(conn, 10)).expect("list");
+        assert!(rows[0].undoable, "v3 行照样能撤销");
+        let outcome =
+            library.with_tx(|tx| undo(tx, "no-authors", &covers_dir(&dir))).expect("undo");
+        assert_eq!(outcome, Undo { undone: 1, skipped: 0 });
+
+        let book = library.with(|conn| repository::get(conn, "b1")).expect("get").expect("b1");
+        assert_eq!(book.authors, vec!["曹雪芹".to_string()], "不知道旧值就别动作者");
+        assert_eq!(book.publisher.as_deref(), Some("重庆出版社"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
