@@ -29,6 +29,9 @@ import type { SourceRules } from "@/types/ipc";
 const BLANK_SOURCE: SourceRules = {
   name: "新书源",
   baseUrl: "https://",
+  // Hosts beyond `baseUrl` this source may call. Empty means "the base host
+  // only" — the rule data cannot send the reader anywhere else.
+  permissions: { hosts: [] },
   search: {
     url: "/search?kw={{keyword}}",
     list: "$.data.list[*]",
@@ -46,6 +49,17 @@ const BLANK_SOURCE: SourceRules = {
 interface Editor {
   id: string | null;
   text: string;
+}
+
+/** `https://example.com/api` → `example.com`; a half-typed base URL is shown
+ *  as typed rather than swallowing the row. */
+function hostOf(baseUrl: string | undefined): string {
+  if (!baseUrl) return "未填地址";
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return baseUrl;
+  }
 }
 
 export function SourceDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -349,10 +363,18 @@ function ManageView({
           >
             <button
               type="button"
-              className="press focus-visible:focus-ring text-text-1 min-w-0 flex-1 truncate text-left text-[13.5px] font-medium"
+              className="press focus-visible:focus-ring text-text-1 min-w-0 flex-1 text-left"
               onClick={() => onEdit(entry)}
             >
-              {entry.name}
+              <span className="block truncate text-[13.5px] font-medium">{entry.name}</span>
+              {/* The host a source talks to is the one thing about it worth
+                  knowing before running it; the rest is rules. */}
+              <span className="text-text-3 block truncate text-[11.5px]">
+                {hostOf(entry.def.baseUrl)}
+                {entry.def.permissions?.hosts?.length
+                  ? `，另可访问 ${entry.def.permissions.hosts.join("、")}`
+                  : ""}
+              </span>
             </button>
             <GlassButton
               size="sm"
@@ -405,6 +427,12 @@ function SourceEditor({ editor, onBack }: { editor: Editor; onBack: () => void }
         aria-label="书源规则"
         className="glass text-text-1 focus-visible:border-accent focus-visible:bg-surface-2 h-72 w-full rounded-xl border p-3 font-mono text-[12px] leading-relaxed outline-none"
       />
+      {/* Backend refuses anything outside this list, redirects included, so
+          saying it here is what keeps the error from being a surprise. */}
+      <p className="text-text-3 text-[11.5px] leading-relaxed">
+        书源只能访问 baseUrl 的主机。接口返回的绝对地址若在别的主机（CDN、第二个域名），把它加进
+        permissions.hosts。
+      </p>
       {error && <p className="text-text-2 text-[12.5px] break-all">{error}</p>}
       <div className="flex items-center justify-end gap-2">
         <GlassButton size="md" onClick={onBack}>

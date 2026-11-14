@@ -12,6 +12,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use crate::net::Hosts;
 
 /// How one search call finds books.
 #[derive(specta::Type, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -56,12 +57,26 @@ pub struct ContentRules {
     pub paragraphs: String,
 }
 
+/// What one source is allowed to reach beyond its own host.
+///
+/// A source is a plugin, in the only sense this app needs: a definition
+/// somebody else wrote, running with the reader's network. The base host is
+/// implicit; anything else has to be declared here.
+#[derive(specta::Type, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Permissions {
+    /// Extra hosts the rule data may name — a CDN, a second API host. Hosts
+    /// only: no scheme, no path, no `*`.
+    pub hosts: Vec<String>,
+}
+
 /// One complete source definition, stored as JSON in the `sources` table.
 #[derive(specta::Type, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SourceDef {
     pub name: String,
     pub base_url: String,
+    pub permissions: Permissions,
     pub search: SearchRules,
     pub book: BookRules,
     pub chapters: ChapterRules,
@@ -69,6 +84,11 @@ pub struct SourceDef {
 }
 
 impl SourceDef {
+    /// The hosts this definition may talk to, base host included.
+    pub fn hosts(&self) -> AppResult<Hosts> {
+        Hosts::new(&self.base_url, &self.permissions.hosts)
+    }
+
     /// Fails fast on a definition that cannot possibly work, before any
     /// network round trip.
     pub fn validate(&self) -> AppResult<()> {
@@ -79,7 +99,7 @@ impl SourceDef {
         // is where every search term they type ends up. Same rule as the AI
         // endpoint, same code (`crate::net`) — the opener plugin's URL
         // allowlist does not reach a reqwest request made from here.
-        crate::net::secure_base_url(&self.base_url, "书源地址")?;
+        self.hosts()?;
         for (label, rule) in [
             ("搜索地址", &self.search.url),
             ("搜索结果列表", &self.search.list),
@@ -261,7 +281,8 @@ fn search_url(def: &SourceDef, keyword: &str) -> String {
 // Fetches
 // ---------------------------------------------------------------------------
 
-async fn fetch_json(client: &reqwest::Client, url: &str) -> AppResult<Value> {
+async fn fetch_json(client: &reqwest::Client, hosts: &Hosts, url: &str) -> AppResult<Value> {
+    let url = hosts.check(url)?;
     let response = client
         .get(url)
         .send()
@@ -275,9 +296,10 @@ async fn fetch_json(client: &reqwest::Client, url: &str) -> AppResult<Value> {
 pub async fn search(
     client: &reqwest::Client,
     def: &SourceDef,
+    hosts: &Hosts,
     keyword: &str,
 ) -> AppResult<Vec<SourceBook>> {
-    let value = fetch_json(client, &search_url(def, keyword)).await?;
+    let value = fetch_json(client, hosts, &search_url(def, keyword)).await?;
     let items = evaluate(&def.search.list, &value)?;
     let mut books = Vec::with_capacity(items.len());
     for item in &items {
@@ -300,9 +322,10 @@ pub async fn search(
 pub async fn book_detail(
     client: &reqwest::Client,
     def: &SourceDef,
+    hosts: &Hosts,
     book_url: &str,
 ) -> AppResult<SourceBook> {
-    let value = fetch_json(client, &full_url(&def.base_url, book_url)).await?;
+    let value = fetch_json(client, hosts, &full_url(&def.base_url, book_url)).await?;
     Ok(SourceBook {
         title: first_text(&def.book.title, &value)?,
         author: optional_text(&def.book.author, &value),
@@ -316,9 +339,10 @@ pub async fn book_detail(
 pub async fn chapters(
     client: &reqwest::Client,
     def: &SourceDef,
+    hosts: &Hosts,
     book_url: &str,
 ) -> AppResult<Vec<SourceChapter>> {
-    let value = fetch_json(client, &full_url(&def.base_url, book_url)).await?;
+    let value = fetch_json(client, hosts, &full_url(&def.base_url, book_url)).await?;
     let items = evaluate(&def.chapters.list, &value)?;
     let mut list = Vec::with_capacity(items.len());
     for item in &items {
@@ -336,9 +360,10 @@ pub async fn chapters(
 pub async fn content(
     client: &reqwest::Client,
     def: &SourceDef,
+    hosts: &Hosts,
     chapter_url: &str,
 ) -> AppResult<Vec<String>> {
-    let value = fetch_json(client, chapter_url).await?;
+    let value = fetch_json(client, hosts, chapter_url).await?;
     paragraphs_of(&def.content.paragraphs, &value)
 }
 
@@ -386,19 +411,20 @@ pub async fn download(
     layout: &crate::db::Layout,
     client: &reqwest::Client,
     def: &SourceDef,
+    hosts: &Hosts,
     book_url: &str,
     on_progress: &mut (impl FnMut(usize, usize, &str) + Send),
 ) -> AppResult<Downloaded> {
-    let detail = book_detail(client, def, book_url).await?;
+    let detail = book_detail(client, def, hosts, book_url).await?;
     let title = if detail.title.trim().is_empty() { "未命名".into() } else { detail.title };
-    let list = chapters(client, def, book_url).await?;
+    let list = chapters(client, def, hosts, book_url).await?;
     if list.is_empty() {
         return Err(AppError::Message("章节列表为空，检查章节列表规则".into()));
     }
 
     let mut collected: Vec<(String, Vec<String>)> = Vec::with_capacity(list.len());
     for (index, chapter) in list.iter().enumerate() {
-        let paragraphs = match content(client, def, &chapter.url).await {
+        let paragraphs = match content(client, def, hosts, &chapter.url).await {
             Ok(paragraphs) if !paragraphs.is_empty() => paragraphs,
             Ok(_) => vec![format!("（本章内容为空：{}）", chapter.title)],
             Err(err) => {
@@ -528,6 +554,7 @@ mod tests {
         SourceDef {
             name: "示例源".into(),
             base_url: "https://example.com/api".into(),
+            permissions: Permissions::default(),
             search: SearchRules {
                 url: "/search?kw={{keyword}}".into(),
                 list: "$.data.list[*]".into(),
@@ -663,6 +690,49 @@ mod tests {
         broken.content.paragraphs = "  ".into();
         let err = broken.validate().expect_err("missing content rule");
         assert!(err.to_string().contains("正文"), "{err}");
+    }
+
+    /// Rows written before `permissions` existed have no such key; they must
+    /// keep loading rather than turning every saved source into a broken one.
+    #[test]
+    fn an_old_definition_without_permissions_still_loads() {
+        let json = json!({
+            "name": "老书源",
+            "baseUrl": "https://example.com/api",
+            "search": { "url": "/s?kw={{keyword}}", "list": "$.l[*]", "title": "$.t", "bookUrl": "$.u" },
+            "book": { "title": "$.t" },
+            "chapters": { "list": "$.c[*]", "title": "$.t", "url": "$.u" },
+            "content": { "paragraphs": "$.p" }
+        });
+        let def: SourceDef = serde_json::from_value(json).expect("旧行照常加载");
+        assert!(def.permissions.hosts.is_empty());
+        assert!(def.validate().is_ok());
+    }
+
+    /// A source is somebody else's definition running on the reader's
+    /// network: the base host is the only one it gets for free.
+    #[test]
+    fn a_url_nobody_granted_is_refused() {
+        let def = def();
+        let hosts = def.hosts().expect("hosts");
+        assert!(hosts.check(&full_url(&def.base_url, "/ch/1")).is_ok(), "base 主机始终允许");
+
+        let err = hosts
+            .check(&full_url(&def.base_url, "https://cdn.example.net/1"))
+            .expect_err("未声明的主机");
+        assert!(err.to_string().contains("cdn.example.net"), "{err}");
+
+        let mut declared = def.clone();
+        declared.permissions.hosts = vec!["cdn.example.net".into()];
+        assert!(declared.hosts().expect("hosts").check("https://cdn.example.net/1").is_ok());
+    }
+
+    #[test]
+    fn a_wildcard_permission_is_refused_at_save_time() {
+        let mut loose = def();
+        loose.permissions.hosts = vec!["*".into()];
+        let err = loose.validate().expect_err("wildcard");
+        assert!(err.to_string().contains("主机名不合法"), "{err}");
     }
 
     #[test]

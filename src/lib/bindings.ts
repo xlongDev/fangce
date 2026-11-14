@@ -892,6 +892,16 @@ export const commands = {
    */
   bookSetTags: (ids: string[], add: string[], remove: string[]) =>
     __TAURI_INVOKE<null>("book_set_tags", { ids, add, remove }),
+  /**
+   *  `tag.suggest` — asks the model for labels on the selected books that have
+   *  none, and returns suggestions only. Nothing is written here.
+   */
+  tagSuggest: (ids: string[]) => __TAURI_INVOKE<TagRun>("tag_suggest", { ids }),
+  /**
+   *  `tag.suggestApply` — writes what the reader kept. Sources the log line as
+   *  `ai`, so 操作记录 says where these labels came from.
+   */
+  tagSuggestApply: (items: TagAdd[]) => __TAURI_INVOKE<number>("tag_suggest_apply", { items }),
   /**  `tts.edgeVoices` — every voice the service offers. */
   ttsEdgeVoices: () => __TAURI_INVOKE<EdgeVoice[]>("tts_edge_voices"),
   /**
@@ -2190,6 +2200,21 @@ export type Outcome = {
   unknownTitles: string[];
 };
 
+/**
+ *  What one source is allowed to reach beyond its own host.
+ *
+ *  A source is a plugin, in the only sense this app needs: a definition
+ *  somebody else wrote, running with the reader's network. The base host is
+ *  implicit; anything else has to be declared here.
+ */
+export type Permissions = {
+  /**
+   *  Extra hosts the rule data may name — a CDN, a second API host. Hosts
+   *  only: no scheme, no path, no `*`.
+   */
+  hosts?: string[];
+};
+
 /**  What one book would gain, or why it would gain nothing. */
 export type Proposal = {
   bookId: string;
@@ -2380,6 +2405,7 @@ export type SourceChapter = {
 export type SourceDef = {
   name?: string;
   baseUrl?: string;
+  permissions?: Permissions;
   search?: SearchRules;
   book?: BookRules;
   chapters?: ChapterRules;
@@ -2431,6 +2457,13 @@ export type StoredMessage_Serialize = {
   createdAt: number;
 };
 
+/**  一本书的建议，带着书名是为了预览里不用再查一次库。 */
+export type Suggestion = {
+  bookId: string;
+  title: string;
+  tags: string[];
+};
+
 /**  What one build produced. */
 export type SummaryBuildReport = {
   written: number;
@@ -2479,6 +2512,28 @@ export type SystemInfo = {
   dataDir: string;
   /**  Milliseconds since process start. */
   uptimeMs: number;
+};
+
+/**  读者确认之后要写进去的一行。 */
+export type TagAdd = {
+  bookId: string;
+  tags: string[];
+};
+
+/**
+ *  What one suggestion run produced.
+ *
+ *  `failedBatches` is reported rather than folded into a shorter list: a run
+ *  where two of three batches never answered is not the same answer as 「这些书
+ *  看不出题材」, and the reader would fix the wrong thing.
+ */
+export type TagRun = {
+  suggestions: Suggestion[];
+  /**  参与这次建议的书（选中且还没有标签的）。 */
+  considered: number;
+  /**  没有标签但超出这一轮上限的，留给下一次。 */
+  remaining: number;
+  failedBatches: number;
 };
 
 /**  One tag and how many books carry it. */

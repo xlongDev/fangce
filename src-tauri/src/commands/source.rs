@@ -60,9 +60,8 @@ pub async fn source_search(
     if keyword.is_empty() {
         return Err(AppError::InvalidArgument("先输入要搜索的书名或作者".into()));
     }
-    let def = def_of(&state, &source_id)?;
-    let client = super::ai::client()?;
-    source::search(&client, &def, &keyword).await
+    let (def, hosts, client) = prepare(&state, &source_id)?;
+    source::search(&client, &def, &hosts, &keyword).await
 }
 
 /// `source.book` — book detail for a URL from the search results.
@@ -73,9 +72,8 @@ pub async fn source_book(
     source_id: String,
     book_url: String,
 ) -> AppResult<SourceBook> {
-    let def = def_of(&state, &source_id)?;
-    let client = super::ai::client()?;
-    source::book_detail(&client, &def, &book_url).await
+    let (def, hosts, client) = prepare(&state, &source_id)?;
+    source::book_detail(&client, &def, &hosts, &book_url).await
 }
 
 /// `source.chapters`
@@ -86,9 +84,8 @@ pub async fn source_chapters(
     source_id: String,
     book_url: String,
 ) -> AppResult<Vec<SourceChapter>> {
-    let def = def_of(&state, &source_id)?;
-    let client = super::ai::client()?;
-    source::chapters(&client, &def, &book_url).await
+    let (def, hosts, client) = prepare(&state, &source_id)?;
+    source::chapters(&client, &def, &hosts, &book_url).await
 }
 
 /// `source.download` — walks the whole book into the library and reports
@@ -102,22 +99,41 @@ pub async fn source_download(
     source_id: String,
     book_url: String,
 ) -> AppResult<source::Downloaded> {
-    let def = def_of(&state, &source_id)?;
-    let client = super::ai::client()?;
+    let (def, hosts, client) = prepare(&state, &source_id)?;
     let library = state.library.clone();
     let layout = state.layout.clone();
-    source::download(&library, &layout, &client, &def, &book_url, &mut |done, total, chapter| {
-        // A closed window just stops listening; dropping the event is correct.
-        let _ = app.emit(
-            SOURCE_DOWNLOAD_EVENT,
-            SourceProgress { done, total, chapter: chapter.to_string() },
-        );
-    })
+    source::download(
+        &library,
+        &layout,
+        &client,
+        &def,
+        &hosts,
+        &book_url,
+        &mut |done, total, chapter| {
+            // A closed window just stops listening; dropping the event is correct.
+            let _ = app.emit(
+                SOURCE_DOWNLOAD_EVENT,
+                SourceProgress { done, total, chapter: chapter.to_string() },
+            );
+        },
+    )
     .await
 }
 
 fn def_of(state: &State<'_, AppState>, source_id: &str) -> AppResult<SourceDef> {
     source::load(&state.library, source_id)
+}
+
+/// Everything one call needs: the definition, the hosts it may reach, and a
+/// client whose redirects are held to the same list.
+fn prepare(
+    state: &State<'_, AppState>,
+    source_id: &str,
+) -> AppResult<(SourceDef, crate::net::Hosts, reqwest::Client)> {
+    let def = def_of(state, source_id)?;
+    let hosts = def.hosts()?;
+    let client = super::ai::client_restricted(hosts.redirect_policy())?;
+    Ok((def, hosts, client))
 }
 
 #[cfg(test)]

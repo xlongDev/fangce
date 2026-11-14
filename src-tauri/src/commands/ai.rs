@@ -806,11 +806,23 @@ fn book_context_for(library: &Library, book_id: &str) -> Option<String> {
 }
 
 pub(crate) fn client() -> AppResult<reqwest::Client> {
-    reqwest::Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .read_timeout(READ_TIMEOUT)
-        .build()
-        .map_err(|err| AppError::Message(format!("无法创建 HTTP 客户端：{err}")))
+    build(None)
+}
+
+/// The same client, following only the redirects `policy` allows. A book
+/// source's host allowlist has to hold for every hop: a 302 is an address
+/// chosen by somebody other than the reader.
+pub(crate) fn client_restricted(policy: reqwest::redirect::Policy) -> AppResult<reqwest::Client> {
+    build(Some(policy))
+}
+
+fn build(redirect: Option<reqwest::redirect::Policy>) -> AppResult<reqwest::Client> {
+    let mut builder =
+        reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT).read_timeout(READ_TIMEOUT);
+    if let Some(policy) = redirect {
+        builder = builder.redirect(policy);
+    }
+    builder.build().map_err(|err| AppError::Message(format!("无法创建 HTTP 客户端：{err}")))
 }
 
 pub(crate) fn emit(app: &AppHandle, delta: AiDelta) {
