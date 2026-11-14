@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { demoEnabled, demoTags } from "@/lib/demo";
 import { ipc } from "@/lib/ipc";
 import type { TagAdd, TagRun, TagSummary } from "@/types/ipc";
 
@@ -15,7 +16,9 @@ import type { TagAdd, TagRun, TagSummary } from "@/types/ipc";
 export function useTags() {
   return useQuery<TagSummary[]>({
     queryKey: ["tags"],
-    queryFn: () => ipc.tagList(),
+    // `?demo=1&tags=1` in a browser: the tag page is made of these counts and
+    // has no other fixture. See `demoTags`.
+    queryFn: () => (demoEnabled() ? Promise.resolve(demoTags) : ipc.tagList()),
     staleTime: 30_000,
   });
 }

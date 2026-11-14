@@ -10,6 +10,7 @@ import type {
   LibraryStats,
   Proposal,
   ReadingStats,
+  TagSummary,
 } from "@/types/ipc";
 
 /**
@@ -91,6 +92,62 @@ function epubEnabled(): boolean {
 /** The fixture EPUB's book id, so the foliate fixture table can answer for it. */
 const EPUB_ID = "demo-epub";
 
+/**
+ * `?demo=1&tags=1` also labels the sample shelf.
+ *
+ * The tag page has no fixture of its own, so in a browser it could only ever
+ * show its empty state — which made the one view built entirely from tag counts
+ * the one view that could not be looked at. Opt-in rather than always on: the
+ * labels put a line under every card, and the shelf specs count card heights.
+ */
+function tagsEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("tags") === "1";
+}
+
+/**
+ * Three tiers on purpose. A shelf where every label is equally common has no
+ * hierarchy to draw, and the bands, the folds and the frequency bars on the tag
+ * page are all functions of how uneven the distribution is.
+ */
+const TAG_POOL = [
+  // common — a third of the shelf each
+  "长篇小说",
+  "美国文学",
+  "纪实文学",
+  // ordinary
+  "短篇小说集",
+  "经典名著",
+  "俄国文学",
+  "日本文学",
+  "心理学",
+  "科普",
+  // the tail
+  "社会学",
+  "哲学",
+  "历史",
+  "随笔",
+  "传记",
+  "诗歌",
+  "戏剧",
+  "商业",
+  "医学",
+  "艺术",
+  "数学",
+];
+
+/** Labels for one book, never repeated within it — a duplicate would count twice. */
+function tagsOf(index: number): string[] {
+  const out = [TAG_POOL[index % 3]!];
+  const ordinary = TAG_POOL[3 + (index % 6)]!;
+  if (!out.includes(ordinary)) out.push(ordinary);
+  if (index % 3 === 0) {
+    const tail = TAG_POOL[9 + (index % 11)]!;
+    if (!out.includes(tail)) out.push(tail);
+  }
+  return out;
+}
+
 const COUNT = shelfSize();
 
 /** 2023-11-14, fixed rather than `Date.now()` so the fixture is the same shelf
@@ -143,7 +200,7 @@ const shelf: BookSummary[] = Array.from({ length: COUNT }, (_, index) => ({
   ratingSource: null,
   doubanUrl: null,
   authors: AUTHORS[index % AUTHORS.length]!,
-  tags: index === 1 ? ["小说", "悬疑"] : [],
+  tags: tagsEnabled() ? tagsOf(index) : index === 1 ? ["小说", "悬疑"] : [],
 })) as unknown as BookSummary[];
 
 const epubBook: BookSummary = {
@@ -276,6 +333,24 @@ export const demoBooks: BookSummary[] = [
   ...(pdfEnabled() ? [pdfBook] : []),
   ...(kindleEnabled() ? [kindleBook] : []),
 ];
+
+/**
+ * The sample shelf's labels, counted the way `tag.list` counts them.
+ *
+ * Derived from the books rather than written out, so `?books=84` produces a
+ * shelf whose bands and folds are the same shape a real library has. Off unless
+ * `tags=1`: see [`tagsEnabled`].
+ */
+export const demoTags: TagSummary[] = (() => {
+  if (!tagsEnabled()) return [];
+  const counts = new Map<string, number>();
+  for (const book of demoBooks) {
+    for (const name of book.tags) counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([name, count]) => ({ id: `demo-tag-${name}`, name, count }))
+    .toSorted((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+})();
 
 /**
  * Where each foliate fixture's bytes live, keyed by the id the shelf hands out.
