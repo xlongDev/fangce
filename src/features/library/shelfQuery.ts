@@ -93,7 +93,7 @@ export function buildBookQuery(
  * The label the 标签 shelf should actually filter by.
  *
  * A remembered label can be deleted while the shelf is away. Deleting it from
- * the bar clears the choice itself (`TagBar` calls `onSelect(null)`), but a
+ * the bar clears the choice itself (`TagIndex` calls `onSelect(null)`), but a
  * label removed from its last book somewhere else does not — and a filter
  * pointing at a label that no longer exists is an empty grid with no chip lit
  * to explain it, which reads as a broken shelf rather than as a filter. So an

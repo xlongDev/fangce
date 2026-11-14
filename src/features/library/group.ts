@@ -8,7 +8,7 @@ import type { BookFormat, BookSummary } from "@/types/ipc";
  * id, so a book shown under two headings would be two tiles with one key. Which
  * is why labels are *not* a dimension: a book with two tags belongs under both,
  * and the shelf cannot draw that. Browsing one label is what the 标签 shelf and
- * its `TagBar` are for.
+ * its `TagIndex` are for.
  */
 export type ShelfGroup = "none" | "progress" | "author" | "format";
 

@@ -53,7 +53,7 @@ describe("resolveTagFilter", () => {
   });
 
   it("falls back to the whole shelf when the remembered label is gone", () => {
-    // The case `TagBar` cannot see: deleting from the bar clears the choice,
+    // The case `TagIndex` cannot see: deleting from the rail clears the choice,
     // but a label removed from its last book elsewhere does not — and the
     // filter would then point at nothing.
     expect(resolveTagFilter("历史", known)).toBeNull();

@@ -42,6 +42,14 @@
      finishes the rest in 193ms, so it lands. Kept as its own token rather than
      re-tuning `--ease-out`, which every fade and page turn in the app reads. */
   --ease-land: cubic-bezier(0.33, 1, 0.68, 1);
+  /* The only curve in here that goes *past* its target and comes back. It
+     carries the tag rail's highlight from one row to the next: the pane
+     overshoots the row it is heading for and settles into it, which is what
+     makes the movement read as an object rather than a repaint. Measured on the
+     real rail: 1.26 overshoots 3.5px over a 160px travel and settles. 1.56 was
+     5.5px, which read as a wobble on a 32px row; 1.2 was 2px, which stops
+     reading as a spring at all. */
+  --ease-spring: cubic-bezier(0.34, 1.26, 0.64, 1);
 
   --shadow-glass: 0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 18px 50px rgba(0, 0, 0, 0.45);
   --shadow-panel: 0 30px 80px rgba(0, 0, 0, 0.55);
@@ -613,6 +621,7 @@ html[data-input="pointer"] :focus-within {
    carrying both kept the colour fade and silently lost the transform, which
    turned the press into an instant jump. `press` now names everything it
    needs, and an element must not carry a second `transition-*` utility. */
+
 @utility press {
   transition-property:
     transform, color, background-color, border-color, outline-color, text-decoration-color, fill,

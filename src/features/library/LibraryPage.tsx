@@ -24,7 +24,7 @@ import { ShelfBatchBar } from "@/features/library/ShelfBatchBar";
 import { ShelfGrid } from "@/features/library/ShelfGrid";
 import { ShelfHeader } from "@/features/library/ShelfHeader";
 import { ShelfToolbar } from "@/features/library/ShelfToolbar";
-import { TagBar } from "@/features/library/TagBar";
+import { TagIndex } from "@/features/library/TagIndex";
 import { DeleteBookDialog } from "@/features/library/BookCard";
 import { pickContinueReading, sortOptions, titleForFilter } from "@/features/library/format";
 import { shelfSections } from "@/features/library/group";
@@ -491,6 +491,100 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
     void pickPaths().then(importPaths);
   };
 
+  /** The shelf's own column: toolbar, grid. It is one node because the tag
+   *  shelf puts it beside the index, and every other view keeps it alone. */
+  const shelfBody = (
+    <>
+      {filter === "all" && <ContinueReadingCard book={continueReading} onOpen={openBook} />}
+
+      <ShelfToolbar
+        search={search}
+        onSearch={(value) => update({ search: value })}
+        sort={sort}
+        onSort={(value) => update({ sort: value })}
+        descending={descending}
+        onDescending={(next) => update({ descending: next })}
+        group={group}
+        onGroup={(value) => update({ group: value })}
+        filters={filters}
+        onFilters={setFilters}
+        facets={facets.data}
+        layout={shelfLayout}
+        onLayout={setShelfLayout}
+        managing={selection.managing}
+        onToggleManaging={() => (selection.managing ? selection.exit() : selection.begin())}
+        onDuplicates={() => setDuplicatesOpen(true)}
+        trash={trashed}
+        stats={stats.data}
+      />
+
+      {/* The headings live inside the grid, as lines of it — see
+            `ShelfGrid`. This used to be a sticky bar floating over the top,
+            which cost the window nothing but could only ever name one pile at
+            a time: the boundary had to go past before the reader learned what
+            was under it. A heading in the flow shows the pile *and* where the
+            next one starts, which is the thing a reader is actually looking
+            for, and it was worth rewriting the window's arithmetic for. */}
+
+      <ShelfGrid
+        pending={books.isPending}
+        error={books.error}
+        search={search}
+        list={cards}
+        shelf={shelf}
+        gridRef={gridRef}
+        layout={shelfLayout}
+        tagRow={tagRow}
+        collapsed={collapsed}
+        onToggleSection={toggleSection}
+        managing={selection.managing}
+        selected={selection.selected}
+        busy={
+          setFavorite.isPending ||
+          setFavorites.isPending ||
+          deleteBook.isPending ||
+          deleteBooks.isPending ||
+          restoreBooks.isPending ||
+          purgeBooks.isPending
+        }
+        onToggleSelect={selection.toggle}
+        onOpen={openBook}
+        onToggleFavorite={(target) =>
+          setFavorite.mutate({ id: target.id, favorite: !target.favorite })
+        }
+        onAskDelete={setDeleteTarget}
+        onAskExport={setExportTarget}
+        // No dialog: a download has nothing to choose. Failures surface
+        // through the shared mutation toast, like every other write.
+        onExportFile={(target) => exportFile.mutate({ id: target.id })}
+        onEditTags={(target) => setTagTarget([target])}
+        onEditMeta={setMetaTarget}
+        onImport={startImport}
+        // The shelf's own way out of a search that matched nothing. It used
+        // to be the 13px ✕ inside the search field and nothing else, so a
+        // reader who searched from the 标签 shelf had no visible next step.
+        onClearSearch={() => update({ search: "" })}
+        // The shelf's own way out of a failed read. The query is the only
+        // thing that can be wrong here, and re-asking it is the one action
+        // that can help — a reader cannot retry by reloading, this is a
+        // desktop app with no address bar.
+        onRetry={() => void books.refetch()}
+        empty={
+          trashed ? (
+            // A bin with nothing in it must not offer the import button the
+            // empty shelf does: books do not arrive here, they are sent here.
+            <EmptyState
+              className="min-h-[40vh]"
+              icon={<Trash size={26} weight="duotone" />}
+              title="回收站是空的"
+              description="删掉的书会先放在这里，可以随时恢复。"
+            />
+          ) : undefined
+        }
+      />
+    </>
+  );
+
   const m = useMotion();
   const picking = importBooks.isPending || importFiles.isPending;
 
@@ -513,101 +607,25 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         data-shelf-scroller
         className="flex-1 overflow-y-auto px-8 pb-8 [overflow-anchor:none]"
       >
-        {filter === "all" && <ContinueReadingCard book={continueReading} onOpen={openBook} />}
-
-        {filter === "tags" && (
-          <TagBar
-            tags={tags.data ?? []}
-            selected={tag}
-            onSelect={(next) => update({ tag: next })}
-          />
-        )}
-
-        <ShelfToolbar
-          search={search}
-          onSearch={(value) => update({ search: value })}
-          sort={sort}
-          onSort={(value) => update({ sort: value })}
-          descending={descending}
-          onDescending={(next) => update({ descending: next })}
-          group={group}
-          onGroup={(value) => update({ group: value })}
-          filters={filters}
-          onFilters={setFilters}
-          facets={facets.data}
-          layout={shelfLayout}
-          onLayout={setShelfLayout}
-          managing={selection.managing}
-          onToggleManaging={() => (selection.managing ? selection.exit() : selection.begin())}
-          onDuplicates={() => setDuplicatesOpen(true)}
-          trash={trashed}
-          stats={stats.data}
-        />
-
-        {/* The headings live inside the grid, as lines of it — see
-            `ShelfGrid`. This used to be a sticky bar floating over the top,
-            which cost the window nothing but could only ever name one pile at
-            a time: the boundary had to go past before the reader learned what
-            was under it. A heading in the flow shows the pile *and* where the
-            next one starts, which is the thing a reader is actually looking
-            for, and it was worth rewriting the window's arithmetic for. */}
-
-        <ShelfGrid
-          pending={books.isPending}
-          error={books.error}
-          search={search}
-          list={cards}
-          shelf={shelf}
-          gridRef={gridRef}
-          layout={shelfLayout}
-          tagRow={tagRow}
-          collapsed={collapsed}
-          onToggleSection={toggleSection}
-          managing={selection.managing}
-          selected={selection.selected}
-          busy={
-            setFavorite.isPending ||
-            setFavorites.isPending ||
-            deleteBook.isPending ||
-            deleteBooks.isPending ||
-            restoreBooks.isPending ||
-            purgeBooks.isPending
-          }
-          onToggleSelect={selection.toggle}
-          onOpen={openBook}
-          onToggleFavorite={(target) =>
-            setFavorite.mutate({ id: target.id, favorite: !target.favorite })
-          }
-          onAskDelete={setDeleteTarget}
-          onAskExport={setExportTarget}
-          // No dialog: a download has nothing to choose. Failures surface
-          // through the shared mutation toast, like every other write.
-          onExportFile={(target) => exportFile.mutate({ id: target.id })}
-          onEditTags={(target) => setTagTarget([target])}
-          onEditMeta={setMetaTarget}
-          onImport={startImport}
-          // The shelf's own way out of a search that matched nothing. It used
-          // to be the 13px ✕ inside the search field and nothing else, so a
-          // reader who searched from the 标签 shelf had no visible next step.
-          onClearSearch={() => update({ search: "" })}
-          // The shelf's own way out of a failed read. The query is the only
-          // thing that can be wrong here, and re-asking it is the one action
-          // that can help — a reader cannot retry by reloading, this is a
-          // desktop app with no address bar.
-          onRetry={() => void books.refetch()}
-          empty={
-            trashed ? (
-              // A bin with nothing in it must not offer the import button the
-              // empty shelf does: books do not arrive here, they are sent here.
-              <EmptyState
-                className="min-h-[40vh]"
-                icon={<Trash size={26} weight="duotone" />}
-                title="回收站是空的"
-                description="删掉的书会先放在这里，可以随时恢复。"
+        {/* 标签不是筛选项，是这张页的目录：目录在左、书在右，而不是目录压在书上。
+            别的视图没有目录，保持原来的一列。 */}
+        {filter === "tags" ? (
+          // 容器查询而不是断点：窗口 1080 里侧栏和留白吃掉 250，内容区只剩 850，
+          // `lg:`（1024）会把这里误判成窄窗。
+          <div className="@container">
+            <div className="flex flex-col gap-5 @min-[720px]:grid @min-[720px]:grid-cols-[minmax(190px,232px)_minmax(0,1fr)] @min-[720px]:items-start @min-[720px]:gap-7">
+              <TagIndex
+                tags={tags.data ?? []}
+                selected={tag}
+                onSelect={(next) => update({ tag: next })}
+                total={stats.data?.total}
               />
-            ) : undefined
-          }
-        />
+              <div className="min-w-0">{shelfBody}</div>
+            </div>
+          </div>
+        ) : (
+          shelfBody
+        )}
       </div>
 
       <ShelfBatchBar

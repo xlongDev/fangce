@@ -3,7 +3,7 @@ import { Funnel } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassMenu } from "@/components/glass/menu";
-import { CHIP, CHIP_IDLE, CHIP_ON } from "@/features/library/TagBar";
+import { CHIP, CHIP_IDLE, CHIP_ON } from "@/features/library/chip";
 import {
   NO_FILTERS,
   activeFilterCount,
