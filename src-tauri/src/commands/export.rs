@@ -1,4 +1,5 @@
-//! `notes.*` commands: getting highlights and notes back out of the app.
+//! Commands that get things out of the app as a file: `notes.*` for
+//! highlights, `library.export_catalog` for the shelf's inventory.
 
 use std::path::PathBuf;
 
@@ -62,6 +63,28 @@ pub async fn notes_export_selection(
             PathBuf::from(&path).as_path(),
             flavor.as_deref(),
         )
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("导出任务被中断：{err}")))?
+}
+
+/// `library.export_catalog` — writes the shelf as a CSV book list to `path`.
+///
+/// Desktop only: the save panel hands over a path, and the file lands where the
+/// reader pointed. The web build has no filesystem and no local implementation
+/// of this command, so its settings page does not offer the row. A browser
+/// download would mean a second renderer for the same columns, which is not
+/// worth it for a one-way list the backup archive already covers.
+///
+/// `spawn_blocking` because it reads the whole shelf and writes a file. The
+/// count comes back so the row can say how many books were listed rather than
+/// just 「已导出」 — an empty shelf is a different outcome from a filled one.
+#[tauri::command]
+#[specta::specta]
+pub async fn library_export_catalog(state: State<'_, AppState>, path: String) -> AppResult<usize> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::library::catalog::export(&library, PathBuf::from(&path).as_path())
     })
     .await
     .map_err(|err| AppError::Message(format!("导出任务被中断：{err}")))?

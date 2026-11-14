@@ -51,7 +51,7 @@ pub const OBSIDIAN: &str = "obsidian";
 
 /// A byte-order mark, so Excel opens the file as UTF-8 instead of guessing the
 /// system code page — the difference between 三体 and mojibake.
-const CSV_BOM: &str = "\u{feff}";
+pub(crate) const CSV_BOM: &str = "\u{feff}";
 
 /// The one column layout both CSV exporters write.
 ///
@@ -425,7 +425,13 @@ fn csv_row(notes: &Notes, entry: &Entry) -> String {
 
 /// Quotes a field when it holds a delimiter, a quote or a line break — the
 /// three things that would otherwise split one row into several.
-fn csv_field(value: &str) -> String {
+///
+/// `pub(crate)` because the shelf catalogue writes CSV too. It deliberately
+/// does *not* guard against spreadsheet formula injection: this file's CSV is
+/// read back by `clippings::parse_csv`, and prefixing a `'` to a highlight
+/// that starts with `=` would change the passage on the round trip. The
+/// catalogue has no reader on this side, so it adds the guard itself.
+pub(crate) fn csv_field(value: &str) -> String {
     match value.contains([',', '"', '\n', '\r']) {
         true => format!("\"{}\"", value.replace('"', "\"\"")),
         false => value.to_string(),

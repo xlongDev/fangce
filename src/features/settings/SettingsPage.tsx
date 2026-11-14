@@ -51,6 +51,7 @@ import {
   type SectionId,
 } from "@/features/settings/section";
 import { AiSection } from "@/features/settings/ai/AiForm";
+import { CatalogExportRow } from "@/features/settings/CatalogExportRow";
 import { KeymapSection } from "@/features/settings/KeymapSection";
 import { SecretsNotice } from "@/features/settings/SecretsNotice";
 import type { Operation, SyncChange, SyncConfig, SyncReport, SyncTally } from "@/types/ipc";
@@ -598,6 +599,7 @@ function BackupSection() {
           {busy === "restore" ? "正在恢复…" : "从备份恢复"}
         </GlassButton>
       </Row>
+      <CatalogExportRow />
       <Actions>
         <Feedback status={status} />
         {dialogError && <Feedback status={{ tone: "bad", text: dialogError }} />}

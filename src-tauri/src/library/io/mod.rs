@@ -2,6 +2,7 @@
 
 pub mod calibre;
 pub mod calibre_fill;
+pub mod catalog;
 pub mod characters;
 pub mod clippings;
 pub mod export;

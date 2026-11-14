@@ -618,6 +618,21 @@ export const commands = {
   notesExportSelection: (bookIds: string[], ids: string[], path: string, flavor: string | null) =>
     __TAURI_INVOKE<null>("notes_export_selection", { bookIds, ids, path, flavor }),
   /**
+   *  `library.export_catalog` — writes the shelf as a CSV book list to `path`.
+   *
+   *  Desktop only: the save panel hands over a path, and the file lands where the
+   *  reader pointed. The web build has no filesystem and no local implementation
+   *  of this command, so its settings page does not offer the row. A browser
+   *  download would mean a second renderer for the same columns, which is not
+   *  worth it for a one-way list the backup archive already covers.
+   *
+   *  `spawn_blocking` because it reads the whole shelf and writes a file. The
+   *  count comes back so the row can say how many books were listed rather than
+   *  just 「已导出」 — an empty shelf is a different outcome from a filled one.
+   */
+  libraryExportCatalog: (path: string) =>
+    __TAURI_INVOKE<number>("library_export_catalog", { path }),
+  /**
    *  `card.save` — writes a rendered share card (PNG bytes) where the reader
    *  pointed.
    *
