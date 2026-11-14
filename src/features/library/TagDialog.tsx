@@ -93,12 +93,17 @@ function TagDialogBody({ single, allTags, busy, onCancel, onSave }: TagDialogBod
       includes(prev, name) ? prev.filter((n) => !same(n, name)) : [...prev, name],
     );
 
-  // Enter commits the draft and keeps focus, so several tags can be typed in a
+  // Enter picks the tag that is already there, or creates the one that is not.
+  // Both keep focus and clear the field, so several tags can be entered in a
   // row without reaching for the mouse.
   const commitDraft = () => {
     const name = draft.trim().replace(/^#+/, "").trim();
     if (!name) return;
-    if (!includes(selected, name)) setSelected((prev) => [...prev, name]);
+    const existing = known.find((candidate) => same(candidate, name));
+    // Typing a name that exists selects it rather than adding a duplicate
+    // spelling — the point of the field being a filter as well as a creator.
+    const picking = existing ?? name;
+    if (!includes(selected, picking)) setSelected((prev) => [...prev, picking]);
     setDraft("");
   };
 
@@ -106,6 +111,21 @@ function TagDialogBody({ single, allTags, busy, onCancel, onSave }: TagDialogBod
   const candidates = [
     ...known,
     ...selected.filter((name) => !known.some((existing) => same(existing, name))),
+  ];
+
+  // What the field doubles as: a filter. With 273 tags in a library, scrolling
+  // to find 心理学 is not a way to work — typing two characters is.
+  const query = draft.trim().toLowerCase();
+  const exact = candidates.some((name) => name.toLowerCase() === query);
+  const visible = query
+    ? candidates.filter((name) => name.toLowerCase().includes(query) || includes(selected, name))
+    : candidates;
+  // Selected first, so a long list never hides what is already ticked. Two
+  // filters rather than a sort: `sort` mutates the array it was derived from,
+  // and the next render reads `candidates` again.
+  const shown = [
+    ...visible.filter((name) => includes(selected, name)),
+    ...visible.filter((name) => !includes(selected, name)),
   ];
 
   return (
@@ -119,18 +139,25 @@ function TagDialogBody({ single, allTags, busy, onCancel, onSave }: TagDialogBod
           event.preventDefault();
           commitDraft();
         }}
-        placeholder="输入标签后回车创建"
+        placeholder="搜索已有标签，或输入新词后回车创建"
         aria-label="新建标签"
         maxLength={MAX_TAG_CHARS}
         autoComplete="off"
       />
 
-      <div className="mt-3 min-h-[42px]">
+      {/* The chips scroll, the field and the buttons do not.
+          
+          A large library has hundreds of tags — 273 in the one this was
+          reported on — and a `flex-wrap` block of them is taller than the
+          window. The dialog is centred, so the overflow went off both ends and
+          the labels past the fold were unreachable. Capping this box is the
+          whole fix: everything below it stays where it is. */}
+      <div className="mt-3 max-h-[46vh] min-h-[42px] overflow-y-auto pr-1">
         {candidates.length === 0 ? (
           <p className="text-text-3 text-xs">书架还没有标签。输入一个词，回车就能创建第一个。</p>
         ) : (
           <div className="flex flex-wrap gap-1.5">
-            {candidates.map((name) => {
+            {shown.map((name) => {
               const on = includes(selected, name);
               const fresh = !includes(known, name);
               return (
@@ -159,6 +186,16 @@ function TagDialogBody({ single, allTags, busy, onCancel, onSave }: TagDialogBod
                 </button>
               );
             })}
+            {/* Nothing matched: the way to make the word the reader typed. */}
+            {query && !exact && (
+              <button
+                type="button"
+                onClick={commitDraft}
+                className="press focus-visible:focus-ring text-text-2 hover:text-text-1 flex items-center gap-1 rounded-full border border-dashed px-2.5 py-1 text-xs"
+              >
+                <span className="text-text-3">＋</span> 创建「{draft.trim()}」
+              </button>
+            )}
           </div>
         )}
       </div>

@@ -26,14 +26,20 @@ pub struct TagSummary {
     pub count: i64,
 }
 
-/// Every tag in use, with its book count, in reading order.
+/// Every tag in use, with its book count, **most-used first**.
+///
+/// Name order was the old rule, and for Chinese it meant codepoint order —
+/// 专 before 世 before 中 — which is an order nobody reads. It also put a tag
+/// used once next to one used fifty times. Frequency first is what makes a
+/// shelf with 273 tags browsable: the top of the list is the vocabulary the
+/// reader actually has, and the long tail is what the search field is for.
 pub fn list(conn: &Connection) -> AppResult<Vec<TagSummary>> {
     let mut stmt = conn.prepare(
         "SELECT t.id, t.name, COUNT(bt.book_id)
            FROM tags t
            JOIN book_tags bt ON bt.tag_id = t.id
           GROUP BY t.id, t.name
-          ORDER BY t.name COLLATE NOCASE",
+          ORDER BY COUNT(bt.book_id) DESC, t.name COLLATE NOCASE",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(TagSummary { id: row.get(0)?, name: row.get(1)?, count: row.get(2)? })
@@ -234,6 +240,19 @@ mod tests {
         assign_on(&mut conn, &["a"], &["科幻"], &[]);
         assign_on(&mut conn, &["a"], &["科幻"], &[]);
         assert_eq!(list(&conn).expect("list")[0].count, 1);
+    }
+
+    /// 用得多的排前面：273 个标签的库里，这才让人第一屏就看见自己的词汇。
+    #[test]
+    fn tags_are_listed_by_how_many_books_carry_them() {
+        let mut conn = seed();
+        assign_on(&mut conn, &["a", "b"], &["长篇小说"], &[]);
+        assign_on(&mut conn, &["a"], &["伦理学"], &[]);
+
+        let listed = list(&conn).expect("list");
+        assert_eq!(listed[0].name, "长篇小说", "{listed:?}");
+        assert_eq!(listed[0].count, 2);
+        assert_eq!(listed[1].name, "伦理学", "只挂一本的排在后面");
     }
 
     #[test]
