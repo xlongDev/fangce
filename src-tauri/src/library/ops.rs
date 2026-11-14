@@ -24,6 +24,9 @@ pub enum Source {
     Ui,
     /// An outside agent, through `fangce --mcp`.
     Mcp,
+    /// The reader accepted an AI suggestion. Worth its own name: 「这些标签是
+    /// 模型起的，我点了确认」和「这些是我自己打的」在看操作记录时是两件事。
+    Ai,
 }
 
 impl Source {
@@ -31,6 +34,7 @@ impl Source {
         match self {
             Source::Ui => "ui",
             Source::Mcp => "mcp",
+            Source::Ai => "ai",
         }
     }
 }
@@ -199,6 +203,23 @@ pub fn record_before(
     write(conn, source, action, summary, &rows)
 }
 
+/// [`record`] with a detail line per book.
+///
+/// For a write whose inverse is not "the old values" but "take these back" —
+/// AI-suggested tags are the first: they only ever add to untagged books, so
+/// putting back the previous state means removing the names this call wrote.
+pub fn record_details(
+    conn: &Connection,
+    source: Source,
+    action: &str,
+    summary: &str,
+    rows: &[(String, Value)],
+) -> AppResult<()> {
+    let rows: Vec<(String, Option<Value>)> =
+        rows.iter().map(|(id, detail)| (id.clone(), Some(detail.clone()))).collect();
+    write(conn, source, action, summary, &rows)
+}
+
 fn write(
     conn: &Connection,
     source: Source,
@@ -262,19 +283,49 @@ pub fn list(conn: &Connection, limit: usize) -> AppResult<Vec<Operation>> {
             book_id: row.get(5)?,
             book_title: row.get(6)?,
             summary: row.get(7)?,
-            undoable: undone == 0 && carries_before(detail.as_deref()),
+            undoable: undone == 0 && can_undo(row.get::<_, String>(3)?.as_str(), detail.as_deref()),
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// Whether this row carries a before-image complete enough to put back.
+/// Whether this row says enough to be put back.
 ///
-/// Rows written before the format carried every field do not: restoring the two
-/// they remember would leave nine changed and report success, so the button is
-/// not offered at all.
-fn carries_before(detail: Option<&str>) -> bool {
-    before_fields(detail).is_some()
+/// Two shapes answer yes. A metadata write carries a before-image; rows written
+/// before that format carried every field do not, and restoring the two they
+/// remember would leave nine changed and report success — so no button at all.
+/// A tag write carries the names it added instead, and its inverse is to remove
+/// exactly those.
+fn can_undo(action: &str, detail: Option<&str>) -> bool {
+    if action == ADDED_TAGS_ACTION {
+        added_tags(detail).is_some()
+    } else {
+        before_fields(detail).is_some()
+    }
+}
+
+/// The action name of a write whose inverse is "remove the names it added".
+pub const ADDED_TAGS_ACTION: &str = "ai_tags";
+
+/// The detail line for one such write.
+pub fn added_tags_detail(tags: &[String]) -> Value {
+    json!({ "v": 1, "tags": tags })
+}
+
+/// The names one row added; `None` when the row is not in this shape.
+fn added_tags(detail: Option<&str>) -> Option<Vec<String>> {
+    let detail: Value = serde_json::from_str(detail?).ok()?;
+    if detail.get("v").and_then(Value::as_u64) != Some(1) {
+        return None;
+    }
+    let names: Vec<String> = detail
+        .get("tags")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect();
+    Some(names)
 }
 
 /// Puts back what one call changed.
@@ -283,12 +334,12 @@ fn carries_before(detail: Option<&str>) -> bool {
 /// second undo of the same call writes the same values again. The `undo` marker
 /// row is what stops the settings page from offering it a second time.
 pub fn undo(tx: &Transaction<'_>, call_id: &str, covers_dir: &Path) -> AppResult<Undo> {
-    let rows: Vec<(Option<String>, Option<String>)> = tx
+    let rows: Vec<(Option<String>, Option<String>, String)> = tx
         .prepare(
-            "SELECT book_id, detail FROM operations \
+            "SELECT book_id, detail, action FROM operations \
               WHERE call_id = ?1 AND action <> 'undo'",
         )?
-        .query_map(params![call_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .query_map(params![call_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     if rows.is_empty() {
@@ -297,7 +348,25 @@ pub fn undo(tx: &Transaction<'_>, call_id: &str, covers_dir: &Path) -> AppResult
 
     let mut undone = 0;
     let mut skipped = 0;
-    for (book_id, detail) in &rows {
+    for (book_id, detail, action) in &rows {
+        // A tag write has no previous values to put back: it only ever adds to
+        // books that had no labels, so its inverse is dropping the names it
+        // added. `assign` is the same path the write took — one place that
+        // knows how to touch `book_tags`, in both directions.
+        if action == ADDED_TAGS_ACTION {
+            match (book_id, added_tags(detail.as_deref())) {
+                (Some(id), Some(tags)) => {
+                    match crate::library::tags::assign(tx, std::slice::from_ref(id), &[], &tags) {
+                        Ok(()) => undone += 1,
+                        // The book is gone; its labels went with it.
+                        Err(AppError::NotFound(_)) => skipped += 1,
+                        Err(err) => return Err(err),
+                    }
+                }
+                _ => skipped += 1,
+            }
+            continue;
+        }
         // A row without a book (a library-level action) and a row whose
         // before-image is from the older, two-field format are both "cannot be
         // put back", not failures. The second is the honest one: restoring the

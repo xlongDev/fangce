@@ -843,6 +843,14 @@ function OperationsDay({ day, expanded, onToggle, undoPending, onUndo }: Operati
                       MCP
                     </span>
                   )}
+                  {/* The reader pressed the button, but the labels came from a
+                      model — that is a different provenance, and the log is the
+                      only place it shows. */}
+                  {call.source === "ai" && (
+                    <span className="border-hairline text-text-3 shrink-0 rounded-full border px-1.5 text-[11px]">
+                      AI
+                    </span>
+                  )}
                   {/* Only for a change that stored what it replaced. A deleted
                       book is not "undone" here — 回收站 is the way back from
                       that, and two undos for one action would be one too

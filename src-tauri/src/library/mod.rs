@@ -35,7 +35,7 @@ pub mod metadata;
 /// it, so filing it under `shelf/` or `io/` would say it belongs to that one.
 pub mod ops;
 
-pub use assist::{conversation, graph, guide, ocr, summary};
+pub use assist::{conversation, graph, guide, ocr, summary, tagging};
 pub use io::{calibre, calibre_fill, catalog, characters, clippings, export, import, pack, source};
 pub use lookup::{dictionaries, markup, mdict, stardict};
 pub use marks::{annotations, bookmarks, migrate};

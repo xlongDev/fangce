@@ -21,6 +21,7 @@ import { demoEnabled } from "@/lib/demo";
 import { useFillRun } from "@/stores/fillRun";
 import { useGuideBatch } from "@/stores/guideBatch";
 import { BatchFillDialog } from "@/features/library/BatchFillDialog";
+import { AiTagDialog } from "@/features/library/AiTagDialog";
 import { BatchMetaDialog } from "@/features/library/BatchMetaDialog";
 import type { ShelfSelection } from "@/features/library/useShelfSelection";
 
@@ -54,6 +55,10 @@ export function ShelfBatchBar({
    *  per-book one: that sheet starts from one book's values, and a batch has
    *  no values to start from — only fields the reader may or may not fill. */
   const [metaOpen, setMetaOpen] = useState(false);
+  /** The AI labelling sheet. Its ids are frozen when it opens: a reader who
+   *  ticks another book behind the dialog is not asking for a second model
+   *  call about it. */
+  const [tagIds, setTagIds] = useState<string[] | null>(null);
   /** The catalogue fill sheet. It owns its own selection of ids, because the
    *  batch it proposes for is fixed when it opens — a reader who ticks another
    *  book behind the dialog is not asking for a new lookup. */
@@ -213,6 +218,18 @@ export function ShelfBatchBar({
                     >
                       <Tag size={13} /> 打标签
                     </GlassButton>
+                    {/* Beside 打标签: the same question — what is this book
+                        about — answered by a model instead of by the reader.
+                        Still the reader's call: nothing is written until the
+                        preview is confirmed. */}
+                    <GlassButton
+                      size="sm"
+                      variant="subtle"
+                      disabled={selection.count === 0 || !isDesktopRuntime}
+                      onClick={() => setTagIds(selection.selectedBooks.map((book) => book.id))}
+                    >
+                      <Sparkle size={13} /> AI 标签
+                    </GlassButton>
                     {/* Beside 打标签 because both are "describe these books":
                         the label is the reader's own word, the metadata is the
                         book's. */}
@@ -329,6 +346,8 @@ export function ShelfBatchBar({
         ids={fillIds ?? []}
         onClose={() => setFillIds(null)}
       />
+
+      <AiTagDialog open={tagIds !== null} ids={tagIds ?? []} onClose={() => setTagIds(null)} />
 
       <BatchMetaDialog
         open={metaOpen}

@@ -704,6 +704,42 @@ ALTER TABLE books ADD COLUMN rating_source TEXT;
 UPDATE books SET rating_source = 'neodb' WHERE rating IS NOT NULL;
 "#,
     },
+    Migration {
+        version: 27,
+        name: "operations_allow_ai_source",
+        // The log has three writers now: the reader, an MCP agent, and a
+        // suggestion the reader accepted (Phase 6). `source` was a CHECK
+        // against two strings, and SQLite cannot alter a CHECK in place, so the
+        // table is rebuilt.
+        //
+        // 🔴 Two things a rebuild must not lose. Ids: 撤销 is pressed against a
+        // `call_id`, and an operation's `id` is what the settings page prints.
+        // And `AUTOINCREMENT`: the new table's sequence has to start above the
+        // copied ids, or the next insert reuses one.
+        sql: r#"
+CREATE TABLE operations_new (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         INTEGER NOT NULL,
+  source     TEXT NOT NULL CHECK (source IN ('ui', 'mcp', 'ai')),
+  action     TEXT NOT NULL,
+  book_id    TEXT,
+  book_title TEXT,
+  summary    TEXT NOT NULL,
+  detail     TEXT,
+  call_id    TEXT NOT NULL
+);
+
+INSERT INTO operations_new (id, at, source, action, book_id, book_title, summary, detail, call_id)
+  SELECT id, at, source, action, book_id, book_title, summary, detail, call_id FROM operations;
+
+DROP TABLE operations;
+ALTER TABLE operations_new RENAME TO operations;
+
+CREATE INDEX operations_at ON operations (at DESC);
+CREATE INDEX operations_book ON operations (book_id) WHERE book_id IS NOT NULL;
+CREATE INDEX operations_call ON operations (call_id);
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.
@@ -794,6 +830,66 @@ mod tests {
         for expected in ["books", "authors", "book_authors", "tags", "book_tags"] {
             assert!(tables.contains(&expected.to_string()), "缺少表 {expected}: {tables:?}");
         }
+    }
+
+    /// The rebuild in migration 27, from the shape this machine actually had:
+    /// rows written by the app and by an MCP agent, then an AI-sourced row that
+    /// the old CHECK refused.
+    ///
+    /// This is the test that was missing when `tag.suggestApply` shipped: the
+    /// type said `ai`, the schema said only two strings were allowed, and the
+    /// only place that showed up was the reader's screen.
+    #[test]
+    fn the_operations_rebuild_keeps_old_rows_and_accepts_ai() {
+        let mut conn = fresh();
+        for migration in MIGRATIONS.iter().filter(|migration| migration.version <= 26) {
+            conn.execute_batch(migration.sql).expect("apply pre-27 schema");
+        }
+        conn.pragma_update(None, "user_version", 26).expect("pin version");
+        conn.execute(
+            "INSERT INTO operations (at, source, action, summary, call_id) \
+             VALUES (1, 'ui', 'manage_tags', '加标签：科幻', 'c1')",
+            [],
+        )
+        .expect("old row");
+        conn.execute(
+            "INSERT INTO operations (at, source, action, summary, call_id) \
+             VALUES (2, 'mcp', 'update_metadata', '改了出版社', 'c2')",
+            [],
+        )
+        .expect("mcp row");
+
+        assert_eq!(migrate(&mut conn).expect("migrate"), MIGRATIONS.len() as u32);
+
+        let kept: Vec<(String, String)> = conn
+            .prepare("SELECT source, summary FROM operations ORDER BY id")
+            .expect("prepare")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("query")
+            .collect::<rusqlite::Result<_>>()
+            .expect("rows");
+        assert_eq!(
+            kept,
+            [
+                ("ui".to_string(), "加标签：科幻".to_string()),
+                ("mcp".to_string(), "改了出版社".to_string())
+            ],
+            "重建不能丢行，也不能改来源"
+        );
+
+        conn.execute(
+            "INSERT INTO operations (at, source, action, summary, call_id) \
+             VALUES (3, 'ai', 'ai_tags', 'AI 建议的标签：5 本', 'c3')",
+            [],
+        )
+        .expect("ai 来源必须被接受");
+
+        let next: i64 = conn
+            .query_row("SELECT seq FROM sqlite_sequence WHERE name = 'operations'", [], |row| {
+                row.get(0)
+            })
+            .expect("sequence");
+        assert_eq!(next, 3, "自增序列要接着旧 id 往后走，不能重发一个");
     }
 
     #[test]
