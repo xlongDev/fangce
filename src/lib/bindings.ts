@@ -403,15 +403,6 @@ export const commands = {
    *  pending state on the confirm button.
    */
   bookDeleteMany: (ids: string[]) => __TAURI_INVOKE<null>("book_delete_many", { ids }),
-  /**
-   *  `book.setMetadataMany` — the batch bar's 编辑信息.
-   *
-   *  Two fields, and a field left out is a field left alone: `publisher` and
-   *  `language` are the facts that belong to a shelf's worth of books at once.
-   *  Returns how many rows were written, so the bar can say what it did.
-   */
-  bookSetMetadataMany: (ids: string[], patch: BookFieldsPatch) =>
-    __TAURI_INVOKE<number>("book_set_metadata_many", { ids, patch }),
   /**  `ops.list` — the newest changes, newest first. */
   opsList: (limit: number) => __TAURI_INVOKE<Operation[]>("ops_list", { limit }),
   /**
@@ -1213,23 +1204,6 @@ export type BarFace =
   | "voice"
   /**  定时关闭. */
   | "timer";
-
-/**
- *  The fields a **batch** edit may overwrite.
- *
- *  Two fields, not six. A title or a description is a fact about one book; a
- *  publisher or a language is a fact about a shelf's worth of them — 「这三十本
- *  是同一家出的」 is the sentence this exists for. Replacing fifty author lists
- *  at once is a different feature with a different confirmation, and not one
- *  the batch bar should be able to do by accident.
- *
- *  `None` means "leave it alone" and `Some("")` means "clear it", the same
- *  convention the MCP `update_metadata` tool uses.
- */
-export type BookFieldsPatch = {
-  publisher: string | null;
-  language: string | null;
-};
 
 /**
  *  Formats the library can hold today.

@@ -375,41 +375,6 @@ pub async fn book_delete_many(
     .map_err(|err| AppError::Message(format!("删除任务被中断：{err}")))?
 }
 
-/// `book.setMetadataMany` — the batch bar's 编辑信息.
-///
-/// Two fields, and a field left out is a field left alone: `publisher` and
-/// `language` are the facts that belong to a shelf's worth of books at once.
-/// Returns how many rows were written, so the bar can say what it did.
-#[tauri::command]
-#[specta::specta]
-pub fn book_set_metadata_many(
-    state: State<'_, AppState>,
-    ids: Vec<String>,
-    patch: crate::library::repository::BookFieldsPatch,
-) -> AppResult<usize> {
-    let summary = match (&patch.publisher, &patch.language) {
-        (Some(publisher), None) => format!("批量改出版社：{publisher}"),
-        (None, Some(language)) => format!("批量改语言：{language}"),
-        (Some(publisher), Some(language)) => format!("批量改出版社：{publisher}，语言：{language}"),
-        (None, None) => "批量改书籍信息".to_string(),
-    };
-    // Before the write, for the same reason as the single-book path.
-    let befores: Vec<ops::Before> = state.library.with(|conn| {
-        let mut out = Vec::new();
-        for id in &ids {
-            if let Some(before) = ops::snapshot_of(conn, id)? {
-                out.push(before);
-            }
-        }
-        Ok(out)
-    })?;
-    let written = library::set_metadata_fields(&state.library, &ids, &patch)?;
-    state.library.with(|conn| {
-        ops::record_before(conn, ops::Source::Ui, "batch_metadata", &befores, &summary)
-    })?;
-    Ok(written)
-}
-
 /// `book.restore` — takes books back out of the trash.
 ///
 /// One command for one book and for a batch: a restore writes a timestamp and

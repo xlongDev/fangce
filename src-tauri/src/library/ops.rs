@@ -561,7 +561,7 @@ mod tests {
                 record(
                     conn,
                     Source::Ui,
-                    "batch_metadata",
+                    "update_metadata",
                     &["b1".into(), "b2".into()],
                     "改了出版社",
                 )
@@ -633,15 +633,25 @@ mod tests {
         let befores = [before_of(&library, "b1"), before_of(&library, "b2")];
         library
             .with_tx(|tx| {
-                repository::update_fields_many(
-                    tx,
-                    &["b1".into(), "b2".into()],
-                    &crate::library::repository::BookFieldsPatch {
+                for id in ["b1", "b2"] {
+                    let book = repository::get(tx, id)?.expect("seeded book");
+                    let patch = crate::library::repository::BookMetadataPatch {
+                        title: book.title,
+                        subtitle: book.subtitle,
+                        description: book.description,
+                        language: book.language,
                         publisher: Some("统一".into()),
-                        language: None,
-                    },
-                )?;
-                record_before(tx, Source::Ui, "batch_metadata", &befores, "批量改出版社：统一")
+                        isbn: book.isbn,
+                        published_year: book.published_year,
+                        rating: book.rating,
+                        rating_count: book.rating_count,
+                        rating_source: book.rating_source,
+                        douban_url: book.douban_url,
+                        authors: book.authors,
+                    };
+                    repository::update_metadata(tx, id, &patch)?;
+                }
+                record_before(tx, Source::Ui, "fill_metadata", &befores, "批量改出版社：统一")
             })
             .expect("write");
 
@@ -757,14 +767,22 @@ mod tests {
         library
             .with_tx(|tx| {
                 repository::set_cover(tx, "b1", fresh.to_str().expect("path"))?;
-                repository::update_fields_many(
-                    tx,
-                    &["b1".into()],
-                    &crate::library::repository::BookFieldsPatch {
-                        publisher: Some("新出版社".into()),
-                        language: None,
-                    },
-                )?;
+                let book = repository::get(tx, "b1")?.expect("seeded book");
+                let patch = crate::library::repository::BookMetadataPatch {
+                    title: book.title,
+                    subtitle: book.subtitle,
+                    description: book.description,
+                    language: book.language,
+                    publisher: Some("新出版社".into()),
+                    isbn: book.isbn,
+                    published_year: book.published_year,
+                    rating: book.rating,
+                    rating_count: book.rating_count,
+                    rating_source: book.rating_source,
+                    douban_url: book.douban_url,
+                    authors: book.authors,
+                };
+                repository::update_metadata(tx, "b1", &patch)?;
                 record_before(tx, Source::Ui, "update_metadata", &[before], "改了出版社")
             })
             .expect("write");
@@ -854,7 +872,7 @@ mod tests {
                 record_before(
                     tx,
                     Source::Ui,
-                    "batch_metadata",
+                    "fill_metadata",
                     &[snapshot_of(tx, "b1")?.expect("b1")],
                     "改了",
                 )
@@ -903,7 +921,7 @@ mod tests {
                 record_before(
                     tx,
                     Source::Ui,
-                    "batch_metadata",
+                    "fill_metadata",
                     &[snapshot_of(tx, "b1")?.expect("b1"), snapshot_of(tx, "b2")?.expect("b2")],
                     "改了",
                 )?;

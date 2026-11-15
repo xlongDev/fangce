@@ -12,11 +12,11 @@ const row = (over: Partial<Operation>): Operation => ({
   id: 1,
   at: 1_700_000_000,
   source: "ui",
-  action: "batch_metadata",
+  action: "update_metadata",
   callId: "call-a",
   bookId: "b1",
   bookTitle: "三体",
-  summary: "批量改出版社：统一",
+  summary: "改了书籍信息",
   undoable: true,
   ...over,
 });

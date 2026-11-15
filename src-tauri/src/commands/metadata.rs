@@ -208,9 +208,8 @@ pub async fn metadata_apply(
             // Read before the write: the picture this one may replace.
             let previous = before.cover_path.clone();
             befores.push(before);
-            // A full record, built from the row plus whatever this fill says:
-            // `update_fields_many` only knows the two fields the batch sheet
-            // edits, and a fill writes more than that.
+            // A full record: `update_metadata` takes the whole row, so every
+            // field this fill does not name has to be carried over.
             let patch = crate::library::repository::BookMetadataPatch {
                 title: book.title.clone(),
                 subtitle: item.subtitle.clone().or(book.subtitle.clone()),

@@ -656,10 +656,7 @@ export const KINDS: OperationKind[] = [
   {
     key: "metadata",
     label: "改信息",
-    matches: (action) =>
-      action === "update_metadata" ||
-      action === "batch_metadata" ||
-      action === "update_metadata_cover",
+    matches: (action) => action === "update_metadata" || action === "update_metadata_cover",
   },
   { key: "fill", label: "补全", matches: (action) => action === "fill_metadata" },
   {

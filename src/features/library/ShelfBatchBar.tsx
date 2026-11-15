@@ -1,13 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import {
-  ArrowCounterClockwise,
-  PencilSimple,
-  Sparkle,
-  Star,
-  Tag,
-  MagicWand,
-} from "@phosphor-icons/react";
+import { ArrowCounterClockwise, Sparkle, Star, Tag, MagicWand } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 
 import { GlassButton } from "@/components/glass/button";
@@ -15,14 +8,12 @@ import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
 import { SPRING, useMotion } from "@/lib/motion";
 import { AiErrorCard } from "@/components/common/AiErrorCard";
 import { useAiConfig } from "@/hooks/useAi";
-import { useSetMetadataMany } from "@/hooks/useLibrary";
 import { isDesktopRuntime, ipc } from "@/lib/ipc";
 import { demoEnabled } from "@/lib/demo";
 import { useFillRun } from "@/stores/fillRun";
 import { useGuideBatch } from "@/stores/guideBatch";
 import { BatchFillDialog } from "@/features/library/BatchFillDialog";
 import { AiTagDialog } from "@/features/library/AiTagDialog";
-import { BatchMetaDialog } from "@/features/library/BatchMetaDialog";
 import type { ShelfSelection } from "@/features/library/useShelfSelection";
 
 /**
@@ -51,10 +42,6 @@ export function ShelfBatchBar({
   const trashed = mode === "trash";
   const barRef = useRef<HTMLDivElement>(null);
   const [guideConfirm, setGuideConfirm] = useState(false);
-  /** The batch metadata sheet. Its own dialog rather than a mode of the
-   *  per-book one: that sheet starts from one book's values, and a batch has
-   *  no values to start from — only fields the reader may or may not fill. */
-  const [metaOpen, setMetaOpen] = useState(false);
   /** The AI labelling sheet. Its ids are frozen when it opens: a reader who
    *  ticks another book behind the dialog is not asking for a second model
    *  call about it. */
@@ -63,7 +50,6 @@ export function ShelfBatchBar({
    *  batch it proposes for is fixed when it opens — a reader who ticks another
    *  book behind the dialog is not asking for a new lookup. */
   const [fillIds, setFillIds] = useState<string[] | null>(null);
-  const setMetadataMany = useSetMetadataMany();
   /** 整架补全的进度。名字避开下面导读批处理那个 `run`。 */
   const fillRun = useFillRun();
 
@@ -230,18 +216,7 @@ export function ShelfBatchBar({
                     >
                       <Sparkle size={13} /> AI 标签
                     </GlassButton>
-                    {/* Beside 打标签 because both are "describe these books":
-                        the label is the reader's own word, the metadata is the
-                        book's. */}
-                    <GlassButton
-                      size="sm"
-                      variant="subtle"
-                      disabled={selection.count === 0}
-                      onClick={() => setMetaOpen(true)}
-                    >
-                      <PencilSimple size={13} /> 编辑信息
-                    </GlassButton>
-                    {/* Next to 编辑信息: the same question — "what does this
+                    {/* Beside 打标签: the same question — "what does this
                         book say about itself" — answered by a catalogue
                         instead of by the reader. */}
                     <GlassButton
@@ -348,19 +323,6 @@ export function ShelfBatchBar({
       />
 
       <AiTagDialog open={tagIds !== null} ids={tagIds ?? []} onClose={() => setTagIds(null)} />
-
-      <BatchMetaDialog
-        open={metaOpen}
-        count={selection.count}
-        busy={setMetadataMany.isPending}
-        onCancel={() => setMetaOpen(false)}
-        onSave={(patch) =>
-          setMetadataMany.mutate(
-            { ids: selection.selectedBooks.map((book) => book.id), patch },
-            { onSuccess: () => setMetaOpen(false) },
-          )
-        }
-      />
 
       {/* Batch AI guides: confirm (with the token estimate), then hand the run
           to the global store — progress floats as a shell-level pill, and the

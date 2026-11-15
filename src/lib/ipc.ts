@@ -58,7 +58,6 @@ const LOCAL_COMMANDS = [
   "bookSetFavorite",
   "bookSetFavoriteMany",
   "bookUpdate",
-  "bookSetMetadataMany",
   "bookCoverSave",
   "bookExport",
   "bookImages",

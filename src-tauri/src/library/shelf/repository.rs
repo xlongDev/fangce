@@ -1039,67 +1039,6 @@ fn blank_to_none(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|text| !text.is_empty())
 }
 
-/// The fields a **batch** edit may overwrite.
-///
-/// Two fields, not six. A title or a description is a fact about one book; a
-/// publisher or a language is a fact about a shelf's worth of them — 「这三十本
-/// 是同一家出的」 is the sentence this exists for. Replacing fifty author lists
-/// at once is a different feature with a different confirmation, and not one
-/// the batch bar should be able to do by accident.
-///
-/// `None` means "leave it alone" and `Some("")` means "clear it", the same
-/// convention the MCP `update_metadata` tool uses.
-#[derive(specta::Type, Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BookFieldsPatch {
-    pub publisher: Option<String>,
-    pub language: Option<String>,
-}
-
-impl BookFieldsPatch {
-    fn is_empty(&self) -> bool {
-        self.publisher.is_none() && self.language.is_none()
-    }
-}
-
-/// Applies `patch` to every id, inside the caller's transaction.
-///
-/// Read-modify-write per book: [`update_metadata`] takes a whole record, and a
-/// batch is defined as "change these fields, leave everything else" — a book's
-/// title has to survive a publisher edit. Returns how many rows were written.
-pub fn update_fields_many(
-    tx: &Transaction<'_>,
-    ids: &[String],
-    patch: &BookFieldsPatch,
-) -> AppResult<usize> {
-    if patch.is_empty() {
-        return Err(AppError::InvalidArgument("没有要改的字段".into()));
-    }
-    let mut written = 0;
-    for id in ids {
-        let book = get(tx, id)?.ok_or_else(|| AppError::NotFound(id.clone()))?;
-        let merged = BookMetadataPatch {
-            title: book.title,
-            subtitle: book.subtitle,
-            description: book.description,
-            // `Some("")` is meaningful: `blank_to_none` inside `update_metadata`
-            // turns it into "no value", which is how a batch clears a field.
-            language: patch.language.clone().or(book.language),
-            publisher: patch.publisher.clone().or(book.publisher),
-            isbn: book.isbn,
-            published_year: book.published_year,
-            rating: book.rating,
-            rating_count: book.rating_count,
-            rating_source: book.rating_source,
-            douban_url: book.douban_url,
-            authors: book.authors,
-        };
-        update_metadata(tx, id, &merged)?;
-        written += 1;
-    }
-    Ok(written)
-}
-
 /// Rewrites the metadata the edit sheet exposes.
 ///
 /// Three tables are involved — `books`, `authors`, `book_authors` — so this
@@ -2020,55 +1959,5 @@ mod tests {
         let beyond = BookQuery { limit: Some(10), offset: Some(50), ..BookQuery::default() };
         assert!(list(&conn, &beyond).expect("list").is_empty());
         assert_eq!(count(&conn, &beyond).expect("count"), 3);
-    }
-
-    /// The sentence this feature exists for: 「这三十本是同一家出的」. The one
-    /// thing it must not do is rewrite the title on the way.
-    #[test]
-    fn a_batch_edit_changes_only_the_fields_it_names() {
-        let conn = filtered_shelf();
-        let tx = conn.unchecked_transaction().expect("tx");
-        let written = update_fields_many(
-            &tx,
-            &["b1".into(), "b2".into()],
-            &BookFieldsPatch { publisher: Some("统一出版社".into()), language: None },
-        )
-        .expect("batch");
-        tx.commit().expect("commit");
-
-        assert_eq!(written, 2);
-        let first = get(&conn, "b1").expect("get").expect("b1");
-        assert_eq!(first.publisher.as_deref(), Some("统一出版社"));
-        assert_eq!(first.title, "三体", "书名不是批量的字段");
-        assert_eq!(first.authors, ["刘慈欣"], "作者不是批量的字段");
-        assert_eq!(first.language.as_deref(), Some("zh"), "没点名的字段保持原样");
-
-        let third = get(&conn, "b3").expect("get").expect("b3");
-        assert_eq!(third.publisher, None, "没选中的书不动");
-    }
-
-    #[test]
-    fn a_batch_edit_can_clear_a_field_with_an_empty_string() {
-        let conn = filtered_shelf();
-        let tx = conn.unchecked_transaction().expect("tx");
-        update_fields_many(
-            &tx,
-            &["b1".into()],
-            &BookFieldsPatch { publisher: None, language: Some(String::new()) },
-        )
-        .expect("batch");
-        tx.commit().expect("commit");
-
-        let book = get(&conn, "b1").expect("get").expect("b1");
-        assert_eq!(book.language, None, "空串 = 清空");
-        assert_eq!(book.publisher.as_deref(), Some("重庆出版社"), "别的字段不受影响");
-    }
-
-    #[test]
-    fn an_empty_batch_patch_is_rejected_rather_than_a_no_op() {
-        let conn = filtered_shelf();
-        let tx = conn.unchecked_transaction().expect("tx");
-        let outcome = update_fields_many(&tx, &["b1".into()], &BookFieldsPatch::default());
-        assert!(matches!(outcome, Err(AppError::InvalidArgument(_))));
     }
 }
