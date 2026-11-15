@@ -20,11 +20,13 @@ import {
   MagnifyingGlass,
   Notebook,
   NotePencil,
+  Sparkle,
   Trash,
   X,
 } from "@phosphor-icons/react";
 
 import { cn } from "@/lib/cn";
+import { demoEnabled } from "@/lib/demo";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { SPRING, useMotion } from "@/lib/motion";
 import { displayTitle } from "@/lib/title";
@@ -42,6 +44,8 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { NoteCell } from "@/features/reader/AnnotationNote";
+import { AiNoteDialog } from "@/features/notes/AiNoteDialog";
+import { useSaveRecap, useSavedRecap } from "@/hooks/useAiNotes";
 import { AiErrorCard } from "@/components/common/AiErrorCard";
 import { AiSpeechButton } from "@/components/common/AiSpeechButton";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -117,6 +121,9 @@ export function NotesPage() {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [exporting, setExporting] = useState<ExportScope | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  /** The ids one draft run is about, frozen when the sheet opens: ticking
+   *  another row behind the dialog is not asking for a second model call. */
+  const [draftIds, setDraftIds] = useState<string[] | null>(null);
 
   /** The page root, so the batch bar can be centred on the pane rather than on
    *  the window (see the placement effect below). */
@@ -326,6 +333,7 @@ export function NotesPage() {
                     managing={managing}
                     selected={selected}
                     onToggleSelect={toggleSelect}
+                    onAiDraft={(id) => setDraftIds([id])}
                   />
                 ))}
               </div>
@@ -382,6 +390,20 @@ export function NotesPage() {
                   onClick={() => setExporting("selection")}
                 >
                   <Export size={13} /> 导出所选
+                </GlassButton>
+                <GlassButton
+                  size="sm"
+                  variant="subtle"
+                  // Desktop calls the model; ?demo=1 answers from the sample
+                  // store so the sheet can be walked in a browser.
+                  disabled={pickedCount === 0 || (!isDesktopRuntime && !demoEnabled())}
+                  onClick={() =>
+                    setDraftIds(
+                      picked.flatMap((group) => group.entries.map((entry) => entry.annotation.id)),
+                    )
+                  }
+                >
+                  <Sparkle size={13} /> AI 补笔记
                 </GlassButton>
                 <GlassButton
                   size="sm"
@@ -463,6 +485,12 @@ export function NotesPage() {
           />
         </Suspense>
       )}
+
+      <AiNoteDialog
+        open={draftIds !== null}
+        ids={draftIds ?? []}
+        onClose={() => setDraftIds(null)}
+      />
     </div>
   );
 }
@@ -598,20 +626,32 @@ function BookSection({
   managing,
   selected,
   onToggleSelect,
+  onAiDraft,
 }: {
   group: BookNotes;
   onOpen: (entry: NoteEntry) => void;
   managing: boolean;
   selected: ReadonlySet<string>;
   onToggleSelect: (id: string) => void;
+  onAiDraft: (id: string) => void;
 }) {
   const { book, entries } = group;
   const recap = useAiChat();
+  const saved = useSavedRecap(book.id);
+  const saveRecap = useSaveRecap();
+  /** An arrangement, not a note: it gets a label and a fold, so a long answer
+   *  cannot bury the reader's own highlights underneath it. */
+  const [recapOpen, setRecapOpen] = useState(false);
+
+  /** The stream is a preview; the stored copy is what survives a page switch.
+   *  A preview that differs from the stored one is the only thing 保存 can write. */
+  const review = recap.text || saved.data || "";
+  const draft = recap.text.trim() !== "" && recap.text !== saved.data;
   // Only a note is the reader saying something; a bare highlight is a passage
   // they marked. An all-highlight book has nothing for the model to arrange.
   const noted = entries.filter((entry) => (entry.annotation.note ?? "").trim() !== "").length;
   let blocked: string | undefined;
-  if (!isDesktopRuntime) blocked = "整理笔记要调用模型，只在桌面端可用";
+  if (!isDesktopRuntime) blocked = "AI 整理需要调用模型，只在桌面端可用";
   else if (noted === 0) blocked = "给划线写上笔记后才能整理";
   return (
     <section className="px-4 pt-4 first:pt-3">
@@ -633,37 +673,81 @@ function BookSection({
           </h2>
           <p className="text-text-3 truncate text-[11.5px]">{authorLine(book)}</p>
         </div>
-        <button
-          type="button"
-          disabled={blocked !== undefined || recap.streaming}
-          onClick={() => recap.sendNotesRecap(book.id)}
-          title={blocked}
-          className="border-hairline text-text-2 hover:text-text-1 focus-visible:focus-ring shrink-0 rounded-full border px-2.5 py-1 text-[11.5px] transition-colors disabled:opacity-45"
-        >
-          {recap.streaming ? "正在整理…" : recap.text ? "重新整理" : "整理成一段"}
-        </button>
+        {/* The reason lives on the wrapper: a disabled GlassButton is
+            pointer-events-none, and a hint the reader cannot hover is no hint. */}
+        <span className="shrink-0" title={blocked}>
+          <GlassButton
+            size="sm"
+            variant="subtle"
+            disabled={blocked !== undefined || recap.streaming}
+            onClick={() => recap.sendNotesRecap(book.id)}
+            className="h-7 rounded-full px-2.5 text-[11.5px]"
+          >
+            {recap.streaming ? "AI 整理中…" : review ? "重新整理" : "AI 整理成一段"}
+          </GlassButton>
+        </span>
         <span className="text-text-3 shrink-0 text-[11.5px]">{entries.length} 条</span>
       </header>
 
-      {(recap.text || recap.error) && (
+      {(review || recap.error) && (
         <div className="border-hairline mb-2 rounded-lg border px-3 py-2.5">
           {recap.error ? (
             <AiErrorCard message={recap.error} />
           ) : (
-            <div className="flex items-start gap-2">
-              <p className="text-text-1 min-w-0 flex-1 text-[12.5px] leading-relaxed whitespace-pre-wrap">
-                {recap.text}
-              </p>
-              <AiSpeechButton
-                id={`notes-recap:${book.id}`}
-                text={recap.text}
-                title="批注回顾"
-                chapter={displayTitle(book.title)}
-                disabled={recap.streaming}
-                streaming={recap.streaming}
-                label="朗读这段回顾"
-              />
-            </div>
+            <>
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="text-text-3 text-[11px]">
+                  {draft ? "AI 整理 · 未保存" : "AI 整理 · 已保存"}
+                </span>
+                <div className="flex items-center gap-2">
+                  {draft && (
+                    <button
+                      type="button"
+                      disabled={recap.streaming || saveRecap.isPending}
+                      onClick={() => saveRecap.mutate({ bookId: book.id, text: recap.text })}
+                      className="text-accent focus-visible:focus-ring text-[11px] font-medium transition-colors hover:opacity-70 disabled:opacity-45"
+                    >
+                      {saveRecap.isPending ? "保存中…" : "保存"}
+                    </button>
+                  )}
+                  {/* ponytail: a character count stands in for measuring rendered
+                      lines; below it the text never needs a clamp. Upgrade to a
+                      measured height only if the fold has to be exact. */}
+                  {review.length > 160 && (
+                    <button
+                      type="button"
+                      aria-expanded={recapOpen}
+                      onClick={() => setRecapOpen((open) => !open)}
+                      className="text-text-2 hover:text-text-1 focus-visible:focus-ring text-[11px] transition-colors"
+                    >
+                      {recapOpen ? "收起" : "展开"}
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-start gap-2">
+                <p
+                  className={cn(
+                    "text-text-1 min-w-0 flex-1 text-[12.5px] leading-relaxed whitespace-pre-wrap",
+                    !recapOpen && review.length > 160 && "line-clamp-4",
+                  )}
+                >
+                  {review}
+                </p>
+                <AiSpeechButton
+                  id={`notes-recap:${book.id}`}
+                  text={review}
+                  title="批注回顾"
+                  chapter={displayTitle(book.title)}
+                  disabled={recap.streaming}
+                  streaming={recap.streaming}
+                  label="朗读这段回顾"
+                />
+              </div>
+              {draft && saved.data && (
+                <p className="text-text-3 mt-1.5 text-[11px]">保存后会覆盖上一次保存的版本。</p>
+              )}
+            </>
           )}
         </div>
       )}
@@ -677,6 +761,7 @@ function BookSection({
             managing={managing}
             selected={selected.has(entry.annotation.id)}
             onToggleSelect={onToggleSelect}
+            onAiDraft={onAiDraft}
           />
         ))}
       </ul>
@@ -704,17 +789,22 @@ function NoteRow({
   managing,
   selected,
   onToggleSelect,
+  onAiDraft,
 }: {
   entry: NoteEntry;
   onOpen: (entry: NoteEntry) => void;
   managing: boolean;
   selected: boolean;
   onToggleSelect: (id: string) => void;
+  onAiDraft: (id: string) => void;
 }) {
   const { annotation, book } = entry;
   const setNote = useSetAnnotationNote(book.id);
   const remove = useDeleteAnnotation(book.id);
   const busy = setNote.isPending || remove.isPending;
+  /** The backend only drafts for highlights with no note. Offering the button
+   *  on a row that already has one would produce nothing but an error. */
+  const canDraft = (annotation.note ?? "").trim() === "";
   const [editing, setEditing] = useState(false);
   /** Names the overlay button after the passage it stands for: an empty overlay
    *  has no accessible name of its own, and the passage is the one thing that
@@ -788,6 +878,18 @@ function NoteRow({
               >
                 <NotePencil size={13} />
               </button>
+              {canDraft && (isDesktopRuntime || demoEnabled()) && (
+                <button
+                  type="button"
+                  aria-label="AI 补笔记"
+                  title="AI 补笔记"
+                  disabled={busy || editing}
+                  onClick={() => onAiDraft(annotation.id)}
+                  className="focus-visible:focus-ring text-text-3 hover:text-accent rounded p-1.5 transition-colors disabled:opacity-40"
+                >
+                  <Sparkle size={13} />
+                </button>
+              )}
               <button
                 type="button"
                 aria-label="在书中打开"

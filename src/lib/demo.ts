@@ -1,4 +1,6 @@
 import type {
+  AiNoteDraft,
+  AiNoteRun,
   Annotation,
   BookSummary,
   ChapterContent,
@@ -571,6 +573,35 @@ export function demoAnnotationNote(id: string, note: string | null): Annotation 
 export function demoAnnotationDelete(id: string): void {
   const at = demoAnnotations.findIndex((entry) => entry.id === id);
   if (at >= 0) demoAnnotations.splice(at, 1);
+}
+
+/** Canned drafts, so the review sheet can be walked in a browser without a
+ *  model. Only highlights that still have no note get one. */
+const DEMO_DRAFTS = ["防御本身，而不是疾病：值得回头看", "近因与远因：换个问法会找到什么"];
+
+export function demoNoteDrafts(ids: string[]): AiNoteRun {
+  const suggestions = ids
+    .map((id) => demoAnnotations.find((entry) => entry.id === id))
+    .filter((entry): entry is Annotation => entry !== undefined && entry.note === null)
+    .map((entry, index) => ({
+      annotationId: entry.id,
+      bookId: entry.bookId,
+      quote: entry.text,
+      note: DEMO_DRAFTS[index % DEMO_DRAFTS.length] ?? "值得回头再看一遍。",
+    }));
+  return { suggestions, considered: ids.length, remaining: 0, failedBatches: 0 };
+}
+
+/** Same rule as the backend: never overwrite a note the reader wrote. */
+export function demoNoteDraftApply(items: AiNoteDraft[]): number {
+  let written = 0;
+  for (const item of items) {
+    const entry = demoAnnotations.find((row) => row.id === item.annotationId);
+    if (!entry || entry.note !== null) continue;
+    demoAnnotationNote(item.annotationId, item.note);
+    written += 1;
+  }
+  return written;
 }
 
 const CHAPTER_TITLES = [

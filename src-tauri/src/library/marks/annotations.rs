@@ -193,6 +193,17 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Annotation> {
 }
 
 /// One annotation by id, as the database holds it.
+/// One highlight by id, for callers holding annotation ids rather than a book.
+pub fn get(conn: &Connection, id: &str) -> AppResult<Option<Annotation>> {
+    conn.query_row(
+        &format!("SELECT {COLUMNS} FROM annotations WHERE id = ?1"),
+        params![id],
+        from_row,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
 fn read(conn: &Connection, id: &str) -> AppResult<Annotation> {
     let sql = format!("SELECT {COLUMNS} FROM annotations WHERE id = ?1");
     let mut stmt = conn.prepare(&sql)?;

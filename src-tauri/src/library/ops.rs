@@ -295,17 +295,35 @@ pub fn list(conn: &Connection, limit: usize) -> AppResult<Vec<Operation>> {
 /// before that format carried every field do not, and restoring the two they
 /// remember would leave nine changed and report success — so no button at all.
 /// A tag write carries the names it added instead, and its inverse is to remove
-/// exactly those.
+/// exactly those. A note draft carries the annotation id: it only ever fills an
+/// empty column, so its inverse is clearing that one row.
 fn can_undo(action: &str, detail: Option<&str>) -> bool {
-    if action == ADDED_TAGS_ACTION {
-        added_tags(detail).is_some()
-    } else {
-        before_fields(detail).is_some()
+    match action {
+        ADDED_TAGS_ACTION => added_tags(detail).is_some(),
+        ADDED_NOTES_ACTION => added_note_id(detail).is_some(),
+        _ => before_fields(detail).is_some(),
     }
 }
 
 /// The action name of a write whose inverse is "remove the names it added".
 pub const ADDED_TAGS_ACTION: &str = "ai_tags";
+
+/// A note draft has no previous value: its inverse is clearing the note again.
+pub const ADDED_NOTES_ACTION: &str = "ai_notes";
+
+/// The detail line for a note draft. `book_id` in the log names the book; the
+/// annotation id travels in the detail because undo has to reach that row.
+pub fn added_note_detail(annotation_id: &str) -> Value {
+    json!({ "v": 1, "annotationId": annotation_id })
+}
+
+fn added_note_id(detail: Option<&str>) -> Option<String> {
+    let detail: Value = serde_json::from_str(detail?).ok()?;
+    if detail.get("v").and_then(Value::as_u64) != Some(1) {
+        return None;
+    }
+    Some(detail.get("annotationId")?.as_str()?.to_string())
+}
 
 /// The detail line for one such write.
 pub fn added_tags_detail(tags: &[String]) -> Value {
@@ -364,6 +382,23 @@ pub fn undo(tx: &Transaction<'_>, call_id: &str, covers_dir: &Path) -> AppResult
                     }
                 }
                 _ => skipped += 1,
+            }
+            continue;
+        }
+        // A note draft only ever fills an empty `annotations.note`, so its
+        // inverse is clearing that one row. `set_note` is the same path the
+        // write took — one place that knows how to touch the column, both ways.
+        if action == ADDED_NOTES_ACTION {
+            match added_note_id(detail.as_deref()) {
+                Some(id) => {
+                    match crate::library::annotations::set_note(tx, &id, None) {
+                        Ok(_) => undone += 1,
+                        // The highlight was deleted in the meantime.
+                        Err(AppError::NotFound(_)) => skipped += 1,
+                        Err(err) => return Err(err),
+                    }
+                }
+                None => skipped += 1,
             }
             continue;
         }

@@ -677,6 +677,18 @@ export const commands = {
    */
   notesRecap: (requestId: string, bookId: string) =>
     __TAURI_INVOKE<null>("notes_recap", { requestId, bookId }),
+  /**  `notes.recapGet` — the review this reader chose to keep for one book. */
+  notesRecapGet: (bookId: string) => __TAURI_INVOKE<string | null>("notes_recap_get", { bookId }),
+  /**
+   *  `notes.recapSave` — the only path that writes a review.
+   *
+   *  The model streams a preview; the reader presses 保存. Sourcing the log line
+   *  as `ai` keeps 「这段是模型起的，我点了保存」distinct from a note the reader
+   *  typed. It is deliberately not undoable: the text is derived, and 重新整理 +
+   *  保存 replaces it.
+   */
+  notesRecapSave: (bookId: string, text: string) =>
+    __TAURI_INVOKE<null>("notes_recap_save", { bookId, text }),
   /**
    *  `graph.query` — all entities when `entity` is `null`, otherwise the
    *  neighborhood of that one entity.
@@ -893,6 +905,16 @@ export const commands = {
    *  `ai`, so 操作记录 says where these labels came from.
    */
   tagSuggestApply: (items: TagAdd[]) => __TAURI_INVOKE<number>("tag_suggest_apply", { items }),
+  /**
+   *  `notes.draftSuggest` — asks the model for drafts on the selected highlights
+   *  that have no note. Returns suggestions only; nothing is written here.
+   */
+  notesDraftSuggest: (ids: string[]) => __TAURI_INVOKE<AiNoteRun>("notes_draft_suggest", { ids }),
+  /**
+   *  `notes.draftApply` — writes what the reader kept. The log line is sourced as
+   *  `ai`, so 操作记录 says where the note came from, and undo can clear it.
+   */
+  notesDraftApply: (items: AiNoteDraft[]) => __TAURI_INVOKE<number>("notes_draft_apply", { items }),
   /**  `tts.edgeVoices` — every voice the service offers. */
   ttsEdgeVoices: () => __TAURI_INVOKE<EdgeVoice[]>("tts_edge_voices"),
   /**
@@ -1121,6 +1143,31 @@ export type AiDelta_Serialize = {
    *  answer is still being written.
    */
   tool?: ToolCallView_Serialize | null;
+};
+
+/**  读者确认之后要写进去的一行。 */
+export type AiNoteDraft = {
+  annotationId: string;
+  bookId: string;
+  note: string;
+};
+
+/**  What one suggestion run produced. */
+export type AiNoteRun = {
+  suggestions: AiNoteSuggestion[];
+  /**  参与这次建议的划线（选中且还没有笔记的）。 */
+  considered: number;
+  /**  没有笔记但超出这一轮上限的，留给下一次。 */
+  remaining: number;
+  failedBatches: number;
+};
+
+/**  一条建议，带着划线原文是为了预览里不用再查一次库。 */
+export type AiNoteSuggestion = {
+  annotationId: string;
+  bookId: string;
+  quote: string;
+  note: string;
 };
 
 /**

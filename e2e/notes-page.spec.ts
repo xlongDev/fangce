@@ -226,3 +226,30 @@ test("row actions ease in on hover and stay reachable without one", async ({ pag
   const add = notes.getByRole("button", { name: "添加笔记" }).first();
   if (await add.count()) await expect(add).toHaveClass(/note-row-actions/);
 });
+
+test("a bare highlight offers an AI draft on hover, without entering manage mode", async ({
+  page,
+}) => {
+  const notes = await openNotes(page);
+  const bare = notes.locator("li.note-row").filter({ hasText: "咳嗽、发烧、呕吐" });
+  const noted = notes.locator("li.note-row").filter({ hasText: "身体是一台被反复修补过的机器" });
+
+  // Only a highlight without a note can be drafted: showing the button on the
+  // others would produce nothing but a backend error. And the whole point is
+  // that the reader never has to open the selection bar to reach it.
+  await expect(bare.getByRole("button", { name: "AI 补笔记" })).toHaveCount(1);
+  await expect(noted.getByRole("button", { name: "AI 补笔记" })).toHaveCount(0);
+  await expect(page.locator("[data-batch-bar]")).toHaveCount(0);
+
+  await bare.hover();
+  await bare.getByRole("button", { name: "AI 补笔记" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("AI 补笔记");
+  await dialog.getByRole("button", { name: /开始建议/ }).click();
+  await expect(dialog.getByRole("button", { name: "应用：1 条" })).toBeVisible();
+  await dialog.getByRole("button", { name: "应用：1 条" }).click();
+  await expect(dialog.getByText(/已给 1 条补上笔记/)).toBeVisible();
+  await dialog.getByRole("button", { name: "完成" }).click();
+
+  await expect(bare.getByText("防御本身，而不是疾病：值得回头看")).toBeVisible();
+});

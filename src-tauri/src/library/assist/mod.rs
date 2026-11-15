@@ -4,6 +4,8 @@
 pub mod conversation;
 pub mod graph;
 pub mod guide;
+pub mod note_draft;
+pub mod note_recap;
 pub mod ocr;
 pub mod summary;
 pub mod tagging;

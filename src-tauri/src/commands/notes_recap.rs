@@ -92,6 +92,42 @@ pub async fn notes_recap(
     }
 }
 
+/// `notes.recapGet` — the review this reader chose to keep for one book.
+#[tauri::command]
+#[specta::specta]
+pub fn notes_recap_get(state: State<'_, AppState>, book_id: String) -> AppResult<Option<String>> {
+    state.library.with(|conn| crate::library::note_recap::cached(conn, &book_id))
+}
+
+/// `notes.recapSave` — the only path that writes a review.
+///
+/// The model streams a preview; the reader presses 保存. Sourcing the log line
+/// as `ai` keeps 「这段是模型起的，我点了保存」distinct from a note the reader
+/// typed. It is deliberately not undoable: the text is derived, and 重新整理 +
+/// 保存 replaces it.
+#[tauri::command]
+#[specta::specta]
+pub fn notes_recap_save(
+    state: State<'_, AppState>,
+    book_id: String,
+    text: String,
+) -> AppResult<()> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(AppError::InvalidArgument("回顾是空的，不能保存".into()));
+    }
+    state.library.with_tx(|tx| {
+        crate::library::note_recap::store(tx, &book_id, text)?;
+        crate::library::ops::record(
+            tx,
+            crate::library::ops::Source::Ai,
+            "notes_recap_save",
+            std::slice::from_ref(&book_id),
+            "保存了 AI 整理的笔记",
+        )
+    })
+}
+
 /// The annotated highlights, in reading order, as the model's material.
 ///
 /// A highlight with no note is a passage the reader marked, not something they
