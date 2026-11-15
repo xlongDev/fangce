@@ -1,10 +1,11 @@
-import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, type ReactNode } from "react";
 
 import type { SleepTimerControls } from "@/hooks/useSleepTimer";
 import { useSleepTimer } from "@/hooks/useSleepTimer";
 import { useReaderSettings } from "@/stores/reader";
 
-import { useTts, type Tts } from "./tts";
+import { useSpeechVoices, useTts, type Tts } from "./tts";
+import { defaultVoice } from "./voice";
 
 /**
  * The read-aloud engine, hosted by the shell rather than by the reader.
@@ -34,7 +35,23 @@ export function TtsHost({ children }: { children: ReactNode }) {
   // The word-level wash is the only thing that re-renders per word, and it is a
   // reading preference, not a reader's: the engine watches from up here.
   const word = useReaderSettings((state) => state.speechGranularity === "word");
+  const storedVoice = useReaderSettings((state) => state.speechVoiceURI);
   const tts = useTts({ trackBoundary: word });
+  const { setVoice } = tts;
+
+  /** The engine used to learn its voice only when the reader page mounted.
+   *  An AI answer read from the notes page therefore started with a null uri,
+   *  and `engineOf(null)` is "system" — the platform voice spoke where the Edge
+   *  default should have. Resolve it here, once, above every route. */
+  const { voices } = useSpeechVoices();
+  const voiceUri = useMemo(
+    () => storedVoice ?? defaultVoice(voices, null)?.uri ?? null,
+    [storedVoice, voices],
+  );
+  useEffect(() => {
+    setVoice(voiceUri);
+  }, [voiceUri, setVoice]);
+
   const stop = tts.stop;
   const sleep = useSleepTimer(stop);
   // Both halves are already identity-stable — `useTts` memoises on its own state
