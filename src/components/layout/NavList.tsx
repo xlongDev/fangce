@@ -127,7 +127,7 @@ export function NavList() {
               {isActive && (
                 <motion.span
                   layoutId="nav-pill"
-                  className="bg-accent-soft absolute inset-0 rounded-md"
+                  className="glass absolute inset-0 rounded-md"
                   transition={reduce ? { duration: 0 } : SPRING.layout}
                 />
               )}
