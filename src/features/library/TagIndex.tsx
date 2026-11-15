@@ -5,6 +5,7 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
 import { useDeleteTag } from "@/hooks/useTags";
+import { matchesInitials } from "@/features/library/pinyin";
 import { cn } from "@/lib/cn";
 import type { TagSummary } from "@/types/ipc";
 
@@ -86,7 +87,13 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
   const remove = useDeleteTag();
 
   const trimmed = query.trim().toLowerCase();
-  const matched = trimmed ? tags.filter((tag) => tag.name.toLowerCase().includes(trimmed)) : tags;
+  // A label can be found by its own characters or by its initials: `zg` reaches
+  // 「中国历史」 in a field that only takes ASCII.
+  const matched = trimmed
+    ? tags.filter(
+        (tag) => tag.name.toLowerCase().includes(trimmed) || matchesInitials(tag.name, trimmed),
+      )
+    : tags;
 
   // The backend hands these over most-used first, so filtering is enough to
   // band them — no second sort that could disagree with the query.
@@ -272,8 +279,9 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
           className="pr-16"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="搜索标签"
-          aria-label="搜索标签"
+          placeholder="搜索标签或拼音"
+          title="打拼音首字母也能找到，比如 zg → 中国历史"
+          aria-label="搜索标签或拼音首字母"
         />
         {trimmed && (
           <span className="text-text-3 pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[11px] tabular-nums">

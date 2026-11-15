@@ -59,17 +59,28 @@ describe("标签索引", () => {
   it("搜索越过折叠", async () => {
     const { user } = open(shelf());
 
-    await user.type(screen.getByLabelText("搜索标签"), "普通12");
+    await user.type(screen.getByLabelText("搜索标签或拼音首字母"), "普通12");
 
     expect(row("普通12")).toBeTruthy();
     expect(row("普通0")).toBeNull();
     expect(screen.getByText("匹配 1")).toBeTruthy();
   });
 
+  /** 读者知道标签叫什么，但输入法只有 ASCII：两个字母胜过翻 114 行。 */
+  it("拼音首字母也能找到标签", async () => {
+    const { user } = open(shelf());
+
+    // 纯字母才当首字母（带数字的查询按原文匹配），所以打 cy 找「常用0」
+    await user.type(screen.getByLabelText("搜索标签或拼音首字母"), "cy");
+
+    expect(row("常用0")).toBeTruthy();
+    expect(row("普通0")).toBeNull();
+  });
+
   it("没有匹配时给出计数，而不是空着", async () => {
     const { user } = open(shelf());
 
-    await user.type(screen.getByLabelText("搜索标签"), "zzz");
+    await user.type(screen.getByLabelText("搜索标签或拼音首字母"), "zzz");
 
     expect(screen.getByText("匹配 0")).toBeTruthy();
   });
