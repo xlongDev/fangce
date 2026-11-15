@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { initialsOf, matchesInitials } from "@/features/library/pinyin";
+import { initialsOf, letterOf, matchesInitials } from "@/features/library/pinyin";
 
 describe("拼音首字母", () => {
   it("取每个字的声母", () => {
@@ -22,6 +22,21 @@ describe("拼音首字母", () => {
     expect(matchesInitials("中国历史", "历史")).toBe(false);
     // 数字与符号也不当首字母
     expect(matchesInitials("中国历史", "2")).toBe(false);
+  });
+
+  /** 字典判不出某字时，退到平台排序：分不出声调，但至少给一个字母。 */
+  it("字典放不下的字用排序兜底", () => {
+    // WebKit 把这些字判成「不是拼音字」（它把「中」排在 U+9FFF 之后），
+    // 于是「美国文学」只剩 mgw。排序兜底让它们仍各自有字母。
+    expect(letterOf("中")).toBe("z");
+    expect(letterOf("学")).toBe("x");
+    expect(letterOf("哲")).toBe("z");
+    expect(letterOf("艺")).toBe("y");
+    // 每块的起点也要落在自己那一块上，否则整块会往前挪一个字母。
+    expect(letterOf("阿")).toBe("a");
+    expect(letterOf("俄")).toBe("e");
+    expect(letterOf("匝")).toBe("z");
+    expect(letterOf("八")).toBe("b");
   });
 
   it("同一个名字只解析一次", () => {
