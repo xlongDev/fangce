@@ -119,41 +119,43 @@ test("the highlight sits on the row it selected, and stays there while scrolling
 
   const target = rowNamed(page, "社会学");
   await target.click();
-  // The pane travels on `--ease-spring` (420ms); measuring mid-flight would
-  // read the overshoot as a miss.
-  await page.waitForTimeout(700);
 
-  const measure = () =>
+  /**
+   * How far the pane is from the row it belongs to, in both directions.
+   *
+   * Both rects are read in one evaluate so the two numbers come from one
+   * layout — and the gap is computed in the page rather than compared in Node,
+   * because a scroll between two separate reads would be a false pass or a
+   * false failure depending on the direction it happened to move.
+   */
+  const gap = () =>
     target.evaluate((button) => {
-      const row = button.parentElement!;
+      const row = button.parentElement;
       const pane = document.querySelector("[data-tag-indicator]");
-      if (!pane) return null;
-      // One read of both rects, so the two numbers come from one layout.
+      if (!row || !pane) return null;
       const rowBox = row.getBoundingClientRect();
       const paneBox = pane.getBoundingClientRect();
       return {
-        rowTop: rowBox.top,
-        rowHeight: rowBox.height,
-        paneTop: paneBox.top,
-        paneHeight: paneBox.height,
+        top: Math.abs(paneBox.top - rowBox.top),
+        height: Math.abs(paneBox.height - rowBox.height),
       };
     });
 
-  const settled = await measure();
-  expect(settled).not.toBeNull();
-  expect(Math.abs(settled!.paneTop - settled!.rowTop)).toBeLessThan(1);
-  expect(Math.abs(settled!.paneHeight - settled!.rowHeight)).toBeLessThan(1);
+  // The pane travels on a spring, so 「aligned」 is a state it reaches rather
+  // than one it holds: measured on this machine it peaks 8px past the row at
+  // 260ms and settles by 300ms. A fixed wait is therefore a bet on how fast the
+  // first frame arrives, and on a loaded runner that bet loses — CI read the
+  // overshoot (7.76px) and called it a miss. Polling asserts the same thing
+  // (exact alignment) without asserting *when*.
+  await expect.poll(async () => (await gap())?.top ?? 999, { timeout: 5000 }).toBeLessThan(1);
+  expect((await gap())!.height).toBeLessThan(1);
 
   // The pane is positioned in the list's own coordinates, so scrolling must
   // carry it along instead of leaving it floating over whatever is on screen.
   await list(page).evaluate((el) => {
     el.scrollTop = 60;
   });
-  await page.waitForTimeout(200);
-
-  const scrolled = await measure();
-  expect(scrolled).not.toBeNull();
-  expect(Math.abs(scrolled!.paneTop - scrolled!.rowTop)).toBeLessThan(1);
+  await expect.poll(async () => (await gap())?.top ?? 999, { timeout: 3000 }).toBeLessThan(1);
 });
 
 test("a search shows matches, in one flat list", async ({ page }) => {
