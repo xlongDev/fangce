@@ -5,7 +5,7 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
 import { useDeleteTag } from "@/hooks/useTags";
-import { matchesInitials } from "@/features/library/pinyin";
+import { searchTags } from "@/features/library/labelSearch";
 import { cn } from "@/lib/cn";
 import type { TagSummary } from "@/types/ipc";
 
@@ -87,13 +87,8 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
   const remove = useDeleteTag();
 
   const trimmed = query.trim().toLowerCase();
-  // A label can be found by its own characters or by its initials: `zg` reaches
-  // 「中国历史」 in a field that only takes ASCII.
-  const matched = trimmed
-    ? tags.filter(
-        (tag) => tag.name.toLowerCase().includes(trimmed) || matchesInitials(tag.name, trimmed),
-      )
-    : tags;
+  /** Already in relevance order; empty query hands back the shelf order. */
+  const matched = searchTags(tags, query);
 
   // The backend hands these over most-used first, so filtering is enough to
   // band them — no second sort that could disagree with the query.
@@ -134,10 +129,8 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
    * Searching always opens everything: the reader is looking for a word, not
    * browsing a structure.
    */
-  const bandOpen = (key: string, band: TagSummary[]) => {
-    if (trimmed !== "") return true;
-    return overrides[key] ?? (band.some((tag) => tag.name === selected) || band.length <= PER_BAND);
-  };
+  const bandOpen = (key: string, band: TagSummary[]) =>
+    overrides[key] ?? (band.some((tag) => tag.name === selected) || band.length <= PER_BAND);
 
   /** The list, and each row's element, so the highlight can be measured. */
   const listRef = useRef<HTMLUListElement>(null);
@@ -164,7 +157,10 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
    *  changes — a band folded, a search typed, a tag deleted — and this is the
    *  number that actually moves when those happen. */
   const visibleRows =
-    1 + bands.reduce((n, band) => n + (bandOpen(band.key, band.tags) ? band.tags.length : 0), 0);
+    1 +
+    (trimmed !== ""
+      ? matched.length
+      : bands.reduce((n, band) => n + (bandOpen(band.key, band.tags) ? band.tags.length : 0), 0));
 
   const rowKey = selected ?? "";
   useLayoutEffect(() => {
@@ -280,7 +276,7 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="搜索标签或拼音"
-          title="打拼音首字母也能找到，比如 zg → 中国历史"
+          title="拼音首字母或全拼都能找，空格隔开多个词，比如 zg / zhongguo"
           aria-label="搜索标签或拼音首字母"
         />
         {trimmed && (
@@ -336,42 +332,48 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
           </button>
         </li>
 
-        {bands.map((band) => {
-          if (band.tags.length === 0) return null;
-          const open = bandOpen(band.key, band.tags);
-          const shown = open ? band.tags : [];
-          return (
-            <li key={band.key} className="mt-3">
-              {/* The header is a heading, and a heading does not need a verb in
+        {/* A search shows matches, not bands. Relevance order is the only order
+            that means anything while looking for one word, and grouping by how
+            many books a label gathers would shuffle that order into three
+            piles the reader did not ask for. */}
+        {trimmed !== ""
+          ? matched.map(row)
+          : bands.map((band) => {
+              if (band.tags.length === 0) return null;
+              const open = bandOpen(band.key, band.tags);
+              const shown = open ? band.tags : [];
+              return (
+                <li key={band.key} className="mt-3">
+                  {/* The header is a heading, and a heading does not need a verb in
                   it: the count on its left is the state, the arrow on its right
                   is the control. 「展开 15 个」 next to 「常用 15」 was the count
                   twice, in two different kinds of text. */}
-              <p className="text-text-3 mb-1 flex items-center gap-1.5 pl-2.5 text-[11px]">
-                {band.label}
-                <span className="tabular-nums opacity-60">· {band.tags.length}</span>
-                {band.tags.length > PER_BAND && !trimmed && (
-                  <button
-                    type="button"
-                    onClick={() => setOverrides((all) => ({ ...all, [band.key]: !open }))}
-                    aria-expanded={open}
-                    aria-label={open ? "收起" : `展开 ${band.tags.length} 个`}
-                    className="press focus-visible:focus-ring text-text-3 hover:bg-surface-2 hover:text-text-1 ml-auto flex h-5 w-5 items-center justify-center rounded-md"
-                  >
-                    <CaretDown
-                      size={11}
-                      aria-hidden
-                      className={cn(
-                        "transition-transform duration-200 ease-out",
-                        open && "rotate-180",
-                      )}
-                    />
-                  </button>
-                )}
-              </p>
-              {shown.length > 0 && <ul className="flex flex-col">{shown.map(row)}</ul>}
-            </li>
-          );
-        })}
+                  <p className="text-text-3 mb-1 flex items-center gap-1.5 pl-2.5 text-[11px]">
+                    {band.label}
+                    <span className="tabular-nums opacity-60">· {band.tags.length}</span>
+                    {band.tags.length > PER_BAND && (
+                      <button
+                        type="button"
+                        onClick={() => setOverrides((all) => ({ ...all, [band.key]: !open }))}
+                        aria-expanded={open}
+                        aria-label={open ? "收起" : `展开 ${band.tags.length} 个`}
+                        className="press focus-visible:focus-ring text-text-3 hover:bg-surface-2 hover:text-text-1 ml-auto flex h-5 w-5 items-center justify-center rounded-md"
+                      >
+                        <CaretDown
+                          size={11}
+                          aria-hidden
+                          className={cn(
+                            "transition-transform duration-200 ease-out",
+                            open && "rotate-180",
+                          )}
+                        />
+                      </button>
+                    )}
+                  </p>
+                  {shown.length > 0 && <ul className="flex flex-col">{shown.map(row)}</ul>}
+                </li>
+              );
+            })}
       </ul>
 
       <GlassDialog

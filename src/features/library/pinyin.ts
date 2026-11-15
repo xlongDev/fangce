@@ -1,4 +1,4 @@
-import { isSupported, parse } from "tiny-pinyin";
+import { convertToPinyin, isSupported, parse } from "tiny-pinyin";
 
 /**
  * Pinyin initials, for finding 「中国历史」 by typing `zg`.
@@ -43,6 +43,17 @@ export function initialsOf(text: string): string {
     .replace(/[^a-z0-9]/g, "");
 
   cache.set(text, out);
+  return out;
+}
+
+/** Full pinyin, cached the same way: 「中国历史」 → `zhongguolishi`. */
+const full = new Map<string, string>();
+
+export function fullPinyinOf(text: string): string {
+  const hit = full.get(text);
+  if (hit !== undefined) return hit;
+  const out = convertToPinyin(text, "", true).replace(/[^a-z0-9]/g, "");
+  full.set(text, out);
   return out;
 }
 

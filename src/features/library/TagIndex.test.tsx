@@ -77,6 +77,27 @@ describe("标签索引", () => {
     expect(row("普通0")).toBeNull();
   });
 
+  /** 搜索时不分带：分组会把相关度顺序打散成三堆，而读者只在一个词。 */
+  it("搜索时不再显示分组标题", async () => {
+    const { user } = open(shelf());
+    expect(screen.getByText(/本以上/)).toBeTruthy();
+
+    await user.type(screen.getByLabelText("搜索标签或拼音首字母"), "常用");
+
+    expect(screen.queryByText(/本以上/)).toBeNull();
+    expect(row("常用0")).toBeTruthy();
+  });
+
+  /** 两个字不挨着也能找：空格分词让「常用 2」命中「常用2」。 */
+  it("空格分隔的多个词都要命中", async () => {
+    const { user } = open(shelf());
+
+    await user.type(screen.getByLabelText("搜索标签或拼音首字母"), "常用 2");
+
+    expect(row("常用2")).toBeTruthy();
+    expect(row("常用0")).toBeNull();
+  });
+
   it("没有匹配时给出计数，而不是空着", async () => {
     const { user } = open(shelf());
 
