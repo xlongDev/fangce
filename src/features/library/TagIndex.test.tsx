@@ -148,6 +148,48 @@ describe("标签索引", () => {
     expect(pane?.className).toContain("pointer-events-none");
   });
 
+  /** 281 行逐个 Tab 是折磨：整条索引只有一个站位，方向键负责走。 */
+  it("整条索引只有一个 Tab 站位", () => {
+    open(shelf());
+
+    const stops = document.querySelectorAll('[data-tag-row][tabindex="0"]');
+    expect(stops.length).toBe(1);
+    // 没选中时是「全部」——它是回到整架的入口。
+    expect(stops[0]?.getAttribute("data-tag-row")).toBe("");
+  });
+
+  /** 方向键走焦点，Enter 才筛选：每一个筛选都是一次查询，按住 ↓ 不该连问二十次。 */
+  it("方向键在行之间移动焦点，不改变筛选", async () => {
+    const { user, onSelect } = open(shelf());
+
+    row("常用0")!.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(row("常用1"));
+
+    await user.keyboard("{End}");
+    expect(document.activeElement).toBe(row("一次性1"));
+
+    await user.keyboard("{Home}");
+    expect(document.activeElement?.getAttribute("data-tag-row")).toBe("");
+
+    expect(onSelect).not.toHaveBeenCalled();
+
+    // 到了想去的那一行，Enter 才算数。
+    row("常用1")!.focus();
+    await user.keyboard("{Enter}");
+    expect(onSelect).toHaveBeenCalledWith("常用1");
+  });
+
+  /** 打完两个字母，↓ 直接落到结果里——伸手拿鼠标才是这一步的成本。 */
+  it("在搜索框里按 ↓ 进入列表", async () => {
+    const { user } = open(shelf());
+
+    await user.click(screen.getByLabelText("搜索标签或拼音首字母"));
+    await user.keyboard("{ArrowDown}");
+
+    expect(document.activeElement?.getAttribute("data-tag-row")).toBe("");
+  });
+
   /** 删除只在这一行被指向时出现：破坏性控件不该挡在读者要点的标签前面。 */
   it("删除要经确认，先说清几本书会失去它", async () => {
     const { user } = open(shelf(), "常用0");

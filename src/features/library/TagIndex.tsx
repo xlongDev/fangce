@@ -184,6 +184,47 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
     }
   }, [rowKey, settled, visibleRows]);
 
+  /**
+   * Arrow keys walk the rows; Enter and Space pick one.
+   *
+   * The rows are buttons, so Enter and Space already do the right thing — the
+   * only thing missing was a way to *reach* them without 281 Tab presses, which
+   * is what the roving `tabIndex` below is for: the list is one tab stop.
+   *
+   * Focus moves, selection does not follow it. Every pick fires a filtered
+   * query against the library, so holding ↓ would otherwise ask the database
+   * for twenty shelves in a second. The cost of the other choice is one extra
+   * keystroke, paid once, by a reader who was going to press Enter anyway.
+   *
+   * Attached to the rows rather than to the list: a `<ul>` is not interactive,
+   * and focus can only ever be on a row button or that row's trash — both of
+   * which carry this handler, so nothing has to bubble.
+   */
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const rows = [
+      ...(listRef.current?.querySelectorAll<HTMLButtonElement>("[data-tag-row]") ?? []),
+    ];
+    if (rows.length === 0) return;
+    event.preventDefault();
+
+    // `indexOf` on the element itself rather than on its label: two rows can
+    // share a name after a rename, and -1 (focus was somewhere else) starts
+    // from the selection instead.
+    const at = rows.indexOf(document.activeElement as HTMLButtonElement);
+    const from = at >= 0 ? at : rows.findIndex((row) => row.dataset.tagRow === rowKey);
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? rows.length - 1
+          : event.key === "ArrowDown"
+            ? Math.min(rows.length - 1, from + 1)
+            : Math.max(0, from - 1);
+
+    rows[next]?.focus();
+  };
+
   if (tags.length === 0) {
     return (
       <p className="text-text-3 text-xs leading-relaxed">
@@ -210,8 +251,11 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
         >
           <button
             type="button"
+            tabIndex={active ? 0 : -1}
+            data-tag-row={tag.name}
             aria-current={active ? "true" : undefined}
             aria-label={`${tag.name}，${tag.count} 本`}
+            onKeyDown={onKeyDown}
             onClick={() => onSelect(tag.name)}
             className="focus-visible:focus-ring flex h-full min-w-0 flex-1 items-center gap-2 rounded-lg pr-1 pl-2.5 text-left"
           >
@@ -235,7 +279,12 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
               to click. */}
           <button
             type="button"
+            // Tab reaches this only from the selected row. Otherwise the rail
+            // would be 281 invisible stops, since the trash is `opacity-0`
+            // until the row is pointed at — a focus ring landing on nothing.
+            tabIndex={active ? 0 : -1}
             aria-label={`删除标签 ${tag.name}`}
+            onKeyDown={onKeyDown}
             onClick={() => setPending(tag)}
             className="press focus-visible:focus-ring text-text-3 hover:text-danger mr-1 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
           >
@@ -278,6 +327,16 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
           placeholder="搜索标签或拼音"
           title="拼音首字母或全拼都能找，空格隔开多个词，比如 zg / zhongguo"
           aria-label="搜索标签或拼音首字母"
+          // ↓ out of the field and into the results: the reader has typed two
+          // letters, and reaching for the mouse to pick one of four matches is
+          // the part that costs.
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowDown") return;
+            const first = listRef.current?.querySelector<HTMLButtonElement>("[data-tag-row]");
+            if (!first) return;
+            event.preventDefault();
+            first.focus();
+          }}
         />
         {trimmed && (
           <span className="text-text-3 pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[11px] tabular-nums">
@@ -312,7 +371,12 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
         <li>
           <button
             type="button"
+            // One tab stop for the whole rail: the selected row (or 全部) is the
+            // way in, and the arrows take over from there.
+            tabIndex={selected === null ? 0 : -1}
+            data-tag-row=""
             aria-current={selected === null ? "true" : undefined}
+            onKeyDown={onKeyDown}
             onClick={() => onSelect(null)}
             // `pr-8` matches where a tag row's count lands: the tag rows hold
             // space for the delete button even when it is invisible, so without
