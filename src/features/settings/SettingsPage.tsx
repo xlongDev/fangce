@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArrowsClockwise,
@@ -308,6 +308,42 @@ export function SettingsPage() {
     return () => cancelAnimationFrame(frame);
   }, [hash, jumpTo]);
 
+  /**
+   * One glass pane that travels along the rail, measured from the entry the
+   * pane says is current.
+   *
+   * It used to be a `layoutId` pill mounted inside each active button: a fresh
+   * raster of the material at every stop and a `transform` written by motion
+   * every frame. This is the same device the tag rail and the sidebar use — one
+   * element that never unmounts, moved by a CSS transition on the app's
+   * spring token (`--ease-spring`, the overshoot is what makes it read as a
+   * glide rather than a slide). It is also the only shape that works in both
+   * layouts: the rail is a scrolling row under `lg` and a column at `lg`, so the
+   * pane has to carry its own width and a horizontal offset too.
+   *
+   * Coordinates are the rail's content box (rect delta + scroll offset), so the
+   * pane scrolls with the entries on narrow screens. No dependency list, like
+   * the sidebar's copy of this: the placement is a pure function of the DOM,
+   * and re-writing the same transform is a no-op for the browser.
+   */
+  const railRef = useRef<HTMLUListElement>(null);
+  const railPaneRef = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const rail = railRef.current;
+    const pane = railPaneRef.current;
+    if (!rail || !pane) return;
+    const entry = rail.querySelector<HTMLElement>('button[aria-current="true"]');
+    pane.style.opacity = entry ? "1" : "0";
+    if (!entry) return;
+    const box = entry.getBoundingClientRect();
+    const base = rail.getBoundingClientRect();
+    pane.style.width = `${box.width}px`;
+    pane.style.height = `${box.height}px`;
+    pane.style.transform = `translate(${box.left - base.left + rail.scrollLeft}px, ${
+      box.top - base.top + rail.scrollTop
+    }px)`;
+  });
+
   return (
     <div ref={scrollRef} data-settings-scroll className="relative h-full overflow-y-auto">
       <div className="mx-auto max-w-5xl px-6 pt-8 pb-16 lg:px-8">
@@ -320,7 +356,20 @@ export function SettingsPage() {
 
         <div className="flex flex-col gap-8 lg:flex-row lg:gap-10">
           <nav aria-label="设置分类" className="lg:sticky lg:top-8 lg:w-36 lg:self-start">
-            <ul className="flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:pb-0">
+            <ul
+              ref={railRef}
+              className="relative flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:pb-0"
+            >
+              {/* The pane itself, first in the list so the entries paint over
+                  it — `relative` on each button is what puts the icon and the
+                  label above it. `pointer-events-none` because the rail is a
+                  row of targets and this sits across all of them. */}
+              <span
+                ref={railPaneRef}
+                aria-hidden
+                data-settings-rail-pane
+                className="glass pointer-events-none absolute top-0 left-0 rounded-lg opacity-0 transition-[transform,width,height,opacity] duration-[420ms] ease-[var(--ease-spring)] will-change-transform motion-reduce:transition-none"
+              />
               {SECTIONS.map(({ id, label, icon: Icon }) => {
                 const on = active === id;
                 return (
@@ -336,17 +385,6 @@ export function SettingsPage() {
                           : "text-text-2 hover:text-text-1 hover:bg-surface-1",
                       )}
                     >
-                      {/* The highlight slides between rail entries rather than
-                          teleporting: one shared-layout pill, the same device
-                          as the theme radio below. Labels sit above it, so the
-                          horizontal rail and the vertical one move alike. */}
-                      {on && (
-                        <motion.span
-                          layoutId="settings-rail-active"
-                          className="bg-surface-3 shadow-glass absolute inset-0 rounded-lg"
-                          transition={reduce ? { duration: 0 } : SPRING.layout}
-                        />
-                      )}
                       <Icon
                         size={15}
                         weight={on ? "fill" : "regular"}

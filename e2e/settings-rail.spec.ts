@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 /**
  * The rail is a jump table, not a highlight.
@@ -231,4 +231,124 @@ test("关于 carries the app mark, the author and the full repository URL", asyn
   await expect(about.getByRole("img", { name: "方册品牌标" })).toBeVisible();
   await expect(about).toContainText("xlongDev");
   await expect(about.getByRole("button", { name: /github\.com\/xlongDev\/fangce/ })).toBeVisible();
+});
+
+/**
+ * The highlight is one glass pane that travels, placed from the lit entry's own
+ * box — not a fill per entry. Two things follow from that and neither can be
+ * seen by the tests above: it must *land* on the entry the pane lights (a pane
+ * placed from a stale measurement is a decorative rectangle), and it must keep
+ * working when the rail is a scrolling row, where it carries a width and an x
+ * offset instead of just a y.
+ *
+ * Both boxes are read from one snapshot of the live DOM, and the wait is
+ * `expect.poll` against a 420ms transition — a fixed wait samples the glide.
+ */
+const TOUCHING = 1;
+
+async function railBoxes(page: Page) {
+  return page.evaluate(() => {
+    const rail = document.querySelector<HTMLElement>("nav[aria-label='设置分类'] ul");
+    const entry = rail?.querySelector<HTMLElement>('button[aria-current="true"]');
+    const pane = document.querySelector<HTMLElement>("[data-settings-rail-pane]");
+    if (!rail || !entry || !pane) return null;
+    const read = (el: HTMLElement) => {
+      const r = el.getBoundingClientRect();
+      const round = (n: number) => Math.round(n * 10) / 10;
+      return {
+        top: round(r.top),
+        left: round(r.left),
+        width: round(r.width),
+        height: round(r.height),
+      };
+    };
+    return { entry: read(entry), pane: read(pane) };
+  });
+}
+
+/** How far the pane's nearest edge is from the entry's, in px. */
+async function railDrift(page: Page) {
+  const b = await railBoxes(page);
+  if (!b) return "no rail";
+  return Math.max(
+    Math.abs(b.pane.top - b.entry.top),
+    Math.abs(b.pane.left - b.entry.left),
+    Math.abs(b.pane.width - b.entry.width),
+    Math.abs(b.pane.height - b.entry.height),
+  );
+}
+
+/** Pick an entry, wait until the rail calls it current, then until the pane
+ *  has landed on it. The first wait is not decoration: a click that never
+ *  reached the button leaves the rail on the previous entry, and a drift poll
+ *  alone would then pass on a pane that never had to move. */
+async function pick(page: Page, rail: Locator, label: string) {
+  await rail.getByRole("button", { name: label, exact: true }).click();
+  await expect(rail.locator('[aria-current="true"]'), `rail lit on ${label}`).toHaveText(label);
+  await expect
+    .poll(() => railDrift(page), { message: `highlight on ${label}` })
+    .toBeLessThanOrEqual(TOUCHING);
+}
+
+test("the highlight lands on the entry the rail lights", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openSettings(page);
+
+  const rail = page.locator('nav[aria-label="设置分类"]');
+  // Identity is the contract: a pane that is replaced per entry is the
+  // shared-layout version this replaced, with a fresh raster at every stop.
+  await page.evaluate(() => {
+    (window as unknown as { pane?: Element | null }).pane = document.querySelector(
+      "[data-settings-rail-pane]",
+    );
+  });
+
+  for (const label of ["字体", "同步", "关于", "外观"]) {
+    await pick(page, rail, label);
+
+    const same = await page.evaluate(() => {
+      const el = document.querySelector("[data-settings-rail-pane]");
+      return el !== null && el === (window as unknown as { pane?: Element | null }).pane;
+    });
+    expect(same, `the same pane after ${label}`).toBe(true);
+  }
+});
+
+test("the highlight keeps up when the rail is a scrolling row", async ({ page }) => {
+  // Below `lg` the rail is a row that scrolls sideways, so a click moves the
+  // rail under the pane: the pane has to be placed in the rail's content
+  // coordinates, with its own width.
+  await page.setViewportSize({ width: 700, height: 900 });
+  await openSettings(page);
+  const rail = page.locator('nav[aria-label="设置分类"]');
+
+  await pick(page, rail, "外观");
+  const first = await railBoxes(page);
+
+  await pick(page, rail, "操作记录");
+  const second = await railBoxes(page);
+
+  // Without a width difference this case would pass on a pane that only ever
+  // learned to move vertically.
+  expect(
+    Math.abs((second?.entry.width ?? 0) - (first?.entry.width ?? 0)) > 1,
+    "the two entries differ in width, so the pane has to carry one",
+  ).toBe(true);
+  // And a rail that scrolls under the pane keeps it: the placement is in the
+  // rail's content coordinates, so the entry and the pane move together. This
+  // is the line that catches a pane placed from viewport coordinates — it
+  // would line up at scrollLeft 0 and drift by exactly the scroll amount here.
+  // The scroll box is the `ul`, not the `nav` around it.
+  const row = rail.locator("ul");
+  await row.evaluate((el) => {
+    el.scrollLeft = 140;
+  });
+  await expect
+    .poll(() => row.evaluate((el) => el.scrollLeft), { message: "the row really scrolled" })
+    .toBeGreaterThan(0);
+  await expect
+    .poll(() => railDrift(page), { message: "row scrolled under the pane" })
+    .toBeLessThanOrEqual(TOUCHING);
+
+  await pick(page, rail, "外观");
 });
