@@ -127,6 +127,7 @@ describe("BookMetaDialog — 元数据编辑表", () => {
         authors: ["刘慈欣"],
       },
       null,
+      null,
     );
   });
 

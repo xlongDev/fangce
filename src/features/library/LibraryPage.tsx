@@ -807,9 +807,9 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
               // not inherit it.
               updateBook.reset();
             }}
-            onSave={(patch, coverUrl) =>
+            onSave={(patch, coverUrl, coverPath) =>
               updateBook.mutate(
-                { id: metaTarget.id, patch, coverUrl },
+                { id: metaTarget.id, patch, coverUrl, coverPath },
                 { onSuccess: () => setMetaTarget(null) },
               )
             }

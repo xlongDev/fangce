@@ -6,6 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   metadataSearch: vi.fn(),
   metadataCoverPreview: vi.fn(),
+  coverPreviewFile: vi.fn(),
+  openDialog: vi.fn(),
+  showToast: vi.fn(),
 }));
 
 vi.mock("@/lib/ipc", () => ({
@@ -19,8 +22,13 @@ vi.mock("@/lib/ipc", () => ({
   ipc: {
     metadataSearch: mocks.metadataSearch,
     metadataCoverPreview: mocks.metadataCoverPreview,
+    coverPreviewFile: mocks.coverPreviewFile,
   },
 }));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.openDialog }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
+vi.mock("@/stores/toasts", () => ({ showToast: mocks.showToast }));
 
 import { BookMetaDialog } from "@/features/library/BookMetaDialog";
 import type { BookSummary, Candidate } from "@/types/ipc";
@@ -89,11 +97,18 @@ function coverOfSave(onSave: ReturnType<typeof vi.fn>): string | null {
   return call ? (call[1] as string | null) : "never saved";
 }
 
+const LOCAL_PREVIEW = "data:image/png;base64,iVBORw0KGgo=";
+
 beforeEach(() => {
   mocks.metadataSearch.mockReset();
   mocks.metadataSearch.mockResolvedValue([candidate]);
   mocks.metadataCoverPreview.mockReset();
   mocks.metadataCoverPreview.mockResolvedValue(PREVIEW);
+  mocks.coverPreviewFile.mockReset();
+  mocks.coverPreviewFile.mockResolvedValue(LOCAL_PREVIEW);
+  mocks.openDialog.mockReset();
+  mocks.openDialog.mockResolvedValue("/books/covers/chosen.png");
+  mocks.showToast.mockReset();
 });
 
 describe("the cover a candidate brings", () => {
@@ -189,5 +204,62 @@ describe("the cover a candidate brings", () => {
     expect(screen.getByRole("button", { name: /换成这张/ })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect(coverOfSave(onSave)).toBeNull();
+  });
+});
+
+/** The cover path the save asks for: the third argument, or `null` for 「别动封面」. */
+const pathOfSave = (onSave: ReturnType<typeof vi.fn>): string | null => {
+  const call = onSave.mock.calls.at(-1);
+  return call ? (call[2] as string | null) : "never saved";
+};
+
+/** The third way to get a cover: a picture already on the reader's disk. No
+ *  catalogue, no download — the path is saved and the backend reads the bytes. */
+describe("uploading a local cover", () => {
+  it("previews the picked image and sends its path — not a URL — on save", async () => {
+    const { user, onSave } = open();
+    await user.click(screen.getByRole("button", { name: /上传封面/ }));
+
+    expect(mocks.openDialog).toHaveBeenCalled();
+    expect(mocks.coverPreviewFile).toHaveBeenCalledWith("/books/covers/chosen.png");
+    expect(screen.getByAltText("上传的封面预览")).toBeInTheDocument();
+    expect(screen.getByText("保存时上传")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    expect(coverOfSave(onSave)).toBeNull();
+    expect(pathOfSave(onSave)).toBe("/books/covers/chosen.png");
+  });
+
+  it("can be dropped with 不换, leaving no cover to save", async () => {
+    const { user } = open();
+    await user.click(screen.getByRole("button", { name: /上传封面/ }));
+    await user.click(screen.getByRole("button", { name: "不换" }));
+
+    expect(screen.queryByAltText("上传的封面预览")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+  });
+
+  it("a catalogue pick replaces the uploaded one so one save writes one cover", async () => {
+    const { user, onSave } = open();
+    await user.click(screen.getByRole("button", { name: /上传封面/ }));
+    expect(screen.getByAltText("上传的封面预览")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "豆瓣" }));
+    await user.click(await screen.findByRole("button", { name: "只换封面" }));
+
+    expect(screen.queryByAltText("上传的封面预览")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    expect(coverOfSave(onSave)).toBe(COVER);
+    expect(pathOfSave(onSave)).toBeNull();
+  });
+
+  it("a failed read shows no preview and no toast-swallowed pending cover", async () => {
+    mocks.coverPreviewFile.mockRejectedValueOnce(new Error("not an image"));
+    const { user } = open();
+    await user.click(screen.getByRole("button", { name: /上传封面/ }));
+
+    expect(screen.queryByAltText("上传的封面预览")).not.toBeInTheDocument();
+    expect(mocks.showToast).toHaveBeenCalledWith("error", expect.stringContaining("读取封面失败"));
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
   });
 });

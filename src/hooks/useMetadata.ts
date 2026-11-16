@@ -76,6 +76,17 @@ export function useCoverPreview(url: string | null | undefined, enabled: boolean
   });
 }
 
+/**
+ * A local image the reader picked, as a data URL, for the sheet to show before
+ * 保存. A mutation because it runs on a file-pick, not on open — and because a
+ * path read is a one-off, not a cacheable question the way a cover URL is.
+ */
+export function useLocalCoverPreview() {
+  return useMutation<string, Error, string>({
+    mutationFn: (path) => ipc.coverPreviewFile(path),
+  });
+}
+
 /** Writes the proposals the reader accepted. One transaction, one log entry. */
 export function useMetadataApply() {
   const queryClient = useQueryClient();

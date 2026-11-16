@@ -4,11 +4,39 @@
 //! directory walks and file renames run on a blocking task so a few hundred
 //! covers never stall the UI thread.
 
+use base64::Engine as _;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
 use crate::library::covers::{self, CleanupResult, CoverManagerData, CoverOpResult};
 use crate::state::AppState;
+
+/// `cover.preview_file` — read a local image the reader picked and hand its
+/// data URL back so the metadata sheet can show it before 保存. This is the
+/// local twin of `metadataCoverPreview` (which fetches a URL): same size cap,
+/// same byte-sniffing, so a renamed non-image cannot masquerade as a cover.
+#[tauri::command]
+#[specta::specta]
+pub async fn cover_preview_file(path: String) -> AppResult<String> {
+    const PREVIEW_LIMIT: u64 = 4 * 1024 * 1024;
+    tauri::async_runtime::spawn_blocking(move || {
+        let meta = std::fs::metadata(&path)
+            .map_err(|err| AppError::Message(format!("读取封面失败：{err}")))?;
+        if meta.len() > PREVIEW_LIMIT {
+            return Err(AppError::Message("封面太大，预览不了".into()));
+        }
+        let bytes = std::fs::read(&path)
+            .map_err(|err| AppError::Message(format!("读取封面失败：{err}")))?;
+        let mime = crate::library::metadata::preview_mime(&bytes)
+            .ok_or_else(|| AppError::Parse("这不是 JPG 或 PNG 图片".into()))?;
+        Ok::<_, AppError>(format!(
+            "data:{mime};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        ))
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("预览封面被中断：{err}")))?
+}
 
 /// `cover.list` — the whole manager in one read.
 #[tauri::command]

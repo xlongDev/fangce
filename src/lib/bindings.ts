@@ -294,6 +294,14 @@ export const commands = {
   /**  `cover.list` — the whole manager in one read. */
   coverList: (options?: InvokeOptions) =>
     __TAURI_INVOKE<CoverManagerData_Serialize>("cover_list", undefined, options),
+  /**
+   *  `cover.preview_file` — read a local image the reader picked and hand its
+   *  data URL back so the metadata sheet can show it before 保存. This is the
+   *  local twin of `metadataCoverPreview` (which fetches a URL): same size cap,
+   *  same byte-sniffing, so a renamed non-image cannot masquerade as a cover.
+   */
+  coverPreviewFile: (path: string, options?: InvokeOptions) =>
+    __TAURI_INVOKE<string>("cover_preview_file", { path }, options),
   /**  `cover.retire` — take downloaded covers off their books into the bin. */
   coverRetire: (keys: string[], options?: InvokeOptions) =>
     __TAURI_INVOKE<CoverOpResult>("cover_retire", { keys }, options),
@@ -572,8 +580,9 @@ export const commands = {
     id: string,
     patch: BookMetadataPatch_Deserialize,
     coverUrl: string | null,
+    coverPath: string | null,
     options?: InvokeOptions,
-  ) => __TAURI_INVOKE<boolean>("book_update", { id, patch, coverUrl }, options),
+  ) => __TAURI_INVOKE<boolean>("book_update", { id, patch, coverUrl, coverPath }, options),
   /**  `bookmark.create` — pins the current position and returns it. */
   bookmarkCreate: (
     bookId: string,

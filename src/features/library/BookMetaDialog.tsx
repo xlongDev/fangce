@@ -1,5 +1,7 @@
 import { useState, type ReactNode } from "react";
-import { ArrowSquareOut, ImageSquare, MagnifyingGlass } from "@phosphor-icons/react";
+import { ArrowSquareOut, ImageSquare, MagnifyingGlass, UploadSimple } from "@phosphor-icons/react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
@@ -7,9 +9,8 @@ import { GlassDialog } from "@/components/glass/overlay";
 import { CoverThumb } from "@/features/library/CoverThumb";
 import { formatFileSize } from "@/features/library/format";
 import { useBookInfo } from "@/hooks/useLibrary";
-import { type Source, useMetadataSearch } from "@/hooks/useMetadata";
+import { type Source, useLocalCoverPreview, useMetadataSearch } from "@/hooks/useMetadata";
 import { sourceLabel } from "@/lib/metadata";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { showToast } from "@/stores/toasts";
 import { isDesktopRuntime } from "@/lib/ipc";
 import type { BookMetadataPatch, BookSummary, Candidate } from "@/types/ipc";
@@ -72,9 +73,10 @@ interface BookMetaDialogProps {
   book: BookSummary | null;
   busy?: boolean;
   onCancel: () => void;
-  /** `coverUrl` is the picture to fetch with this save, or `null` to leave the
-   *  one the book has alone. */
-  onSave: (patch: BookMetadataPatch, coverUrl: string | null) => void;
+  /** `coverUrl` is a catalogue picture to fetch with this save, `coverPath` a
+   *  local image the reader picked. Mutually exclusive; both `null` leaves the
+   *  book's own picture alone. */
+  onSave: (patch: BookMetadataPatch, coverUrl: string | null, coverPath: string | null) => void;
 }
 
 export function BookMetaDialog({ book, busy, onCancel, onSave }: BookMetaDialogProps) {
@@ -102,9 +104,10 @@ interface BookMetaFormProps {
   book: BookSummary;
   busy?: boolean;
   onCancel: () => void;
-  /** `coverUrl` is the picture to fetch with this save, or `null` to leave the
-   *  one the book has alone. */
-  onSave: (patch: BookMetadataPatch, coverUrl: string | null) => void;
+  /** `coverUrl` is a catalogue picture to fetch with this save, `coverPath` a
+   *  local image the reader picked. Mutually exclusive; both `null` leaves the
+   *  book's own picture alone. */
+  onSave: (patch: BookMetadataPatch, coverUrl: string | null, coverPath: string | null) => void;
 }
 
 /** One empty field is "unknown", not a deliberate blank, so the form sends
@@ -155,9 +158,35 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
    *  part of the form's patch — and it must not be written the moment the
    *  reader clicks a candidate, because nothing is written before 保存. */
   const [pendingCover, setPendingCover] = useState<string | null>(null);
+  /** A local picture the reader picked from disk, with its data-URL preview.
+   *  Kept apart from `pendingCover`: a local path cannot be fetched like a URL,
+   *  and picking one must clear the other so one click never writes two covers. */
+  const [localCover, setLocalCover] = useState<{ path: string; preview: string } | null>(null);
   /** Candidates from the last 查找, or `null` when the reader has not asked. */
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   const search = useMetadataSearch();
+  const coverPreview = useLocalCoverPreview();
+
+  /** Open the native picker, then read the chosen image back as a data URL so
+   *  the reader sees exactly what 保存 will write. The path itself is what the
+   *  backend needs; the preview is throwaway. A failed read never turns into a
+   *  pending cover — showing nothing is better than showing a stale one. */
+  const pickLocalCover = async () => {
+    const picked = await openDialog({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "封面图片", extensions: ["jpg", "jpeg", "png"] }],
+    });
+    if (typeof picked !== "string") return;
+    try {
+      const preview = await coverPreview.mutateAsync(picked);
+      setLocalCover({ path: picked, preview });
+      setPendingCover(null);
+      setCandidates(null);
+    } catch {
+      showToast("error", "读取封面失败，请换一张 JPG 或 PNG 图片");
+    }
+  };
   /** File/word/highlight counts. Fetched once when the sheet opens; the shelf
    *  deliberately does not carry these, so a `null` is just "still loading or
    *  browser build" and the facts block below simply stays out of the way. */
@@ -191,6 +220,7 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
     // word alone is the whole point of 查找书目 for a badly-covered book, and a
     // save button that stayed disabled would make it impossible.
     pendingCover !== null ||
+    localCover !== null ||
     patch.title !== book.title ||
     (patch.subtitle ?? "") !== (book.subtitle ?? "") ||
     (patch.description ?? "") !== (book.description ?? "") ||
@@ -214,7 +244,7 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
         // One save, one record. The cover is a file and the fields are columns,
         // but they are the same decision — sending them as two commands is what
         // produced two log lines and two undo buttons for one click.
-        onSave(patch, pendingCover);
+        onSave(patch, pendingCover, localCover?.path ?? null);
       }}
     >
       <div className="flex max-h-[62vh] flex-col gap-3 overflow-y-auto pr-1">
@@ -257,6 +287,20 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
                 {candidates.length > 0 && " · 作者表可能含译者，按需删减"}
               </span>
             )}
+            {/* A picture the reader already has beats any catalogue: no proxy,
+                no waiting, no licence question. Shown beside the lookup buttons
+                because it is the third way to answer 「what cover is this?」. */}
+            <GlassButton
+              type="button"
+              size="sm"
+              variant="subtle"
+              title="从本机选一张 JPG 或 PNG 作为封面"
+              disabled={coverPreview.isPending}
+              onClick={() => void pickLocalCover()}
+            >
+              <UploadSimple size={12} weight="bold" />
+              {coverPreview.isPending ? "读取中…" : "上传封面"}
+            </GlassButton>
           </div>
         )}
 
@@ -328,6 +372,7 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
                     const offered = candidate.coverUrl ?? null;
                     setOfferedCover(offered);
                     setPendingCover(book.coverUrl ? null : offered);
+                    setLocalCover(null);
                     setCandidates(null);
                   }}
                   className="press focus-visible:focus-ring flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-left"
@@ -362,6 +407,7 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
                       // second 「换成这张」 below.
                       setOfferedCover(candidate.coverUrl ?? null);
                       setPendingCover(candidate.coverUrl ?? null);
+                      setLocalCover(null);
                       setCandidates(null);
                     }}
                     className="press focus-visible:focus-ring text-text-3 hover:text-accent mr-1 shrink-0 rounded p-1"
@@ -492,7 +538,10 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
               <span aria-hidden>→</span>
               <button
                 type="button"
-                onClick={() => setPendingCover(offeredCover)}
+                onClick={() => {
+                  setPendingCover(offeredCover);
+                  setLocalCover(null);
+                }}
                 className="text-accent focus-visible:focus-ring inline-flex items-center gap-1.5 rounded hover:underline"
               >
                 <CoverThumb url={offeredCover} className="h-7 w-[21px]" />
@@ -527,6 +576,37 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
               )}
             </span>
           )}
+
+          {localCover && (
+            <span className="inline-flex items-center gap-1.5">
+              {book.coverUrl && (
+                <>
+                  <img
+                    src={book.coverUrl}
+                    alt="现在的封面"
+                    className="h-7 w-[21px] rounded object-cover"
+                    draggable={false}
+                  />
+                  <span aria-hidden>→</span>
+                </>
+              )}
+              <img
+                src={localCover.preview}
+                alt="上传的封面预览"
+                className="h-7 w-[21px] rounded object-cover"
+                draggable={false}
+              />
+              <span>保存时上传</span>
+              <button
+                type="button"
+                onClick={() => setLocalCover(null)}
+                className="text-text-3 hover:text-text-1 focus-visible:focus-ring rounded underline"
+              >
+                不换
+              </button>
+            </span>
+          )}
+
           {douban && (
             <button
               type="button"

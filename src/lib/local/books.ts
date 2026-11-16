@@ -528,6 +528,7 @@ export async function bookUpdate(
   id: string,
   patch: BookMetadataPatch,
   _coverUrl?: string | null,
+  _coverPath?: string | null,
 ): Promise<boolean> {
   await patchBook(id, {
     title: patch.title,

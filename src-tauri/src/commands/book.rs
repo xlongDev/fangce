@@ -600,26 +600,57 @@ pub async fn book_update(
     id: String,
     patch: crate::library::repository::BookMetadataPatch,
     cover_url: Option<String>,
+    cover_path: Option<String>,
 ) -> AppResult<bool> {
-    let fetched = match cover_url.as_deref() {
-        Some(url) => {
-            let client = crate::library::metadata::client();
-            match crate::library::metadata::download_cover(&client, url).await {
-                Ok(bytes) => crate::library::metadata::image_extension(&bytes)
-                    .map(|extension| (bytes, extension)),
-                // The fields still go in; the picture is one more thing the
-                // next attempt can try.
-                Err(_) => None,
-            }
-        }
+    // A cover the reader picked from disk wins over a catalogue URL: the
+    // upload is a deliberate, local decision, while the URL is a suggestion a
+    // lookup left in the sheet. Read it on a blocking thread (never hold the
+    // single DB connection across file IO) and trust the *bytes*, not the file
+    // name — a screenshot renamed to .jpg is still not a cover.
+    let uploaded = match cover_path {
+        Some(path) => Some(
+            tauri::async_runtime::spawn_blocking(move || -> AppResult<(Vec<u8>, &'static str)> {
+                let bytes = std::fs::read(&path)
+                    .map_err(|err| AppError::Message(format!("读取封面失败：{err}")))?;
+                let extension =
+                    crate::library::metadata::image_extension(&bytes).ok_or_else(|| {
+                        AppError::InvalidArgument("封面仅支持 JPG 或 PNG 图片".into())
+                    })?;
+                Ok((bytes, extension))
+            })
+            .await
+            .map_err(|err| AppError::Message(format!("读取封面被中断：{err}")))??,
+        ),
         None => None,
+    };
+
+    // With local bytes in hand there is nothing to download. `cover_summary`
+    // is what the cover manager shows as the picture's source, so an upload
+    // must not be mislabelled as a catalogue fill.
+    let (fetched, cover_summary) = if let Some(uploaded) = uploaded {
+        (Some(uploaded), "上传了自定义封面")
+    } else {
+        let fetched = match cover_url.as_deref() {
+            Some(url) => {
+                let client = crate::library::metadata::client();
+                match crate::library::metadata::download_cover(&client, url).await {
+                    Ok(bytes) => crate::library::metadata::image_extension(&bytes)
+                        .map(|extension| (bytes, extension)),
+                    // The fields still go in; the picture is one more thing the
+                    // next attempt can try.
+                    Err(_) => None,
+                }
+            }
+            None => None,
+        };
+        (fetched, "改了书籍信息，换了封面")
     };
 
     let library = state.library.clone();
     let covers_dir = state.layout.covers_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let cover = fetched.as_ref().map(|(bytes, extension)| (bytes.as_slice(), *extension));
-        write_update(&library, &covers_dir, &id, &patch, cover)
+        write_update(&library, &covers_dir, &id, &patch, cover, cover_summary)
     })
     .await
     .map_err(|err| AppError::Message(format!("保存被中断：{err}")))?
@@ -638,6 +669,7 @@ fn write_update(
     id: &str,
     patch: &crate::library::repository::BookMetadataPatch,
     cover: Option<(&[u8], &'static str)>,
+    cover_summary: &'static str,
 ) -> AppResult<bool> {
     library.with_tx(|tx| {
         // Read first: the before-image is what makes the change undoable, and
@@ -680,7 +712,7 @@ fn write_update(
             // line has to answer, and a filter can only find it if the row says
             // what happened.
             let (action, summary) = if saved {
-                ("update_metadata_cover", "改了书籍信息，换了封面")
+                ("update_metadata_cover", cover_summary)
             } else {
                 ("update_metadata", "改了书籍信息")
             };
@@ -813,8 +845,15 @@ mod tests {
             authors: Vec::new(),
         };
         let jpeg = b"\xff\xd8\xff\xe0";
-        let saved =
-            write_update(&library, &covers, "b1", &patch, Some((jpeg, "jpg"))).expect("save");
+        let saved = write_update(
+            &library,
+            &covers,
+            "b1",
+            &patch,
+            Some((jpeg, "jpg")),
+            "改了书籍信息，换了封面",
+        )
+        .expect("save");
         assert!(saved, "封面写进去了");
 
         let rows = library.with(|conn| crate::library::ops::list(conn, 10)).expect("list");
@@ -827,6 +866,65 @@ mod tests {
         let book = book.expect("get").expect("b1");
         assert_eq!(book.publisher.as_deref(), Some("重庆出版社"));
         assert!(book.cover_url.is_some());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An uploaded picture is the same file write as a catalogue download, but
+    /// its source must be labelled honestly: the cover manager reads this
+    /// summary to say where the picture came from. Asserting it here keeps a
+    /// future refactor from silently calling every upload a catalogue fill.
+    #[test]
+    fn an_uploaded_cover_is_labelled_as_an_upload_in_the_log() {
+        let dir = crate::document::fixture::temp_dir("book-upload-cover");
+        let library = crate::db::Library::open(&dir).expect("open");
+        let covers = dir.join("covers");
+        std::fs::create_dir_all(&covers).expect("covers");
+
+        library
+            .with_tx(|tx| {
+                crate::library::repository::insert(
+                    tx,
+                    &crate::library::repository::NewBook {
+                        id: "b1",
+                        title: "三体",
+                        subtitle: None,
+                        description: None,
+                        language: None,
+                        publisher: None,
+                        identifier: None,
+                        format: crate::document::BookFormat::Epub,
+                        content_hash: "h1",
+                        file_path: "/books/x.epub",
+                        file_size: 1,
+                        cover_path: None,
+                        authors: &[],
+                    },
+                )
+            })
+            .expect("seed");
+
+        let patch = crate::library::repository::BookMetadataPatch {
+            title: "三体".into(),
+            authors: Vec::new(),
+            subtitle: None,
+            publisher: None,
+            language: None,
+            isbn: None,
+            published_year: None,
+            description: None,
+            rating: None,
+            rating_count: None,
+            rating_source: None,
+            douban_url: None,
+        };
+        let jpeg = b"\xff\xd8\xff\xe0";
+        write_update(&library, &covers, "b1", &patch, Some((jpeg, "jpg")), "上传了自定义封面")
+            .expect("save");
+
+        let rows = library.with(|conn| crate::library::ops::list(conn, 10)).expect("list");
+        assert_eq!(rows.len(), 1, "一次上传一条记录");
+        assert_eq!(rows[0].action, "update_metadata_cover", "在封面历史里可见");
+        assert_eq!(rows[0].summary, "上传了自定义封面", "来源标注为上传，而非目录补全");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -881,7 +979,15 @@ mod tests {
             authors: Vec::new(),
         };
         let jpeg = b"\xff\xd8\xffnew";
-        write_update(&library, &covers, "b1", &patch, Some((jpeg, "jpg"))).expect("save");
+        write_update(
+            &library,
+            &covers,
+            "b1",
+            &patch,
+            Some((jpeg, "jpg")),
+            "改了书籍信息，换了封面",
+        )
+        .expect("save");
 
         let replaced = library
             .with(|conn| crate::library::repository::cover_path(conn, "b1"))

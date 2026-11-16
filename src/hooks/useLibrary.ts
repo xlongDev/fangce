@@ -440,6 +440,7 @@ export function useSetFavorites() {
  */
 export function useUpdateBook() {
   const invalidate = useInvalidateShelf();
+  const queryClient = useQueryClient();
   return useMutation({
     // The cover travels with the fields — one command, one transaction, one
     // log entry. `null` leaves the picture alone.
@@ -447,12 +448,23 @@ export function useUpdateBook() {
       id,
       patch,
       coverUrl,
+      coverPath,
     }: {
       id: string;
       patch: BookMetadataPatch;
       coverUrl?: string | null;
-    }) => ipc.bookUpdate(id, patch, coverUrl ?? null),
-    onSuccess: invalidate,
+      coverPath?: string | null;
+    }) => ipc.bookUpdate(id, patch, coverUrl ?? null, coverPath ?? null),
+    onSuccess: (_saved, vars) => {
+      invalidate();
+      // A picture changed: the manager caches its scan for 15 s, and the log
+      // gained the source row it reads. Force both so a jump straight from
+      // this save to 封面管理 shows the new cover, not a stale list.
+      if (vars.coverUrl || vars.coverPath) {
+        void queryClient.invalidateQueries({ queryKey: ["covers"] });
+        void queryClient.invalidateQueries({ queryKey: ["operations"] });
+      }
+    },
   });
 }
 
