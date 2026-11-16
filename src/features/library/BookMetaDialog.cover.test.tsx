@@ -119,7 +119,7 @@ describe("the cover a candidate brings", () => {
    */
   it("is shown in the candidate list, without writing anything", async () => {
     const { user, onSave } = open();
-    await user.click(screen.getByRole("button", { name: "豆瓣" }));
+    await user.click(screen.getByRole("button", { name: "查豆瓣" }));
 
     await waitFor(() => expect(document.querySelector(`img[src="${PREVIEW}"]`)).not.toBeNull());
     expect(mocks.metadataCoverPreview).toHaveBeenCalledWith(COVER);
@@ -130,7 +130,7 @@ describe("the cover a candidate brings", () => {
    *  fill, and it rides along with the save. */
   it("rides along with the save for a book that has none", async () => {
     const { user, onSave } = open();
-    await user.click(screen.getByRole("button", { name: "豆瓣" }));
+    await user.click(screen.getByRole("button", { name: "查豆瓣" }));
     await user.click(await screen.findByRole("button", { name: /存在主义及其他/ }));
 
     expect(screen.getByText("保存时下载")).toBeInTheDocument();
@@ -147,7 +147,7 @@ describe("the cover a candidate brings", () => {
    */
   it("offers the catalogue's picture instead of taking it", async () => {
     const { user, onSave } = open({ coverUrl: "fangce://localhost/cover/test-1" });
-    await user.click(screen.getByRole("button", { name: "豆瓣" }));
+    await user.click(screen.getByRole("button", { name: "查豆瓣" }));
     await user.click(await screen.findByRole("button", { name: /存在主义及其他/ }));
 
     expect(screen.getByRole("button", { name: /换成这张/ })).toBeInTheDocument();
@@ -165,7 +165,7 @@ describe("the cover a candidate brings", () => {
    */
   it("takes only the picture when that is all the reader wants", async () => {
     const { user, onSave } = open({ coverUrl: "fangce://localhost/cover/test-1" });
-    await user.click(screen.getByRole("button", { name: "豆瓣" }));
+    await user.click(screen.getByRole("button", { name: "查豆瓣" }));
     await user.click(await screen.findByRole("button", { name: "只换封面" }));
 
     expect(screen.getByLabelText("出版社")).toHaveValue("");
@@ -178,7 +178,7 @@ describe("the cover a candidate brings", () => {
 
   it("replaces it once the reader asks", async () => {
     const { user, onSave } = open({ coverUrl: "fangce://localhost/cover/test-1" });
-    await user.click(screen.getByRole("button", { name: "豆瓣" }));
+    await user.click(screen.getByRole("button", { name: "查豆瓣" }));
     await user.click(await screen.findByRole("button", { name: /存在主义及其他/ }));
     await user.click(screen.getByRole("button", { name: /换成这张/ }));
 
@@ -194,7 +194,7 @@ describe("the cover a candidate brings", () => {
 
   it("lets the reader put the old picture back", async () => {
     const { user, onSave } = open({ coverUrl: "fangce://localhost/cover/test-1" });
-    await user.click(screen.getByRole("button", { name: "豆瓣" }));
+    await user.click(screen.getByRole("button", { name: "查豆瓣" }));
     await user.click(await screen.findByRole("button", { name: /存在主义及其他/ }));
     await user.click(screen.getByRole("button", { name: /换成这张/ }));
     await user.click(screen.getByRole("button", { name: "不换" }));
@@ -244,7 +244,7 @@ describe("uploading a local cover", () => {
     await user.click(screen.getByRole("button", { name: /上传封面/ }));
     expect(screen.getByAltText("上传的封面预览")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "豆瓣" }));
+    await user.click(screen.getByRole("button", { name: "查豆瓣" }));
     await user.click(await screen.findByRole("button", { name: "只换封面" }));
 
     expect(screen.queryByAltText("上传的封面预览")).not.toBeInTheDocument();
@@ -261,5 +261,24 @@ describe("uploading a local cover", () => {
     expect(screen.queryByAltText("上传的封面预览")).not.toBeInTheDocument();
     expect(mocks.showToast).toHaveBeenCalledWith("error", expect.stringContaining("读取封面失败"));
     expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+  });
+});
+
+/** The lookup row has to explain itself without a hover: a bare 「豆瓣 / NeoDB」
+ *  reads like a link to a website, and the trade-offs used to hide in a `title`
+ *  tooltip nobody reached for. The group label + visible per-source line are
+ *  what make the choice legible, so they are asserted as text, not decoration. */
+describe("the lookup row explains itself", () => {
+  it("labels the group as online completion", () => {
+    open();
+    expect(screen.getByText("在线补全信息")).toBeInTheDocument();
+  });
+
+  it("prints each source's trade-off as visible text, not a hidden tooltip", () => {
+    open();
+    // The detail lives in the `<li>`'s own text node (the source name is a
+    // sibling `<span>`), so match just the detail — it appears nowhere else.
+    expect(screen.getByText(/中文版次全，国内直连/)).toBeInTheDocument();
+    expect(screen.getByText(/外文书与 ISBN，需代理/)).toBeInTheDocument();
   });
 });

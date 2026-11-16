@@ -28,10 +28,15 @@ import type { BookMetadataPatch, BookSummary, Candidate } from "@/types/ipc";
 
 /** Field ceilings, mirroring what the backend stores without truncating. */
 /** The two catalogues, in the order the sheet offers them. Douban first
- *  because it is the one that answers without a proxy. */
-const SOURCES: { key: Source; label: string; hint: string }[] = [
-  { key: "douban", label: "豆瓣", hint: "豆瓣图书：中文版次最全，国内可直连" },
-  { key: "neodb", label: "NeoDB", hint: "NeoDB：有 ISBN 和外文书，国内需要代理" },
+ *  because it is the one that answers without a proxy.
+ *
+ *  The label leads with the verb: a bare source name reads like a link to a
+ *  website, not a lookup that fills the form. `detail` used to hide in a
+ *  `title` tooltip — nobody hovered a glass pill to learn which catalogue
+ *  answers better, so it is printed under the buttons now. */
+const SOURCES: { key: Source; label: string; detail: string }[] = [
+  { key: "douban", label: "查豆瓣", detail: "中文版次全，国内直连" },
+  { key: "neodb", label: "查 NeoDB", detail: "外文书与 ISBN，需代理" },
 ];
 
 const LIMITS = {
@@ -257,50 +262,65 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
             Douban is reachable from here and has the Chinese editions; NeoDB
             needs a proxy and is the only one with an ISBN and with books Douban
             has never heard of. One button that quietly picked one of them hid
-            that choice from the reader. */}
+            that choice from the reader. The group label says what the whole row
+            does, and each catalogue's trade-off is printed as plain text below
+            the buttons — source names alone meant nothing to most readers. */}
         {isDesktopRuntime && (
-          <div className="flex flex-wrap items-center gap-2">
-            <MagnifyingGlass size={13} className="text-text-3 shrink-0" />
-            {SOURCES.map((source) => (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-text-3 flex items-center gap-1.5 text-[11px]">
+              <MagnifyingGlass size={13} className="shrink-0" />
+              在线补全信息
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              {SOURCES.map((source) => (
+                <GlassButton
+                  key={source.key}
+                  type="button"
+                  size="sm"
+                  variant="subtle"
+                  disabled={search.isPending}
+                  onClick={() =>
+                    search.mutate({ id: book.id, source: source.key }, { onSuccess: setCandidates })
+                  }
+                >
+                  {search.isPending && search.variables?.source === source.key
+                    ? "查找中…"
+                    : source.label}
+                </GlassButton>
+              ))}
+              {candidates !== null && (
+                <span className="text-text-3 text-xs">
+                  {sourceLabel(search.variables?.source)} {candidates.length} 条
+                  {/* The catalogue lists every name attached to any edition,
+                      translators included. Saying so is cheaper and more honest
+                      than guessing which names are authors. */}
+                  {candidates.length > 0 && " · 作者表可能含译者，按需删减"}
+                </span>
+              )}
+              {/* A picture the reader already has beats any catalogue: no proxy,
+                  no waiting, no licence question. Shown beside the lookup buttons
+                  because it is the third way to answer 「what cover is this?」. */}
               <GlassButton
-                key={source.key}
                 type="button"
                 size="sm"
                 variant="subtle"
-                title={source.hint}
-                disabled={search.isPending}
-                onClick={() =>
-                  search.mutate({ id: book.id, source: source.key }, { onSuccess: setCandidates })
-                }
+                title="从本机选一张 JPG 或 PNG 作为封面"
+                disabled={coverPreview.isPending}
+                onClick={() => void pickLocalCover()}
               >
-                {search.isPending && search.variables?.source === source.key
-                  ? "查找中…"
-                  : source.label}
+                <UploadSimple size={12} weight="bold" />
+                {coverPreview.isPending ? "读取中…" : "上传封面"}
               </GlassButton>
-            ))}
-            {candidates !== null && (
-              <span className="text-text-3 text-xs">
-                {sourceLabel(search.variables?.source)} {candidates.length} 条
-                {/* The catalogue lists every name attached to any edition,
-                    translators included. Saying so is cheaper and more honest
-                    than guessing which names are authors. */}
-                {candidates.length > 0 && " · 作者表可能含译者，按需删减"}
-              </span>
-            )}
-            {/* A picture the reader already has beats any catalogue: no proxy,
-                no waiting, no licence question. Shown beside the lookup buttons
-                because it is the third way to answer 「what cover is this?」. */}
-            <GlassButton
-              type="button"
-              size="sm"
-              variant="subtle"
-              title="从本机选一张 JPG 或 PNG 作为封面"
-              disabled={coverPreview.isPending}
-              onClick={() => void pickLocalCover()}
-            >
-              <UploadSimple size={12} weight="bold" />
-              {coverPreview.isPending ? "读取中…" : "上传封面"}
-            </GlassButton>
+            </div>
+            {/* Trade-offs as visible text, not a tooltip: nobody hovered a glass
+                pill to learn which source to pick. Left-aligned under the row. */}
+            <ul className="text-text-3 flex flex-col gap-0.5 text-[11px] leading-relaxed">
+              {SOURCES.map((source) => (
+                <li key={source.key}>
+                  <span className="text-text-2">{source.label}</span>：{source.detail}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
