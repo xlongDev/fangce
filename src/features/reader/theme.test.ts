@@ -121,7 +121,9 @@ describe("adoptedFontFaces", () => {
     install(face("Some Other Face", "400", "/assets/other.woff2"));
 
     const css = adoptedFontFaces("LXGW WenKai");
-    expect(css).toContain('font-family: "LXGW WenKai"');
+    // CSSOM quotes family names with spaces on jsdom 30 but not on 31; the
+    // quotes are not part of the family name, so assert on the name itself.
+    expect(css).toMatch(/font-family:\s*"?LXGW WenKai"?/);
     expect(css).not.toContain("Some Other Face");
   });
 
@@ -181,7 +183,7 @@ describe("adoptedFacesFor", () => {
     // The bug: the reader installs 霞鹜文楷, the section document has no such
     // face, and the stack falls through to "Kaiti SC" — the system kaiti.
     install(face("LXGW WenKai", "400", "https://cdn.example/files/lxgw-4.woff2"));
-    expect(adoptedFacesFor("catalog:lxgw")).toContain('font-family: "LXGW WenKai"');
+    expect(adoptedFacesFor("catalog:lxgw")).toMatch(/font-family:\s*"?LXGW WenKai"?/);
   });
 
   it("carries nothing for the faces the platform provides", () => {

@@ -122,7 +122,7 @@ export function QuoteCardDialog({
       authors: book.data.authors,
       progress: book.data.progress ?? null,
       chapterIdx: annotation.chapterIdx,
-      ink: annotation.color,
+      ink: annotation.color ?? null,
       paper: solidPaper(surface),
       foreground: surface.fg,
       font: resolveFont(fontKey),

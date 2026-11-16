@@ -169,7 +169,10 @@ pub fn top_words<'a>(texts: impl Iterator<Item = &'a str>, limit: usize) -> Vec<
     let jieba = segmenter();
     let mut counts: HashMap<&str, u32> = HashMap::new();
     for text in texts {
-        for word in jieba.cut(text, true) {
+        // jieba-rs 0.11 yields Token { word: &'a str, .. } instead of a bare &str;
+        // `word` borrows straight from `text`, so it is safe as the map key.
+        for token in jieba.cut(text, true) {
+            let word = token.word;
             if word.chars().count() < 2 || is_noise(word) || is_stopword(word) {
                 continue;
             }

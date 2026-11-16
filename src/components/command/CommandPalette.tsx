@@ -156,15 +156,16 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
 
   const groups = useMemo(() => {
     const buckets = new Map<string, Scored[]>();
-    for (const entry of results) {
+    const indexOf = new Map<Scored, number>();
+    results.forEach((entry, index) => {
+      indexOf.set(entry, index);
       const bucket = buckets.get(entry.command.group) ?? [];
       bucket.push(entry);
       buckets.set(entry.command.group, bucket);
-    }
-    let cursor = 0;
+    });
     return Array.from(buckets, ([group, items]) => ({
       group,
-      items: items.map((entry) => ({ entry, index: cursor++ })),
+      items: items.map((entry) => ({ entry, index: indexOf.get(entry) ?? 0 })),
     }));
   }, [results]);
 

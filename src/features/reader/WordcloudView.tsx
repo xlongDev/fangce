@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import cloud from "d3-cloud";
+import CloudLayout, { type PlacedSprite } from "d3-cloud";
 import { ArrowsOut } from "@phosphor-icons/react";
 
 import { GlassIconButton } from "@/components/glass/button";
@@ -7,10 +7,14 @@ import { GlassDialog } from "@/components/glass/overlay";
 import { cn } from "@/lib/cn";
 import type { WordCount } from "@/types/ipc";
 
-/** d3-cloud's own `Word`, plus the count it was sized from. */
-interface CloudWord extends cloud.Word {
+/** Data carried through d3-cloud's sprite pipeline: the source word and its count. */
+interface CloudDatum {
+  text: string;
   count: number;
 }
+
+/** A placed word as d3-cloud 2 returns it, carrying our datum back out. */
+type CloudWord = PlacedSprite<CloudDatum, never>;
 
 /**
  * A word cloud: d3-cloud lays it out, a canvas paints it.
@@ -57,24 +61,34 @@ export function WordcloudCanvas({
     const font = style.fontFamily || "system-ui";
     const colour = style.color || "#888";
 
-    const layout = cloud()
-      .size([width, height])
-      .words(words.map((word) => ({ text: word.word, count: word.count, size: 0 })))
-      .padding(compact ? 1 : 2)
-      // All horizontal. Rotated words are unreadable at drawer width, and a
-      // mixed layout is what makes a word cloud look like decoration.
-      .rotate(() => 0)
-      .font(font)
-      .fontSize((word) => sizeFor((word as CloudWord).count))
-      .random(seeded(7))
-      .on("end", (placed) => {
-        paint(canvas, placed as CloudWord[], width, height, colour, font, max, min);
-      });
+    // d3-cloud 2 replaces the factory/event API with a class and explicit
+    // sprite placement. Reproduce v1's behaviour: bounded to the box, seeded
+    // for a stable picture, largest words first, all horizontal.
+    const layout = new CloudLayout().size([width, height]).overflow(false).random(seeded(7));
 
-    layout.start();
-    return () => {
-      layout.stop();
-    };
+    const prepared = words
+      .map((word) => ({
+        datum: { text: word.word, count: word.count },
+        size: Math.max(1, Math.round(sizeFor(word.count))),
+      }))
+      // v1 sorted by descending font size; v2 places in input order, so sort here.
+      .toSorted((a, b) => b.size - a.size);
+
+    const placed: CloudWord[] = [];
+    for (const word of prepared) {
+      const sprite = layout.getSprite(word.datum.text, {
+        datum: word.datum,
+        font,
+        size: word.size,
+        rotate: 0,
+        padding: compact ? 1 : 2,
+      });
+      if (!sprite) continue;
+      const result = layout.place(sprite);
+      if (result) placed.push(result as CloudWord);
+    }
+
+    paint(canvas, placed, width, height, colour, font, max, min);
   }, [words, compact]);
 
   return (
@@ -159,13 +173,13 @@ function paint(
   context.fillStyle = colour;
 
   for (const word of placed) {
-    const weight = max === min ? 1 : (word.count - min) / (max - min);
+    const weight = max === min ? 1 : (word.datum.count - min) / (max - min);
     context.save();
-    context.translate((word.x ?? 0) + width / 2, (word.y ?? 0) + height / 2);
+    context.translate(word.x + width / 2, word.y + height / 2);
     context.rotate(((word.rotate ?? 0) * Math.PI) / 180);
     context.globalAlpha = 0.45 + 0.55 * weight;
-    context.font = `${weight > 0.55 ? 600 : 400} ${Math.round(word.size ?? 0)}px ${font}`;
-    context.fillText(word.text ?? "", 0, 0);
+    context.font = `${weight > 0.55 ? 600 : 400} ${Math.round(word.size)}px ${font}`;
+    context.fillText(word.text, 0, 0);
     context.restore();
   }
 }

@@ -117,7 +117,7 @@ export function authorLine(book: BookSummary): string {
 export function pickContinueReading(list: BookSummary[]): BookSummary | undefined {
   let latest: BookSummary | undefined;
   for (const book of list) {
-    if (book.lastReadAt === null) continue;
+    if (book.lastReadAt == null) continue;
     const ts = book.lastReadAt;
     if (latest === undefined || ts > (latest.lastReadAt ?? ts)) latest = book;
   }

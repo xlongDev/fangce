@@ -949,8 +949,8 @@ export function groupByCall(rows: Operation[]): OperationCall[] {
       at: row.at,
       action: row.action,
       summary: row.summary,
-      source: row.source,
-      title: row.bookTitle,
+      source: row.source ?? null,
+      title: row.bookTitle ?? null,
       count: 1,
       undoable: row.undoable,
     });

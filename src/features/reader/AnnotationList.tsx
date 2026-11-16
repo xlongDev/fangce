@@ -145,7 +145,7 @@ function AnnotationRow({
       )}
       <div className="mt-1.5">
         <NoteCell
-          note={annotation.note}
+          note={annotation.note ?? null}
           disabled={busy}
           editing={editing}
           onEditingChange={setEditing}

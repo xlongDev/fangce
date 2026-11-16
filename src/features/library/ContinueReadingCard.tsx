@@ -47,7 +47,12 @@ export function ContinueReadingCard({
       onClick={() => {
         const cover = coverRef.current;
         if (cover) {
-          beginHandoff({ id: book.id, coverUrl: book.coverUrl, from: boxOf(cover), side: "shelf" });
+          beginHandoff({
+            id: book.id,
+            coverUrl: book.coverUrl ?? null,
+            from: boxOf(cover),
+            side: "shelf",
+          });
         }
         onOpen(book);
       }}

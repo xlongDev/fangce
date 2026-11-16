@@ -2772,7 +2772,7 @@ export function ReaderView({
                   // schemes meet (see `rememberFoliateLocation`).
                   foliateRef.current?.goToHighlight({
                     id: annotation.id,
-                    cfi: annotation.cfi,
+                    cfi: annotation.cfi ?? null,
                     text: annotation.text,
                     fraction: globalProgress(chapters, annotation.chapterIdx, 0),
                   });

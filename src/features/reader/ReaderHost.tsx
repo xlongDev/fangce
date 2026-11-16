@@ -172,12 +172,12 @@ export function ReaderHost({
       bookId={bookId}
       pair={pair}
       title={bookSummary.title}
-      coverUrl={bookSummary.coverUrl}
-      bookLanguage={bookSummary.language}
+      coverUrl={bookSummary.coverUrl ?? null}
+      bookLanguage={bookSummary.language ?? null}
       format={bookSummary.format}
       chapters={chapters}
       initialProgress={bookSummary.progress ?? 0}
-      initialCfi={bookSummary.location}
+      initialCfi={bookSummary.location ?? null}
       initialChapter={initialChapter}
       initialQuery={initialQuery}
       initialSnippet={initialSnippet}

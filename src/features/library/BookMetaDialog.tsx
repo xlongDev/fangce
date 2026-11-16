@@ -122,8 +122,12 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
     value: number | null;
     count: number | null;
     source: string | null;
-  }>({ value: book.rating, count: book.ratingCount, source: book.ratingSource });
-  const [douban, setDouban] = useState<string | null>(book.doubanUrl);
+  }>({
+    value: book.rating ?? null,
+    count: book.ratingCount ?? null,
+    source: book.ratingSource ?? null,
+  });
+  const [douban, setDouban] = useState<string | null>(book.doubanUrl ?? null);
   /** The cover the last candidate offered. Held separately from the one the
    *  reader has accepted, because a book that already has a picture must not
    *  lose it to a click that was about the title. */
@@ -284,11 +288,11 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
                     if (candidate.publishedYear) setYear(String(candidate.publishedYear));
                     // The catalogue's own rating and the Douban page it was
                     // linked from — shown read-only, saved with the form.
-                    if (candidate.rating !== null) {
+                    if (candidate.rating != null) {
                       setRating({
                         value: candidate.rating,
-                        count: candidate.ratingCount,
-                        source: candidate.source,
+                        count: candidate.ratingCount ?? null,
+                        source: candidate.source ?? null,
                       });
                     }
                     if (candidate.doubanUrl) setDouban(candidate.doubanUrl);
@@ -333,8 +337,8 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
                     onClick={() => {
                       // Asked for by name, so it is already accepted — no
                       // second 「换成这张」 below.
-                      setOfferedCover(candidate.coverUrl);
-                      setPendingCover(candidate.coverUrl);
+                      setOfferedCover(candidate.coverUrl ?? null);
+                      setPendingCover(candidate.coverUrl ?? null);
                       setCandidates(null);
                     }}
                     className="press focus-visible:focus-ring text-text-3 hover:text-accent mr-1 shrink-0 rounded p-1"

@@ -6,12 +6,12 @@ vi.mock("@/lib/ipc", () => ({
 
 import { ipc } from "@/lib/ipc";
 import { CHUNK, useFillRun } from "@/stores/fillRun";
-import type { Proposal } from "@/types/ipc";
+import type { Proposal_Serialize } from "@/types/ipc";
 
 const propose = vi.mocked(ipc.metadataPropose);
 const apply = vi.mocked(ipc.metadataApply);
 
-const proposal = (id: string, over: Partial<Proposal> = {}): Proposal => ({
+const proposal = (id: string, over: Partial<Proposal_Serialize> = {}): Proposal_Serialize => ({
   bookId: id,
   bookTitle: id,
   fills: [{ field: "publisher", from: null, to: "某出版社" }],
@@ -90,7 +90,7 @@ describe("the whole-shelf run", () => {
     const gate: { release?: () => void } = {};
     propose.mockImplementationOnce(
       (asked: string[]) =>
-        new Promise<Proposal[]>((resolve) => {
+        new Promise<Proposal_Serialize[]>((resolve) => {
           gate.release = () => resolve(asked.map((id) => proposal(id)));
         }),
     );
