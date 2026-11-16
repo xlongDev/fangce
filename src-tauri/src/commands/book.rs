@@ -13,7 +13,9 @@ use crate::db::Library;
 use crate::error::{AppError, AppResult};
 use crate::library::chapters;
 use crate::library::import::{self, ImportOutcome};
-use crate::library::repository::{self, BookQuery, BookSummary, LibraryFacets, LibraryStats};
+use crate::library::repository::{
+    self, BookInfoSummary, BookQuery, BookSummary, LibraryFacets, LibraryStats, StorageSummary,
+};
 use crate::library::{self, ops};
 use crate::state::AppState;
 
@@ -43,6 +45,87 @@ pub fn book_get(state: State<'_, AppState>, id: String) -> AppResult<Option<Book
 #[specta::specta]
 pub fn book_stats(state: State<'_, AppState>) -> AppResult<LibraryStats> {
     state.library.with(crate::library::repository::stats)
+}
+
+/// `book.info` — per-book facts for the info sheet: file size, chapter/word
+/// counts and highlight/note counts. One indexed lookup plus four correlated
+/// subqueries, so it stays synchronous like the shelf reads.
+#[tauri::command]
+#[specta::specta]
+pub fn book_info(state: State<'_, AppState>, id: String) -> AppResult<Option<BookInfoSummary>> {
+    state.library.with(|conn| crate::library::repository::book_info(conn, &id))
+}
+
+/// Sum of the lengths of every regular file directly inside `dir`.
+///
+/// Both library directories are flat (`{id}.{ext}`), so one level is enough;
+/// an unreadable or vanished entry is skipped rather than failing the whole
+/// report — a stale cover file the OS won't stat is not reason to show nothing.
+fn directory_bytes(dir: &std::path::Path) -> i64 {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| entry.metadata().ok())
+                .filter(|meta| meta.is_file())
+                .map(|meta| meta.len() as i64)
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+/// Size of the covers this app downloaded from a catalogue (Douban / NeoDB),
+/// never the picture embedded in a book's own file. 目录补充/换封面 writes
+/// `{id}.dl.{ext}` (see `metadata_apply` and `write_update`); imported covers
+/// are `{id}.{ext}` and undo backups `{id}.prev.{ext}`.
+///
+/// We size the paths the database actually references, not every `.dl.` file
+/// in the directory: an undo that replaced a cover used to leave its old file
+/// behind, and that orphan is no book's cover. `covers_dir` is only a safety
+/// boundary — a path out of the database is not leave to stat files elsewhere.
+fn downloaded_cover_bytes(covers_dir: &std::path::Path, referenced: &[String]) -> i64 {
+    referenced
+        .iter()
+        .filter_map(|path| {
+            let path = std::path::Path::new(path);
+            if !path.starts_with(covers_dir) {
+                return None;
+            }
+            std::fs::metadata(path).ok().filter(|meta| meta.is_file()).map(|meta| meta.len() as i64)
+        })
+        .sum()
+}
+
+/// `book.storage` — whole-library footprint: source files, covers and the
+/// SQLite database, summed and broken down by format. The directory walks are
+/// the slow part, so they run on a blocking task; SQLite's half is read inside
+/// the same task (one lock acquisition, no interleaving with shelf writes).
+#[tauri::command]
+#[specta::specta]
+pub async fn book_storage(state: State<'_, AppState>) -> AppResult<StorageSummary> {
+    let library = state.library.clone();
+    let layout = state.layout.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let by_format = library.with(crate::library::repository::storage)?;
+        let top_books = library.with(crate::library::repository::storage_top_books)?;
+        let cover_paths = library.with(crate::library::repository::downloaded_cover_paths)?;
+        let books_bytes = directory_bytes(&layout.books_dir);
+        let covers_bytes = downloaded_cover_bytes(&layout.covers_dir, &cover_paths);
+        let database_bytes = std::fs::metadata(layout.data_dir.join(crate::db::DB_FILE))
+            .map(|meta| meta.len() as i64)
+            .unwrap_or(0);
+        let total_bytes = books_bytes + covers_bytes + database_bytes;
+        Ok(StorageSummary {
+            books_bytes,
+            covers_bytes,
+            database_bytes,
+            total_bytes,
+            by_format,
+            top_books,
+        })
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("统计书架占用被中断：{err}")))?
 }
 
 /// `book.facets` — the counts behind the shelf's filter panel.
@@ -556,7 +639,10 @@ fn write_update(
 
         let mut saved = false;
         if let Some((bytes, extension)) = cover {
-            let target = covers_dir.join(format!("{id}.{extension}"));
+            // `.dl.` marks a cover downloaded from a catalogue (this path is
+            // the "换成这张" flow). The storage report counts only these, not
+            // the picture embedded in the book's own file.
+            let target = covers_dir.join(format!("{id}.dl.{extension}"));
             // 🔴 Move the picture being replaced aside **before** writing. A
             // same-format replacement overwrites those bytes, and 撤销 needs
             // them to put the old cover back. A rename, not a copy: one file,
@@ -640,6 +726,34 @@ mod tests {
         assert!(IMPORT_PROGRESS_EVENT.starts_with("book://"));
         assert!(DELETE_PROGRESS_EVENT.starts_with("book://"));
         assert_ne!(IMPORT_PROGRESS_EVENT, DELETE_PROGRESS_EVENT);
+    }
+
+    /// The footprint card's 补充封面 must count only catalogue downloads
+    /// (`.dl.{ext}`), never the picture a book shipped with (`{id}.{ext}`), an
+    /// undo backup (`{id}.prev.{ext}`), or a character portrait (a directory).
+    #[test]
+    fn downloaded_cover_bytes_counts_only_referenced_files() {
+        let dir = crate::document::fixture::temp_dir("cover-bytes");
+        std::fs::create_dir_all(dir.join("portraits")).expect("portraits");
+        // A referenced downloaded cover: counted.
+        let cover = dir.join("a.dl.jpg");
+        std::fs::write(&cover, vec![b'x'; 100]).expect("dl cover");
+        // An orphan with the same marker but no row pointing at it: not counted.
+        std::fs::write(dir.join("orphan.dl.jpg"), vec![b'x'; 999]).expect("orphan");
+        // Embedded cover, undo backup and a portrait: never referenced by the
+        // catalogue-download query.
+        std::fs::write(dir.join("b.jpg"), vec![b'y'; 200]).expect("embedded cover");
+        std::fs::write(dir.join("a.prev.jpg"), vec![b'z'; 300]).expect("backup");
+        std::fs::write(dir.join("portraits/hero.png"), vec![b'p'; 400]).expect("portrait");
+        // A referenced path outside the covers dir must not be read.
+        let outside = dir.parent().expect("parent").join("outside.dl.jpg");
+        std::fs::write(&outside, vec![b'q'; 888]).expect("outside");
+
+        let referenced =
+            vec![cover.to_string_lossy().into_owned(), outside.to_string_lossy().into_owned()];
+        assert_eq!(downloaded_cover_bytes(&dir, &referenced), 100);
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_file(&outside).ok();
     }
 
     /// 🔴 One save is one record. The cover used to be a separate command with

@@ -12,7 +12,9 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Reveal } from "@/components/motion/Reveal";
 import { useLibraryStats } from "@/hooks/useLibrary";
 import { useClearReadingStats, useReadingStats } from "@/hooks/useReading";
+import { StorageCard } from "@/features/stats/StorageCard";
 import { useToasts } from "@/stores/toasts";
+import { useSettings } from "@/stores/settings";
 import type { DayTotal, TopBook } from "@/types/ipc";
 import { staggerDelay, useMotion } from "@/lib/motion";
 import { displayTitle } from "@/lib/title";
@@ -336,6 +338,32 @@ export function StatsPage() {
     null,
   );
   const openBook = (bookId: string) => navigate(`/reader?book=${bookId}`);
+  const setShelfView = useSettings((s) => s.setShelfView);
+  /** From the footprint card, find the book on the shelf rather than open it.
+   *  The shelf's own search is the locator: hand it the full stored title (not
+   *  the truncated label) and clear any tag narrowing that would hide the book.
+   *  That reuses the existing query path and leaves the reader's other shelf
+   *  preferences alone. */
+  const locateBook = (title: string) => {
+    setShelfView("all", { search: title, tag: null });
+    navigate("/");
+  };
+
+  /** 从占用卡片点「最占空间」：到书架按文件大小降序看全部书，而不是只把
+   *  Top N 摊在这里。清掉 search / tag，免得上一次的定位或标签筛选把书藏了。 */
+  const sortBySize = () => {
+    setShelfView("all", { sort: "sizeDesc", descending: true, search: "", tag: null });
+    navigate("/");
+  };
+
+  /** 点某个格式：书架按该格式筛选。格式是「当下这一眼」的筛选而非偏好，
+   *  走一次性 location.state，不写进持久化的 shelfViews（那是搜索/排序的家）。
+   *  但要清掉视图里残留的 search/tag —— 那是 locateBook 留下的，叠加成
+   *  「搜这个书名又只看这个格式」会把人领到一片空白。排序则保留读者的偏好。 */
+  const filterByFormat = (format: string) => {
+    setShelfView("all", { search: "", tag: null });
+    navigate("/", { state: { shelfFormat: format } });
+  };
 
   /** Irreversible, so it asks; the toast is the only feedback after the fact
    *  because what it wiped is no longer on screen to show. */
@@ -505,6 +533,14 @@ export function StatsPage() {
             </button>
           </div>
         )}
+
+        <Reveal delay={staggerDelay(7, m.stagger)}>
+          <StorageCard
+            onLocateBook={locateBook}
+            onSortBySize={sortBySize}
+            onFilterByFormat={filterByFormat}
+          />
+        </Reveal>
       </div>
 
       <GlassDialog

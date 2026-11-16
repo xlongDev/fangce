@@ -5,6 +5,8 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
 import { CoverThumb } from "@/features/library/CoverThumb";
+import { formatFileSize } from "@/features/library/format";
+import { useBookInfo } from "@/hooks/useLibrary";
 import { type Source, useMetadataSearch } from "@/hooks/useMetadata";
 import { sourceLabel } from "@/lib/metadata";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -47,6 +49,23 @@ const ADDED = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit",
   day: "2-digit",
 });
+
+/** Fixed-layout books store one chapter per page, so their chapter count *is*
+ *  the page count — no estimating. For reflowable books there is no fixed page
+ *  to count (the reader itself reports wildly different totals as it measures
+ *  chapters), so a single coarse figure from the character count is the most
+ *  honest thing to print here, and it is labelled 约. */
+const CHARS_PER_PAGE_ESTIMATE = 500;
+
+/** A fact the info sheet prints from `book_info`. */
+function Fact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-text-3 text-[11px]">{label}</dt>
+      <dd className="text-text-2 mt-0.5 text-xs tabular-nums">{value}</dd>
+    </div>
+  );
+}
 
 interface BookMetaDialogProps {
   /** `null` keeps the sheet closed. */
@@ -139,6 +158,10 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
   /** Candidates from the last 查找, or `null` when the reader has not asked. */
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   const search = useMetadataSearch();
+  /** File/word/highlight counts. Fetched once when the sheet opens; the shelf
+   *  deliberately does not carry these, so a `null` is just "still loading or
+   *  browser build" and the facts block below simply stays out of the way. */
+  const info = useBookInfo(book.id);
 
   const yearText = year.trim();
   const yearValue = /^\d{1,4}$/.test(yearText) ? Number(yearText) : null;
@@ -524,6 +547,34 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
             </button>
           )}
         </div>
+
+        {/* Footprint and size: read-only facts about the file on disk, kept out
+            of the editable form above. Only rendered once the count query has
+            answered, so the block never flashes empty numbers on open. */}
+        {info.data && (
+          <dl className="border-hairline mt-3 grid grid-cols-2 gap-x-4 gap-y-2.5 border-t pt-3 sm:grid-cols-3">
+            <Fact label="文件大小" value={formatFileSize(info.data.fileSize) || "—"} />
+            <Fact
+              label="页数"
+              value={
+                book.format === "pdf" || book.format === "cbz"
+                  ? `${info.data.chapterCount} 页`
+                  : `约 ${Math.max(1, Math.round(info.data.totalChars / CHARS_PER_PAGE_ESTIMATE))} 页`
+              }
+            />
+            <Fact
+              label="字数"
+              value={
+                info.data.totalChars > 0
+                  ? `${info.data.totalChars.toLocaleString("zh-CN")} 字`
+                  : "—"
+              }
+            />
+            <Fact label="章节" value={`${info.data.chapterCount} 章`} />
+            <Fact label="划线" value={`${info.data.annotationCount} 处`} />
+            <Fact label="笔记" value={`${info.data.noteCount} 条`} />
+          </dl>
+        )}
 
         {/* The one rule the backend enforces, stated before the click rather
             than as a toast after it. */}

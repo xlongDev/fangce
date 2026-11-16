@@ -478,6 +478,12 @@ fn restore(
     };
     crate::library::repository::update_metadata(tx, id, &patch)?;
 
+    // The picture this call wrote. Once undo points the row back at the older
+    // cover, nothing references this file — left on disk it still eats space
+    // and, worse, still counts as a downloaded cover in the storage report.
+    // Read it before the match overwrites the column.
+    let current = crate::library::repository::cover_path(tx, id)?;
+
     match text("cover_path") {
         // There was a picture: put that file back — but only while it is still
         // there. A cover replaced since (the new file is a different format,
@@ -488,6 +494,7 @@ fn restore(
         // cover, so it has no business removing it either.
         Some(path) if Path::new(&path).exists() => {
             crate::library::repository::set_cover(tx, id, &path)?;
+            discard_downloaded_cover(current.as_deref(), &path, covers_dir);
         }
         // The file is gone because this write replaced it. The copy moved aside
         // before the write is the way back — that is why it is moved and not
@@ -495,6 +502,7 @@ fn restore(
         Some(_) => {
             if let Some(kept) = text("cover_previous").filter(|path| Path::new(path).exists()) {
                 crate::library::repository::set_cover(tx, id, &kept)?;
+                discard_downloaded_cover(current.as_deref(), &kept, covers_dir);
             }
             // Neither survives: keep the current picture rather than point the
             // row at nothing.
@@ -502,18 +510,33 @@ fn restore(
         // There was none. Clearing the column is the restore; the file this
         // write created is garbage once nothing points at it.
         None => {
-            if let Some(current) = crate::library::repository::cover_path(tx, id)? {
+            if let Some(path) = &current {
                 crate::library::repository::clear_cover(tx, id)?;
                 // Only inside the covers directory. The path came out of the
                 // database, and the database is not a licence to delete files
                 // anywhere on the disk.
-                if current.starts_with(covers_dir) {
-                    let _ = std::fs::remove_file(&current);
+                if path.starts_with(covers_dir) {
+                    let _ = std::fs::remove_file(path);
                 }
             }
         }
     }
     Ok(true)
+}
+
+/// After undo restores an older cover, the file this write downloaded is
+/// unreferenced. Left on disk it still eats space and still shows up as a
+/// downloaded cover in the storage report — the exact complaint 「撤销了怎么
+/// 还占着」. Remove it, but only when it really is a downloaded cover inside
+/// the covers dir, and never the picture we just restored. A path out of the
+/// database is not a licence to delete files anywhere else on the disk.
+fn discard_downloaded_cover(current: Option<&Path>, restored: &str, covers_dir: &Path) {
+    let Some(path) = current else { return };
+    let downloaded =
+        path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.contains(".dl."));
+    if downloaded && path.starts_with(covers_dir) && path != Path::new(restored) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// The before-image of one log row, when it is in the format that carries every
@@ -774,6 +797,100 @@ mod tests {
         let path = library.with(|conn| repository::cover_path(conn, "b1")).expect("path");
         assert_eq!(path, None, "列清空了");
         assert!(!file.exists(), "文件也删了，不留垃圾");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 🔴 Undoing a catalogue cover download must delete the file it wrote.
+    /// Undo used to point the row back at the book's own cover but leave the
+    /// downloaded `.dl.` file orphaned on disk — the storage report kept
+    /// counting it, which is exactly 「撤销了怎么还占着」.
+    #[test]
+    fn undo_removes_the_downloaded_cover_it_replaced() {
+        let (dir, library) = harness("ops-undo-replace-cover");
+        let covers = covers_dir(&dir);
+        std::fs::create_dir_all(&covers).expect("covers dir");
+        let embedded = covers.join("b1.jpg");
+        let downloaded = covers.join("b1.dl.jpg");
+        let kept = covers.join("b1.prev.jpg");
+        std::fs::write(&embedded, b"\xff\xd8\xff embedded").expect("embedded cover");
+        std::fs::write(&downloaded, b"\xff\xd8\xff downloaded").expect("downloaded cover");
+
+        // The book already had its own cover when the download replaced it.
+        library
+            .with(|conn| repository::set_cover(conn, "b1", embedded.to_str().expect("path")))
+            .expect("cover");
+        let mut before =
+            library.with(|conn| snapshot_of(conn, "b1")).expect("snapshot").expect("b1");
+        assert!(before.cover_path.is_some(), "本来有自带封面");
+
+        // The download moves the old picture aside, writes a new one and logs
+        // the before-image — exactly what metadata_apply does.
+        std::fs::rename(&embedded, &kept).expect("move aside");
+        library
+            .with_tx(|tx| {
+                repository::set_cover(tx, "b1", downloaded.to_str().expect("path"))?;
+                before.cover_previous = Some(kept.to_str().expect("path").to_string());
+                record_before(tx, Source::Ui, "fill_metadata", &[before], "补了封面")
+            })
+            .expect("download");
+        assert!(!embedded.exists(), "旧封面被移走");
+        assert!(downloaded.exists(), "新封面写好了");
+
+        let call_id = library.with(|conn| list(conn, 10)).expect("list")[0].call_id.clone();
+        library.with_tx(|tx| undo(tx, &call_id, &covers)).expect("undo");
+
+        let path = library.with(|conn| repository::cover_path(conn, "b1")).expect("path");
+        assert_eq!(path.as_deref(), Some(kept.as_path()), "自带封面（备份）恢复了");
+        assert!(!downloaded.exists(), "下载的封面删了，不留孤儿");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 🔴 The reported case: a book that ALREADY had a downloaded cover gets
+    /// a second one from another lookup, then the swap is undone. Both pictures
+    /// carry `.dl.`, and `move_aside` renames the old one to `.prev.` — undo
+    /// must drop the new download and restore the previous `.dl.` cover, leaving
+    /// no orphan behind for the storage report to count.
+    #[test]
+    fn undo_a_second_download_leaves_no_orphan() {
+        let (dir, library) = harness("ops-undo-second-download");
+        let covers = covers_dir(&dir);
+        std::fs::create_dir_all(&covers).expect("covers dir");
+        let first = covers.join("b1.dl.jpg");
+        let second = covers.join("b1.dl.png");
+        let kept = covers.join("b1.prev.jpg");
+        std::fs::write(&first, b"\xff\xd8\xff first download").expect("first cover");
+        std::fs::write(&second, b"\x89PNG\r\n\x1a\n second").expect("second cover");
+
+        // The book currently points at the first downloaded cover.
+        library
+            .with(|conn| repository::set_cover(conn, "b1", first.to_str().expect("path")))
+            .expect("cover");
+        let mut before =
+            library.with(|conn| snapshot_of(conn, "b1")).expect("snapshot").expect("b1");
+        assert_eq!(before.cover_path.as_deref(), Some(first.to_str().expect("path")));
+
+        // Second download: move the old `.dl.` aside, write a new one, log it.
+        std::fs::rename(&first, &kept).expect("move aside");
+        library
+            .with_tx(|tx| {
+                repository::set_cover(tx, "b1", second.to_str().expect("path"))?;
+                before.cover_previous = Some(kept.to_str().expect("path").to_string());
+                record_before(tx, Source::Ui, "update_metadata_cover", &[before], "又换了封面")
+            })
+            .expect("second download");
+        assert!(second.exists(), "第二次下载写好了");
+
+        let call_id = library.with(|conn| list(conn, 10)).expect("list")[0].call_id.clone();
+        library.with_tx(|tx| undo(tx, &call_id, &covers)).expect("undo");
+
+        let path = library.with(|conn| repository::cover_path(conn, "b1")).expect("path");
+        assert_eq!(path.as_deref(), Some(kept.as_path()), "上一个下载封面恢复了");
+        assert!(!second.exists(), "第二次的下载封面删了，不留孤儿");
+
+        // The storage query counts only referenced `.dl.` paths. After undo the
+        // row points at `.prev.`, so this book contributes zero bytes.
+        let paths = library.with(repository::downloaded_cover_paths).expect("downloaded paths");
+        assert!(!paths.iter().any(|p| p.contains("b1.dl.")), "数据库不再引用下载封面");
         std::fs::remove_dir_all(&dir).ok();
     }
 

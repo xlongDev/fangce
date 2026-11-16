@@ -304,6 +304,125 @@ pub fn stats(conn: &Connection) -> AppResult<LibraryStats> {
     Ok(LibraryStats { total, favorites, reading, finished, trashed })
 }
 
+/// Per-book facts the info sheet reads but the shelf never needs. Kept off
+/// `BookSummary` on purpose: `book_list` returns a whole shelf, and folding
+/// four subqueries into every row would tax a query that only wants titles.
+/// This one is fetched once, when the reader opens that book's sheet.
+#[derive(specta::Type, Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookInfoSummary {
+    /// Bytes of the stored source file, same number the shelf prints.
+    pub file_size: i64,
+    pub chapter_count: i64,
+    /// Sum of `chapters.chars`: the whole book, not just the read part.
+    pub total_chars: i64,
+    pub annotation_count: i64,
+    /// Highlights carrying a note — a subset of `annotation_count`.
+    pub note_count: i64,
+}
+
+/// Footprint and counts for one book. `None` when the id is gone or in the bin.
+pub fn book_info(conn: &Connection, id: &str) -> AppResult<Option<BookInfoSummary>> {
+    conn.query_row(
+        "SELECT b.file_size, \
+                (SELECT COUNT(*) FROM chapters c WHERE c.book_id = b.id), \
+                (SELECT COALESCE(SUM(c.chars), 0) FROM chapters c WHERE c.book_id = b.id), \
+                (SELECT COUNT(*) FROM annotations a WHERE a.book_id = b.id), \
+                (SELECT COUNT(*) FROM annotations a WHERE a.book_id = b.id \
+                   AND a.note IS NOT NULL AND TRIM(a.note) <> '') \
+           FROM books b WHERE b.id = ?1 AND b.deleted_at IS NULL",
+        params![id],
+        |row| {
+            Ok(BookInfoSummary {
+                file_size: row.get(0)?,
+                chapter_count: row.get(1)?,
+                total_chars: row.get(2)?,
+                annotation_count: row.get(3)?,
+                note_count: row.get(4)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(AppError::from)
+}
+
+/// One row of the "by format" breakdown. `format` is the stored string, so the
+/// sheet can label it without importing `BookFormat` into the front end.
+#[derive(specta::Type, Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageFormat {
+    pub format: String,
+    pub bytes: i64,
+    pub count: i64,
+}
+
+/// One row of the "biggest books" list.
+#[derive(specta::Type, Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageTopBook {
+    pub id: String,
+    pub title: String,
+    pub file_size: i64,
+}
+
+/// The whole storage report the sheet prints. Two of its fields come from
+/// SQLite (`by_format`, `top_books`); the byte totals are walked with `std::fs`
+/// in the command, where the blocking directory read belongs.
+#[derive(specta::Type, Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageSummary {
+    pub books_bytes: i64,
+    pub covers_bytes: i64,
+    pub database_bytes: i64,
+    pub total_bytes: i64,
+    pub by_format: Vec<StorageFormat>,
+    pub top_books: Vec<StorageTopBook>,
+}
+
+/// The SQLite half of the storage report: per-format sums and the biggest
+/// books. `books_live` keeps trashed books out of both, matching the shelf.
+pub fn storage(conn: &Connection) -> AppResult<Vec<StorageFormat>> {
+    let mut statement = conn.prepare(
+        "SELECT format, COALESCE(SUM(file_size), 0), COUNT(*) \
+           FROM books_live GROUP BY format ORDER BY SUM(file_size) DESC",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(StorageFormat { format: row.get(0)?, bytes: row.get(1)?, count: row.get(2)? })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+}
+
+/// Cover paths the library actually points at, for sizing downloaded covers.
+///
+/// Counting every `.dl.` file in the directory would include orphans — a cover
+/// an undo already replaced, or left behind by an older build that never
+/// cleaned up. Those files eat disk but are no book's cover, so the report
+/// walks the database references instead of the directory.
+pub fn downloaded_cover_paths(conn: &Connection) -> AppResult<Vec<String>> {
+    let mut statement = conn.prepare(
+        "SELECT cover_path FROM books \
+          WHERE cover_path IS NOT NULL AND instr(cover_path, '.dl.') > 0",
+    )?;
+    let paths = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(paths)
+}
+
+/// The ten largest live books. The card shows five by default and expands to
+/// the rest; ties break on title so the list is stable across reloads instead
+/// of swapping two equal-sized rows at random.
+pub fn storage_top_books(conn: &Connection) -> AppResult<Vec<StorageTopBook>> {
+    let mut statement = conn.prepare(
+        "SELECT id, title, file_size FROM books_live \
+          ORDER BY file_size DESC, title ASC LIMIT 10",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(StorageTopBook { id: row.get(0)?, title: row.get(1)?, file_size: row.get(2)? })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+}
+
 /// Absolute cover path for `id`, or `None` when the book has no cover.
 pub fn cover_path(conn: &Connection, id: &str) -> AppResult<Option<PathBuf>> {
     let found = conn

@@ -277,6 +277,21 @@ export const commands = {
   bookStats: (options?: InvokeOptions) =>
     __TAURI_INVOKE<LibraryStats>("book_stats", undefined, options),
   /**
+   *  `book.info` — per-book facts for the info sheet: file size, chapter/word
+   *  counts and highlight/note counts. One indexed lookup plus four correlated
+   *  subqueries, so it stays synchronous like the shelf reads.
+   */
+  bookInfo: (id: string, options?: InvokeOptions) =>
+    __TAURI_INVOKE<BookInfoSummary | null>("book_info", { id }, options),
+  /**
+   *  `book.storage` — whole-library footprint: source files, covers and the
+   *  SQLite database, summed and broken down by format. The directory walks are
+   *  the slow part, so they run on a blocking task; SQLite's half is read inside
+   *  the same task (one lock acquisition, no interleaving with shelf writes).
+   */
+  bookStorage: (options?: InvokeOptions) =>
+    __TAURI_INVOKE<StorageSummary>("book_storage", undefined, options),
+  /**
    *  `book.facets` — the counts behind the shelf's filter panel.
    *
    *  Takes the same `BookQuery` the shelf is showing, because a facet is only
@@ -1499,6 +1514,23 @@ export type BookFormat =
 export type BookImage = {
   chapterIdx: number;
   path: string;
+};
+
+/**
+ *  Per-book facts the info sheet reads but the shelf never needs. Kept off
+ *  `BookSummary` on purpose: `book_list` returns a whole shelf, and folding
+ *  four subqueries into every row would tax a query that only wants titles.
+ *  This one is fetched once, when the reader opens that book's sheet.
+ */
+export type BookInfoSummary = {
+  /**  Bytes of the stored source file, same number the shelf prints. */
+  fileSize: number;
+  chapterCount: number;
+  /**  Sum of `chapters.chars`: the whole book, not just the read part. */
+  totalChars: number;
+  annotationCount: number;
+  /**  Highlights carrying a note — a subset of `annotation_count`. */
+  noteCount: number;
 };
 
 /**
@@ -3284,6 +3316,37 @@ export type SourceProgress = {
   total: number;
   /**  Title of the chapter that just finished. */
   chapter: string;
+};
+
+/**
+ *  One row of the "by format" breakdown. `format` is the stored string, so the
+ *  sheet can label it without importing `BookFormat` into the front end.
+ */
+export type StorageFormat = {
+  format: string;
+  bytes: number;
+  count: number;
+};
+
+/**
+ *  The whole storage report the sheet prints. Two of its fields come from
+ *  SQLite (`by_format`, `top_books`); the byte totals are walked with `std::fs`
+ *  in the command, where the blocking directory read belongs.
+ */
+export type StorageSummary = {
+  booksBytes: number;
+  coversBytes: number;
+  databaseBytes: number;
+  totalBytes: number;
+  byFormat: StorageFormat[];
+  topBooks: StorageTopBook[];
+};
+
+/**  One row of the "biggest books" list. */
+export type StorageTopBook = {
+  id: string;
+  title: string;
+  fileSize: number;
 };
 
 /**  One stored turn. */

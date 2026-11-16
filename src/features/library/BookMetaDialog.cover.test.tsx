@@ -12,6 +12,10 @@ vi.mock("@/lib/ipc", () => ({
   // The lookup row only exists in the desktop build, which is where a cover
   // can be downloaded at all.
   isDesktopRuntime: true,
+  // The info sheet also reads per-book counts through `useBookInfo`. Those are
+  // irrelevant to a cover test, so answer the offline shape and keep this
+  // suite about metadata search.
+  desktopQuery: (offline: unknown) => () => Promise.resolve(offline),
   ipc: {
     metadataSearch: mocks.metadataSearch,
     metadataCoverPreview: mocks.metadataCoverPreview,

@@ -239,7 +239,11 @@ pub async fn metadata_apply(
             if let Some((_, bytes)) = covers.iter().find(|(id, _)| id == &item.id)
                 && let Some(extension) = metadata::image_extension(bytes)
             {
-                let target = covers_dir.join(format!("{}.{extension}", item.id));
+                // `.dl.` marks a cover this app downloaded from a catalogue
+                // (Douban / NeoDB), so the storage report can count downloaded
+                // covers without mistaking a book's own embedded picture for
+                // one.
+                let target = covers_dir.join(format!("{}.dl.{}", item.id, extension));
                 let moved = crate::library::move_aside(previous.as_deref(), &covers_dir, &item.id);
                 std::fs::write(&target, bytes)?;
                 repository::set_cover(tx, &item.id, target.to_string_lossy().as_ref())?;

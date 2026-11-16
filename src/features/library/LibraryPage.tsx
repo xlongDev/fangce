@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { Trash, Upload } from "@phosphor-icons/react";
 
@@ -68,7 +68,7 @@ import { useMotion } from "@/lib/motion";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { useBookHandoff } from "@/stores/book-handoff";
 import { useSettings, type ShelfView } from "@/stores/settings";
-import type { BookQuery, BookSummary, ImportOutcome } from "@/types/ipc";
+import type { BookFormat, BookQuery, BookSummary, ImportOutcome } from "@/types/ipc";
 
 // Dialog chunks load on first open; local disk, so no spinner is needed.
 const ExportPackDialog = lazy(() =>
@@ -266,10 +266,18 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
    *  be a queue of decisions the reader did not ask to make. */
   const [edition, setEdition] = useState<Edition | null>(null);
   const [editionError, setEditionError] = useState<string | null>(null);
+  const location = useLocation();
+  /** A one-shot format narrowing handed over from the 书架占用 card. Kept in
+   *  location state rather than the persisted view: it is a way of looking at
+   *  the shelf right now, not a preference. Only `filter="all"` (the `/` route
+   *  the card navigates to) consumes it. */
+  const handedFormat = (location.state as { shelfFormat?: string } | null)?.shelfFormat;
   /** The 筛选 panel's narrowing. Not persisted: it is a way of looking at the
    *  shelf right now, and a saved one would be a shelf of its own (that is what
-   *  tags are for). */
-  const [filters, setFilters] = useState<ShelfFilters>(NO_FILTERS);
+   *  tags are for). The card's format, when handed over, seeds the first look. */
+  const [filters, setFilters] = useState<ShelfFilters>(() =>
+    handedFormat ? { ...NO_FILTERS, formats: [handedFormat as BookFormat] } : NO_FILTERS,
+  );
   /** The 清空回收站 confirmation, which is the only irreversible action here. */
   const [emptyTrashOpen, setEmptyTrashOpen] = useState(false);
 

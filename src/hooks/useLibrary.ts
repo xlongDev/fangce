@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ipc, isDesktopRuntime, onDeleteProgress, onImportProgress } from "@/lib/ipc";
+import { desktopQuery, ipc, isDesktopRuntime, onDeleteProgress, onImportProgress } from "@/lib/ipc";
 import { demoBooks, demoEnabled, demoFacets, demoLibraryStats } from "@/lib/demo";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { renderFirstPagePng } from "@/lib/pdf";
 import { showToast } from "@/stores/toasts";
 import type {
+  BookInfoSummary,
   BookMetadataPatch,
   BookQuery,
   BookSummary,
@@ -14,6 +15,7 @@ import type {
   ImportProgress,
   LibraryFacets,
   Operation,
+  StorageSummary,
 } from "@/types/ipc";
 
 /** Shelf contents for one filter/sort/search combination. */
@@ -79,6 +81,38 @@ export function useLibraryStats() {
     staleTime: 10_000,
   });
 }
+
+/** Per-book footprint facts for the info sheet. Only the desktop reports real
+    counts (they come from SQLite); the browser build has no such aggregation,
+    so it gets a zeroed shape rather than a broken query. Keyed by id, and kept
+    under the shared `["books"]` prefix so any shelf change refreshes it. */
+export function useBookInfo(id: string | null) {
+  return useQuery<BookInfoSummary | null>({
+    queryKey: ["books", "info", id],
+    queryFn: desktopQuery<BookInfoSummary | null>(null, () => ipc.bookInfo(id ?? "")),
+    enabled: id !== null,
+    staleTime: 10_000,
+  });
+}
+
+/** Whole-library storage breakdown for the stats page. Directory walks are a
+    desktop-only concern; the browser build shows the offline (zeroed) report. */
+export function useStorage() {
+  return useQuery<StorageSummary>({
+    queryKey: ["books", "storage"],
+    queryFn: desktopQuery<StorageSummary>(EMPTY_STORAGE, () => ipc.bookStorage()),
+    staleTime: 30_000,
+  });
+}
+
+const EMPTY_STORAGE: StorageSummary = {
+  booksBytes: 0,
+  coversBytes: 0,
+  databaseBytes: 0,
+  totalBytes: 0,
+  byFormat: [],
+  topBooks: [],
+};
 
 function useInvalidateShelf() {
   const queryClient = useQueryClient();
