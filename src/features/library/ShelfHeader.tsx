@@ -6,6 +6,15 @@ import { GlassButton } from "@/components/glass/button";
 import { DURATION, EASE_OUT, useMotion } from "@/lib/motion";
 import { greeting, type LibraryFilter } from "@/features/library/shelfQuery";
 
+// Hover feedback for the shelf toolbar icons. Each nudge follows what its
+// action reads as — the marker tips to write, the globe turns, the file lifts
+// to be added — on top of a shared slight scale. `motion-safe` opts the whole
+// thing out for reduced-motion users; the glass button itself never moves.
+// The shared `--ease-spring` curve overshoots a touch and settles, so each
+// nudge lands as an object instead of easing mechanically into place.
+const TOOLBAR_ICON =
+  "transition-transform duration-200 ease-[var(--ease-spring)] motion-safe:group-hover:scale-110";
+
 /**
  * The shelf heading: greeting, the filter's own title, and the three ways a
  * book arrives.
@@ -109,14 +118,28 @@ export function ShelfHeader({
               >
                 <FolderOpen size={15} />
               </button>
-              <GlassButton size="md" onClick={onClippings}>
-                <Highlighter size={15} /> 导入摘录
+              <GlassButton size="md" className="group" onClick={onClippings}>
+                <Highlighter
+                  size={15}
+                  className={`${TOOLBAR_ICON} motion-safe:group-hover:-rotate-12`}
+                />{" "}
+                导入摘录
               </GlassButton>
-              <GlassButton size="md" onClick={onSource}>
-                <Globe size={15} /> 在线找书
+              <GlassButton size="md" className="group" onClick={onSource}>
+                <Globe size={15} className={`${TOOLBAR_ICON} motion-safe:group-hover:rotate-12`} />{" "}
+                在线找书
               </GlassButton>
-              <GlassButton variant="primary" size="md" disabled={importing} onClick={onImport}>
-                <FilePlus size={15} /> 导入书籍
+              <GlassButton
+                size="md"
+                className="group text-accent font-semibold"
+                disabled={importing}
+                onClick={onImport}
+              >
+                <FilePlus
+                  size={15}
+                  className={`${TOOLBAR_ICON} motion-safe:group-hover:-translate-y-0.5`}
+                />{" "}
+                导入书籍
               </GlassButton>
             </>
           )}

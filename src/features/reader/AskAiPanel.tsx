@@ -4,6 +4,7 @@ import {
   Broom,
   DotsThreeVertical,
   DownloadSimple,
+  Eye,
   EyeSlash,
   PencilSimple,
   Plus,
@@ -612,13 +613,15 @@ export function AskAiPanel({
       <div className="border-hairline flex items-center gap-1.5 border-t px-3 py-2">
         <Toggle
           label="深度思考"
-          icon={<Sparkle size={12} />}
+          offIcon={<Sparkle size={12} />}
+          onIcon={<Sparkle size={12} weight="fill" />}
           on={settings?.deepThinking ?? false}
           onToggle={() => setPreference({ deepThinking: !(settings?.deepThinking ?? false) })}
         />
         <Toggle
           label="防剧透"
-          icon={<EyeSlash size={12} />}
+          offIcon={<Eye size={12} />}
+          onIcon={<EyeSlash size={12} />}
           on={settings?.spoilerSafe ?? false}
           onToggle={() => setPreference({ spoilerSafe: !(settings?.spoilerSafe ?? false) })}
         />
@@ -689,12 +692,14 @@ export function AskAiPanel({
  */
 function Toggle({
   label,
-  icon,
+  offIcon,
+  onIcon,
   on,
   onToggle,
 }: {
   label: string;
-  icon: ReactNode;
+  offIcon: ReactNode;
+  onIcon: ReactNode;
   on: boolean;
   onToggle: () => void;
 }) {
@@ -708,7 +713,7 @@ function Toggle({
         on ? "border-accent text-accent" : "border-hairline text-text-3 hover:text-text-2",
       )}
     >
-      {icon}
+      {on ? onIcon : offIcon}
       {label}
     </button>
   );

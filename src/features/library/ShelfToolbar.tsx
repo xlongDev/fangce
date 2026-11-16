@@ -160,15 +160,21 @@ export function ShelfToolbar({
         aria-pressed={descending}
         onClick={() => onDescending(!descending)}
         className={cn(
-          "glass text-text-2 hover:text-text-1 focus-visible:focus-ring inline-flex h-9 items-center gap-1 rounded-md px-2.5 text-sm transition-colors",
+          "glass text-text-2 hover:text-text-1 focus-visible:focus-ring group inline-flex h-9 items-center gap-1 rounded-md px-2.5 text-sm transition-colors",
           descending && "text-text-1",
         )}
       >
         {/* One arrow, turned, rather than two swapped: the flip is a rotation
             and an icon that turns in place says that, where two different
-            glyphs say "this is a different control now". */}
+            glyphs say "this is a different control now". The press dip gives
+            the turn a beat — without it the spring settles before the eye
+            catches the arrow moving.
+
+            Only `scale` transitions in CSS: motion writes `transform` (the
+            rotate) every frame, and a `transition-transform` here would ease
+            each of those writes again, dragging a 200ms spring out to ~480ms. */}
         <motion.span
-          className="inline-flex"
+          className="inline-flex motion-safe:transition-[scale] motion-safe:duration-100 motion-safe:group-active:scale-75"
           animate={{ rotate: descending ? 0 : 180 }}
           transition={reduce ? { duration: 0 } : SPRING.tap}
         >

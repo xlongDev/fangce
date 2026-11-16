@@ -113,7 +113,7 @@ export function ShelfFilterMenu({
       // opens over the cover grid, and at elevation 1 the covers read straight
       // through the labels. This is the same pair `GlassDialog` uses — a sheet
       // that floats over content, not a card resting inside a pane.
-      panelClassName="glass-solid"
+      panelClassName="glass-2 shadow-panel"
       trigger={
         <GlassButton size="md">
           <Funnel size={15} weight={active > 0 ? "fill" : "regular"} />
