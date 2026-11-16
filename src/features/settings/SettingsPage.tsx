@@ -1262,7 +1262,7 @@ function DictionarySection() {
               title={`删除 ${dictionary.name}`}
               onClick={() => remove.mutate(dictionary.id)}
               disabled={remove.isPending}
-              className="text-text-3 hover:text-danger focus-visible:focus-ring ml-3 shrink-0 rounded-md p-1 transition-colors disabled:opacity-50"
+              className="glass text-text-3 hover:text-danger focus-visible:focus-ring press ml-3 shrink-0 rounded-md p-1 disabled:opacity-50"
             >
               <Trash size={14} />
             </button>
@@ -1463,7 +1463,7 @@ function FontSection() {
                 title={`删除 ${font.name}`}
                 onClick={() => removeCatalog(font)}
                 disabled={catalogRemove.isPending}
-                className="text-text-3 hover:text-danger focus-visible:focus-ring shrink-0 rounded-md p-1 transition-colors disabled:opacity-50"
+                className="glass text-text-3 hover:text-danger focus-visible:focus-ring press shrink-0 rounded-md p-1 disabled:opacity-50"
               >
                 <Trash size={14} />
               </button>
@@ -1494,7 +1494,7 @@ function FontSection() {
               title={`删除 ${font.name}`}
               onClick={() => remove.mutate(font.id)}
               disabled={remove.isPending}
-              className="text-text-3 hover:text-danger focus-visible:focus-ring shrink-0 rounded-md p-1 transition-colors disabled:opacity-50"
+              className="glass text-text-3 hover:text-danger focus-visible:focus-ring press shrink-0 rounded-md p-1 disabled:opacity-50"
             >
               <Trash size={14} />
             </button>

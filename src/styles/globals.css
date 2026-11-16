@@ -789,10 +789,30 @@ html[data-input="pointer"] :focus-within {
   user-select: none;
 }
 
-/* -- auto-scroll speed slider ----------------------------------------
-   A native range input restyled into the glass design: hairline track with
-   an accent fill up to the thumb (set inline as `--range-fill`), round
-   accent thumb. `-webkit-` covers WKWebView and Chromium. -------------- */
+/* -- number fields: hide the OS spinner -------------------------------
+   The spinner is painted in a fixed OS colour (dark on light, near-invisible
+   on our dark glass) and lives *inside* the field's padding, so it can neither
+   follow `data-theme` nor be spaced from a right-aligned value. NumberRow
+   draws a themed glass stepper in the same band instead; stepUp/stepDown still
+   drive the native input, so keyboard and step arithmetic are untouched. ---- */
+input[type="number"].no-spinner {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input[type="number"].no-spinner::-webkit-inner-spin-button,
+input[type="number"].no-spinner::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
+/* -- range sliders ----------------------------------------------------
+   Native range restyled with the same material cues as a `glass` chip: a
+   lit rim and inset highlights on the track, a specular bead on the thumb.
+   No backdrop-filter here — a slider is usually inside an already-blurred
+   pane, and a dozen blurring thumbs would cost more than they show.
+   `-webkit-` covers WKWebView and Chromium. ---------------------------- */
 input[type="range"].range {
   -webkit-appearance: none;
   appearance: none;
@@ -802,13 +822,18 @@ input[type="range"].range {
 }
 
 input[type="range"].range::-webkit-slider-runnable-track {
-  height: 4px;
+  height: 6px;
   border-radius: 999px;
+  border: 1px solid var(--glass-rim);
   background: linear-gradient(
     to right,
     var(--accent) var(--range-fill, 0%),
     var(--hairline-strong) var(--range-fill, 0%)
   );
+  box-shadow:
+    inset 0 1px 0 var(--highlight),
+    inset 0 -1px 0 var(--glass-edge),
+    0 1px 3px rgba(0, 0, 0, 0.18);
 }
 
 input[type="range"].range::-webkit-slider-thumb {
@@ -816,11 +841,19 @@ input[type="range"].range::-webkit-slider-thumb {
   appearance: none;
   width: 14px;
   height: 14px;
-  margin-top: -5px;
+  margin-top: -4px;
   border-radius: 999px;
-  background: var(--accent);
+  background-color: var(--accent);
+  background-image:
+    radial-gradient(circle at 32% 24%, rgba(255, 255, 255, 0.55), transparent 44%),
+    linear-gradient(148deg, var(--glass-sheen), transparent 62%);
   border: 2px solid var(--surface-3);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    inset 0 1px 0 var(--highlight),
+    inset 0 -1px 0 var(--glass-edge),
+    inset 1px 0 0 var(--glass-side),
+    inset -1px 0 0 var(--glass-side),
+    0 2px 8px rgba(0, 0, 0, 0.28);
   transition: transform 0.15s var(--ease-out);
 }
 
@@ -829,22 +862,35 @@ input[type="range"].range:active::-webkit-slider-thumb {
 }
 
 input[type="range"].range::-moz-range-track {
-  height: 4px;
+  height: 6px;
   border-radius: 999px;
+  border: 1px solid var(--glass-rim);
   background: linear-gradient(
     to right,
     var(--accent) var(--range-fill, 0%),
     var(--hairline-strong) var(--range-fill, 0%)
   );
+  box-shadow:
+    inset 0 1px 0 var(--highlight),
+    inset 0 -1px 0 var(--glass-edge),
+    0 1px 3px rgba(0, 0, 0, 0.18);
 }
 
 input[type="range"].range::-moz-range-thumb {
   width: 14px;
   height: 14px;
   border-radius: 999px;
-  background: var(--accent);
+  background-color: var(--accent);
+  background-image:
+    radial-gradient(circle at 32% 24%, rgba(255, 255, 255, 0.55), transparent 44%),
+    linear-gradient(148deg, var(--glass-sheen), transparent 62%);
   border: 2px solid var(--surface-3);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    inset 0 1px 0 var(--highlight),
+    inset 0 -1px 0 var(--glass-edge),
+    inset 1px 0 0 var(--glass-side),
+    inset -1px 0 0 var(--glass-side),
+    0 2px 8px rgba(0, 0, 0, 0.28);
 }
 
 /* A hue rail: the same control as `.range`, with the colour wheel as its track
@@ -857,7 +903,7 @@ input[type="range"].range-hue::-webkit-slider-runnable-track {
 }
 
 input[type="range"].range-hue::-webkit-slider-thumb {
-  background: var(--range-thumb, var(--accent));
+  background-color: var(--range-thumb, var(--accent));
 }
 
 input[type="range"].range-hue::-moz-range-track {
@@ -865,7 +911,7 @@ input[type="range"].range-hue::-moz-range-track {
 }
 
 input[type="range"].range-hue::-moz-range-thumb {
-  background: var(--range-thumb, var(--accent));
+  background-color: var(--range-thumb, var(--accent));
 }
 
 /* pdf.js text layer: the selectable page. A faithful port of the official

@@ -104,9 +104,8 @@ export function GlassSwitch({
       disabled={disabled}
       aria-label={ariaLabel}
       className={cn(
-        "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full",
-        "border-hairline border transition-colors",
-        "bg-surface-2 data-[state=checked]:bg-accent",
+        "glass relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full",
+        "data-[state=checked]:bg-accent transition-colors",
         "focus-visible:focus-ring disabled:pointer-events-none disabled:opacity-50",
       )}
     >

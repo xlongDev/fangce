@@ -172,7 +172,7 @@ function KeyRow({
           {entry.keys.map((key) => (
             <kbd
               key={formatShortcut(key)}
-              className="border-hairline bg-surface-2 text-text-2 rounded-md border px-1.5 py-0.5 font-mono text-[11px]"
+              className="glass text-text-2 rounded-md px-1.5 py-0.5 font-mono text-[11px]"
             >
               {formatShortcut(key)}
             </kbd>
@@ -181,7 +181,7 @@ function KeyRow({
             type="button"
             onClick={onRecord}
             aria-label={`修改 ${entry.title} 的按键`}
-            className="text-text-3 hover:text-text-1 focus-visible:focus-ring rounded-md px-1.5 py-0.5 text-[11.5px] transition-colors"
+            className="glass text-text-2 hover:text-text-1 focus-visible:focus-ring press rounded-md px-1.5 py-0.5 text-[11.5px]"
           >
             改键
           </button>
@@ -191,7 +191,7 @@ function KeyRow({
               onClick={onReset}
               aria-label={`恢复 ${entry.title} 的默认按键`}
               title="恢复默认"
-              className="text-text-3 hover:text-text-1 focus-visible:focus-ring rounded-md p-1 transition-colors"
+              className="glass text-text-3 hover:text-text-1 focus-visible:focus-ring press rounded-md p-1"
             >
               <ArrowCounterClockwise size={13} />
             </button>
