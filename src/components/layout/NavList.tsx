@@ -17,7 +17,7 @@ import {
   Sun,
   Trash,
 } from "@phosphor-icons/react";
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 
 import { cn } from "@/lib/cn";
 import { useSettings, type ThemeMode } from "@/stores/settings";
@@ -67,22 +67,27 @@ function stepFrom(from: string, to: string): number {
 }
 
 const ROW = cn(
-  // `relative` so the shared-layout pill can absolutely fill the row
-  // underneath the icon and label — it is the row that owns the position,
-  // not the pill, so it is the row that must establish a containing block.
-  "relative flex items-center gap-2.5 rounded-md px-2.5 py-2 text-[13.5px]",
+  // No `relative`: the indicator is a sibling of the rows now (see `NavList`),
+  // so nothing in a row has to establish a containing block for it. Rows are
+  // in flow and paint under the indicator; the icon and label carry their own
+  // `relative` to paint above it.
+  //
+  // The gap between icon and label is not here: it is `gap-2.5` when the rail
+  // is open and absent when it is a 42px column, where the label has no width
+  // and the icon has to sit centred (see the label below).
+  "flex items-center rounded-md px-2.5 py-2 text-[13.5px]",
   // Active and inactive are both transparent (the active row's fill is the
-  // sliding pill underneath), so the only thing the row itself animates is
-  // the text colour — a longer curve keeps the icon and label reading as
-  // part of the same gesture as the pill.
+  // sliding indicator underneath), so the only thing the row itself animates
+  // is the text colour — a longer curve keeps the icon and label reading as
+  // part of the same gesture as the indicator.
   "border border-transparent transition-colors duration-200 ease-[cubic-bezier(0.33,1,0.68,1)]",
   "press focus-visible:focus-ring",
 );
 
-/** Pill — text colour only. Background is the shared-layout indicator that
- *  springs between rows; the row itself stays transparent in both states
- *  so a row that has never been hovered never paints a stale fill under the
- *  pill as it lands. */
+/** Indicator — text colour only. Background is the one indicator element that
+ *  slides between rows; the row itself stays transparent in both states so a
+ *  row that has never been hovered never paints a stale fill under the
+ *  indicator as it lands. */
 function rowState(isActive: boolean): string {
   return isActive ? "text-text-1" : "text-text-2 hover:bg-surface-1 hover:text-text-1";
 }
@@ -91,6 +96,8 @@ export function NavList() {
   const collapsed = useSettings((s) => s.sidebarCollapsed);
   const reduce = useReducedMotion();
   const { pathname } = useLocation();
+  const navRef = useRef<HTMLElement>(null);
+  const indicatorRef = useRef<HTMLSpanElement>(null);
   // Remounting on activation gives the fill/outline swap a soft pop. `tap`
   // (stiffness 560) used to feel like a button press; `enter` is the same
   // settle without the urgency — a sidebar selection is unhurried, and the
@@ -100,8 +107,74 @@ export function NavList() {
     animate: { scale: 1, opacity: 1 },
     transition: SPRING.enter,
   } as const;
+
+  /**
+   * Put the indicator under the active row.
+   *
+   * It used to be a `layoutId` pill rendered *inside* the active row, FLIPped
+   * across rows on every navigation. That cost a per-frame inline `transform`
+   * written by motion, a re-measure each switch, and a fresh raster of the
+   * glass material every time it mounted somewhere else — and it was starved
+   * exactly when it mattered: measured on the way into 书库, the spring only
+   * produced a new value every third frame (~20fps) because the arriving page
+   * was mounting on the same thread. A CSS transition on one element that
+   * never unmounts is driven by the animation timeline instead, so the same
+   * jank cannot reach it.
+   *
+   * Geometry is read, not assumed: the row's own box is the answer, not a
+   * track constant. `aria-current` is the router's own verdict on which row is
+   * active, so its matching rule is not repeated here.
+   *
+   * No dependency list on purpose: the placement is a pure function of the
+   * DOM, and everything it depends on (`pathname`, the rail's width) is read
+   * through that DOM rather than from this render. NavList only re-renders on
+   * a route or rail change anyway, and writing the same transform twice is a
+   * no-op for the browser — so this costs one rect read per render, never per
+   * frame.
+   */
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    const indicator = indicatorRef.current;
+    if (!nav || !indicator) return;
+    const row = nav.querySelector<HTMLElement>('a[aria-current="page"]');
+    // No row (the reader, 设置, a deep link): nothing to point at.
+    indicator.style.opacity = row ? "1" : "0";
+    if (!row) return;
+    const box = row.getBoundingClientRect();
+    // Width as well as height, so the rail's own collapse is a stretch rather
+    // than a swap: the inner column is pinned to its *final* width the moment
+    // the state flips (see `GlassSidebar`), so `left-1 right-1` would snap this
+    // pane from 218px to 42px in one frame — a small square sitting inside a
+    // rail that is still wide, then the rail closing around it.
+    indicator.style.width = `${box.width}px`;
+    indicator.style.height = `${box.height}px`;
+    indicator.style.transform = `translateY(${box.top - nav.getBoundingClientRect().top}px)`;
+  });
+
   return (
-    <nav className="flex flex-col gap-0.5 px-1" aria-label="主导航">
+    <nav ref={navRef} className="relative flex flex-col gap-0.5 px-1" aria-label="主导航">
+      {/* One indicator for the whole list, absolutely placed under whichever
+          row is active. `pointer-events-none` because it now paints over the
+          rows' own hit areas; `left-1` mirrors the nav's `px-1`, and the width
+          comes from the row's box in the effect above — it has to be a value on
+          this element (not `right-1`) for the rail's collapse to be able to
+          stretch it.
+
+          Same motion as the tag rail's highlight (`TagIndex`), down to the
+          token: `--ease-spring` at 420ms. It is the one glide in the app the
+          reader already calls smooth, and it carries the same job — one pane
+          travelling between rows of a list. A no-overshoot bezier at 340ms was
+          the first attempt here and read as a snap rather than a glide.
+          `will-change` because this element lives under the rail's
+          `backdrop-filter` (`glass-2`): without a layer of its own the
+          compositor cannot carry it, and the pane's raster is repainted on
+          every frame of the move. */}
+      <span
+        ref={indicatorRef}
+        aria-hidden
+        data-nav-indicator
+        className="glass pointer-events-none absolute top-0 left-1 rounded-md opacity-0 transition-[transform,width,opacity] duration-[420ms] ease-[var(--ease-spring)] will-change-transform motion-reduce:transition-none"
+      />
       {ITEMS.map((item) => (
         <NavLink
           key={item.to}
@@ -111,33 +184,18 @@ export function NavList() {
           // Collapsed rail keeps the label for assistive tech and as a native
           // tooltip; dropping the node entirely left the icon with no name.
           title={collapsed ? item.label : undefined}
-          className={({ isActive }) => cn(ROW, rowState(isActive))}
+          className={({ isActive }) =>
+            cn(ROW, rowState(isActive), collapsed ? "justify-center" : "gap-2.5")
+          }
         >
           {({ isActive }) => (
             <>
-              {/* Shared-layout pill: a single accent-soft stadium that lives
-                  on every active row, slides between them on activation, and
-                  unmounts when the row is no longer active. Mounting it on
-                  the active row only is the trick — every other row's
-                  "absent pill" is what lets motion see a single shared
-                  `layoutId` and FLIP it across rows. `SPRING.layout`
-                  (stiffness 400, damping 34) is the same spring the shelf
-                  uses for card reflow, so an active swap and a shelf
-                  reorder read as the same kind of motion. */}
-              {isActive && (
-                <motion.span
-                  layoutId="nav-pill"
-                  className="glass absolute inset-0 rounded-md"
-                  transition={reduce ? { duration: 0 } : SPRING.layout}
-                />
-              )}
               {/* shrink-0: the always-in-layout nowrap label no longer fits
                   the collapsed rail, and flex would otherwise squeeze the
                   icon (svg min-width:auto = 0) down to nothing. `relative`
-                  keeps the icon (and the label) above the pill's stacking
-                  context — the pill is `absolute inset-0`, so without the
-                  `relative` the icon would paint *under* the pill's
-                  accent-soft fill. */}
+                  keeps the icon (and the label) above the indicator's
+                  stacking context — the indicator is `absolute`, so without
+                  the `relative` the icon would paint *under* its fill. */}
               <motion.span
                 key={String(isActive)}
                 className="relative flex shrink-0"
@@ -145,9 +203,16 @@ export function NavList() {
               >
                 <item.icon size={18} weight={isActive ? "fill" : "regular"} />
               </motion.span>
-              {/* Always in layout, fading with the pane transition; nowrap so
-                  the label overflows instead of re-wrapping mid-animation.
-                  `relative` mirrors the icon: above the pill, not under it. */}
+              {/* In layout in both states, but the rail drives its *width*, not
+                  just its opacity: the label is 27px of text and the collapsed
+                  rail is 42px wide, so a label left in layout pushed the icon
+                  4px off centre inside the highlight (measured 11px left, 15px
+                  right). Squeezing it shut — with the fade and with the row
+                  losing its gap — is what leaves the icon centred, and the text
+                  stays in the accessibility tree either way (`title` on the
+                  link is the other name).
+                  `relative` mirrors the icon: above the indicator, not under
+                  it. */}
               <motion.span
                 initial={false}
                 animate={{ opacity: collapsed ? 0 : 1 }}
@@ -155,7 +220,10 @@ export function NavList() {
                   duration: collapsed ? DURATION.fast : DURATION.base,
                   delay: collapsed ? 0 : 0.15,
                 }}
-                className="relative whitespace-nowrap"
+                className={cn(
+                  "relative overflow-hidden whitespace-nowrap transition-[width,opacity] duration-150 ease-out",
+                  collapsed ? "w-0" : "w-auto",
+                )}
               >
                 {item.label}
               </motion.span>

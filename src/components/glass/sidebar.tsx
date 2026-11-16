@@ -21,6 +21,13 @@ const COLLAPSED = 76;
 const EXPANDED = 248;
 /** The parent flex row reserves a 12px gap; swallow it while collapsed away. */
 const ROW_GAP = 12;
+/** The material's rim, drawn *inside* the animated width (`box-sizing` is
+ *  border-box). The inner column has to give up both pixels or it overflows
+ *  the pane and gets clipped on one side only — which is what made the
+ *  collapsed rail's selection read 17px from the left and 15px from the right
+ *  (measured): every row, and the highlight under it, sat one pixel right of
+ *  centre. */
+const RIM = 1;
 
 /** Floating glass sidebar that smoothly animates between collapsed and expanded.
  *
@@ -54,7 +61,7 @@ export function GlassSidebar({
         className,
       )}
     >
-      <div style={{ width }} className="flex h-full flex-col gap-3 p-3">
+      <div style={{ width: width - RIM * 2 }} className="flex h-full flex-col gap-3 p-3">
         {children}
       </div>
     </motion.aside>
