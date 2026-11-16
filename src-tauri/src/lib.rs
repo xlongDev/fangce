@@ -145,6 +145,13 @@ pub fn run() -> tauri::Result<()> {
             commands::book::book_stats,
             commands::book::book_info,
             commands::book::book_storage,
+            commands::covers::cover_list,
+            commands::covers::cover_retire,
+            commands::covers::cover_restore,
+            commands::covers::cover_purge,
+            commands::covers::cover_cleanup_orphans,
+            commands::covers::cover_dedupe,
+            commands::covers::cover_export,
             commands::book::book_facets,
             commands::book::book_import,
             commands::book::book_delete,
@@ -288,10 +295,19 @@ pub fn run() -> tauri::Result<()> {
 
                 let layout = db::Layout::create(data_dir)?;
                 let library = db::Library::open(&layout.data_dir)?;
+                // Keep the operation log from growing without bound: prune only
+                // rows older than a year, and always retain the newest few
+                // thousand so the timeline (and its undo anchors) survive.
+                // Best-effort — a prune failure must never stop the app.
+                match library.with(|conn| library::ops::archive(conn, 365, 5000)) {
+                    Ok(0) | Err(_) => {}
+                    Ok(count) => tracing::info!(count, "已归档旧操作记录"),
+                }
                 // The fonts directory goes with it: it is the one resource the
                 // protocol has to resolve itself (see `resource::Registry`).
                 registry.set(
                     library.clone(),
+                    layout.covers_dir.clone(),
                     layout.fonts_dir.clone(),
                     crate::ai::image::portraits_dir(&layout.covers_dir),
                 );
@@ -483,6 +499,13 @@ mod specta_bindings {
                 commands::book::book_stats,
                 commands::book::book_info,
                 commands::book::book_storage,
+                commands::covers::cover_list,
+                commands::covers::cover_retire,
+                commands::covers::cover_restore,
+                commands::covers::cover_purge,
+                commands::covers::cover_cleanup_orphans,
+                commands::covers::cover_dedupe,
+                commands::covers::cover_export,
                 commands::book::book_facets,
                 commands::book::book_images,
                 commands::book::book_source_url,

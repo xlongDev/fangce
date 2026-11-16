@@ -30,6 +30,12 @@ pub const SCHEME: &str = "fangce";
 /// Path prefix under which cover images are addressed.
 const COVER_PREFIX: &str = "/cover/";
 
+/// Path prefix for the cover manager, which addresses a picture by its file
+/// name rather than its book id. A retired cover is no longer pointed at by
+/// any row, so `/cover/{id}` would resolve to the book's own picture — the
+/// manager needs the retired file itself. See `Registry::managed_cover`.
+const MANAGED_COVER_PREFIX: &str = "/managed-cover/";
+
 /// Path prefix under which source files are addressed. The webview streams
 /// these with HTTP Range requests so opening a book no longer transfers the
 /// whole file over IPC (see `Registry::book`).
@@ -76,15 +82,22 @@ pub struct Registry(Arc<Mutex<Option<Ready>>>);
 #[derive(Clone)]
 struct Ready {
     library: Library,
+    covers_dir: PathBuf,
     fonts_dir: PathBuf,
     portraits_dir: PathBuf,
 }
 
 impl Registry {
     /// Publishes the opened library. Called once, from setup.
-    pub fn set(&self, library: Library, fonts_dir: PathBuf, portraits_dir: PathBuf) {
+    pub fn set(
+        &self,
+        library: Library,
+        covers_dir: PathBuf,
+        fonts_dir: PathBuf,
+        portraits_dir: PathBuf,
+    ) {
         if let Ok(mut slot) = self.0.lock() {
-            *slot = Some(Ready { library, fonts_dir, portraits_dir });
+            *slot = Some(Ready { library, covers_dir, fonts_dir, portraits_dir });
         }
     }
 
@@ -110,6 +123,9 @@ fn serve(registry: &Registry, request: &Request<Vec<u8>>) -> Response<Cow<'stati
     let path = request.uri().path();
     if let Some(id) = cover_id(path) {
         return registry.cover(id, &uri);
+    }
+    if let Some(key) = managed_cover_key(path) {
+        return registry.managed_cover(key, &uri);
     }
     if let Some(id) = book_id(path) {
         return registry.book(id, request);
@@ -153,6 +169,51 @@ impl Registry {
             }
             Err(err) => {
                 tracing::warn!(path = %path.display(), error = %err, "读取封面失败");
+                empty(StatusCode::NOT_FOUND)
+            }
+        }
+    }
+
+    /// Serves a cover by its file name, for the cover manager.
+    ///
+    /// Unlike `cover`, this does not consult the database: a retired picture is
+    /// deliberately no longer referenced by any row. The key came from the
+    /// manager's own list, but a URL is public input, so it is re-checked as a
+    /// plain file name under `covers_dir` before it touches the filesystem.
+    /// The `v` query parameter is only a cache buster; it is not part of the key.
+    fn managed_cover(&self, key: &str, uri: &str) -> Response<Cow<'static, [u8]>> {
+        let Some(Ready { covers_dir, .. }) = self.ready() else {
+            tracing::debug!(uri = %uri, "书库尚未就绪，拒绝资源请求");
+            return empty(StatusCode::SERVICE_UNAVAILABLE);
+        };
+
+        if key.is_empty()
+            || key.contains('/')
+            || key.contains('\\')
+            || key == "."
+            || key == ".."
+            || key.len() > 128
+        {
+            tracing::warn!(uri = %uri, "封面文件名不合法");
+            return empty(StatusCode::BAD_REQUEST);
+        }
+        let path = covers_dir.join(key);
+        if path.parent() != Some(covers_dir.as_path()) {
+            tracing::warn!(uri = %uri, "封面路径越界");
+            return empty(StatusCode::BAD_REQUEST);
+        }
+
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                let mut response = Response::new(Cow::Owned(bytes));
+                response
+                    .headers_mut()
+                    .insert(CONTENT_TYPE, HeaderValue::from_static(mime_of(&path)));
+                response.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static(COVER_CACHE));
+                response
+            }
+            Err(err) => {
+                tracing::debug!(path = %path.display(), error = %err, "读取管理封面失败");
                 empty(StatusCode::NOT_FOUND)
             }
         }
@@ -311,6 +372,15 @@ fn cover_id(path: &str) -> Option<&str> {
     resource_id(path, COVER_PREFIX)
 }
 
+/// Managed-cover file name from a request path. Keys are file names like
+/// `b1.dl.jpg`, so the strict hex/dash rule of `valid_id` does not apply; the
+/// handler re-checks it as a safe file name. A query string (`?v=…`) is already
+/// excluded from `request.uri().path()`, so nothing to strip here.
+fn managed_cover_key(path: &str) -> Option<&str> {
+    let key = path.strip_prefix(MANAGED_COVER_PREFIX)?;
+    (!key.is_empty()).then_some(key)
+}
+
 /// Book id from a request path.
 fn book_id(path: &str) -> Option<&str> {
     resource_id(path, BOOK_PREFIX)
@@ -444,6 +514,18 @@ mod tests {
         assert_eq!(cover_id("/cover"), None);
         // Longer than any id we issue.
         assert_eq!(cover_id(&format!("/cover/{}", "a".repeat(65))), None);
+    }
+
+    #[test]
+    fn managed_cover_keys_keep_file_names_but_not_other_prefixes() {
+        assert_eq!(managed_cover_key("/managed-cover/b1.dl.jpg"), Some("b1.dl.jpg"));
+        assert_eq!(
+            managed_cover_key("/managed-cover/b1.retired.1699.png"),
+            Some("b1.retired.1699.png")
+        );
+        // A query string is stripped from `uri().path()` before this runs.
+        assert_eq!(managed_cover_key("/managed-cover/"), None);
+        assert_eq!(managed_cover_key("/cover/b1.dl.jpg"), None);
     }
 
     #[test]

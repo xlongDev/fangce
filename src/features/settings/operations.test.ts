@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   groupByCall,
   groupByDay,
+  isCoverOperation,
   KINDS,
   type OperationCall,
 } from "@/features/settings/SettingsPage";
@@ -89,6 +90,33 @@ describe("the kind chips", () => {
     expect(kinds("trash")).toContain("delete");
     expect(kinds("purge")).toContain("delete");
     expect(kinds("empty_trash")).toContain("delete");
+  });
+});
+
+describe("isCoverOperation", () => {
+  it("recognises the cover-specific actions", () => {
+    for (const action of [
+      "cover",
+      "update_metadata_cover",
+      "cover_retire",
+      "cover_restore",
+      "cover_purge",
+      "cover_orphan_cleanup",
+      "cover_dedupe",
+    ]) {
+      expect(isCoverOperation(action, "任意摘要")).toBe(true);
+    }
+  });
+
+  it("only treats a fill as a cover operation when the summary says so", () => {
+    expect(isCoverOperation("fill_metadata", "补了封面")).toBe(true);
+    expect(isCoverOperation("fill_metadata", "批量改出版社：统一")).toBe(false);
+    expect(isCoverOperation("fill_metadata", "从目录补全了 1 本")).toBe(false);
+  });
+
+  it("leaves ordinary metadata changes alone", () => {
+    expect(isCoverOperation("update_metadata", "改了出版社")).toBe(false);
+    expect(isCoverOperation("trash", "移到回收站")).toBe(false);
   });
 });
 

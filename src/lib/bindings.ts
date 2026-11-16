@@ -291,6 +291,37 @@ export const commands = {
    */
   bookStorage: (options?: InvokeOptions) =>
     __TAURI_INVOKE<StorageSummary>("book_storage", undefined, options),
+  /**  `cover.list` — the whole manager in one read. */
+  coverList: (options?: InvokeOptions) =>
+    __TAURI_INVOKE<CoverManagerData_Serialize>("cover_list", undefined, options),
+  /**  `cover.retire` — take downloaded covers off their books into the bin. */
+  coverRetire: (keys: string[], options?: InvokeOptions) =>
+    __TAURI_INVOKE<CoverOpResult>("cover_retire", { keys }, options),
+  /**  `cover.restore` — put retired covers back onto their books. */
+  coverRestore: (keys: string[], options?: InvokeOptions) =>
+    __TAURI_INVOKE<CoverOpResult>("cover_restore", { keys }, options),
+  /**  `cover.purge` — permanently delete retired covers. Irreversible. */
+  coverPurge: (keys: string[], options?: InvokeOptions) =>
+    __TAURI_INVOKE<CoverOpResult>("cover_purge", { keys }, options),
+  /**
+   *  `cover.cleanup_orphans` — permanently delete unreferenced `.dl.` files.
+   *  Re-checks each path against the database on the blocking task before touching
+   *  it; the UI's list is a hint, never the authority.
+   */
+  coverCleanupOrphans: (keys: string[], options?: InvokeOptions) =>
+    __TAURI_INVOKE<CleanupResult>("cover_cleanup_orphans", { keys }, options),
+  /**  `cover.dedupe` — hard-link redundant copies of one picture to the keeper. */
+  coverDedupe: (keeper: string, keys: string[], options?: InvokeOptions) =>
+    __TAURI_INVOKE<CleanupResult>("cover_dedupe", { keeper, keys }, options),
+  /**
+   *  `cover.export` — copy the chosen cover files into a folder the reader
+   *  picked, named after their books (`三体.jpg`) rather than the opaque storage
+   *  key. Names are sanitised in the domain layer and no path can escape the
+   *  chosen directory. A name that is already taken gets a ` (2)` suffix, so a
+   *  second export never overwrites the first. Returns the number written.
+   */
+  coverExport: (keys: string[], dest: string, options?: InvokeOptions) =>
+    __TAURI_INVOKE<number>("cover_export", { keys, dest }, options),
   /**
    *  `book.facets` — the counts behind the shelf's filter panel.
    *
@@ -2258,6 +2289,16 @@ export type ChatMessage_Serialize = {
 };
 
 /**
+ *  Result of a cleanup sweep: how many files went and how many bytes that
+ *  reclaimed. Kept separate from [`CoverOpResult`] because orphan cleanup is
+ *  irreversible and the UI reports the space, not a skip count.
+ */
+export type CleanupResult = {
+  files: number;
+  bytes: number;
+};
+
+/**
  *  How one content call yields body text: a string (split on newlines) or an
  *  array of paragraph strings.
  */
@@ -2321,6 +2362,159 @@ export type Conversation_Deserialize = {
 export type Conversation_Serialize = {
   summary: ConversationSummary_Serialize;
   messages: StoredMessage_Serialize[];
+};
+
+/**
+ *  A set of cover files with identical bytes, so all but one are redundant.
+ *  Only active (in-use) covers are grouped: any two live books showing the
+ *  same picture could share a single file. Retired copies are not grouped —
+ *  they are already one click away from the bin and carry their own history.
+ */
+export type CoverDuplicateGroup = {
+  /**  First 12 hex digits of the content hash, shown as a short label. */
+  hash: string;
+  /**  In-use covers sharing these bytes. Every key is a real `.dl.` file. */
+  keys: string[];
+  /**  Titles of the books whose covers these are. */
+  titles: string[];
+  /**  Bytes each copy takes. */
+  bytesEach: number;
+  /**  Bytes freed if all but one copy are removed: `(n - 1) * bytes_each`. */
+  reclaimable: number;
+};
+
+/**
+ *  One line of the cover history. Reuses `operations`; `undoable` is the same
+ *  calculation the settings page uses, so 「撤销」 here and there agree.
+ */
+export type CoverHistoryRow = CoverHistoryRow_Serialize | CoverHistoryRow_Deserialize;
+
+/**
+ *  One line of the cover history. Reuses `operations`; `undoable` is the same
+ *  calculation the settings page uses, so 「撤销」 here and there agree.
+ */
+export type CoverHistoryRow_Deserialize = {
+  id: number;
+  callId: string;
+  at: number;
+  action: string;
+  summary: string;
+  bookId?: string | null;
+  bookTitle?: string | null;
+  undoable: boolean;
+};
+
+/**
+ *  One line of the cover history. Reuses `operations`; `undoable` is the same
+ *  calculation the settings page uses, so 「撤销」 here and there agree.
+ */
+export type CoverHistoryRow_Serialize = {
+  id: number;
+  callId: string;
+  at: number;
+  action: string;
+  summary: string;
+  bookId: string | null;
+  bookTitle: string | null;
+  undoable: boolean;
+};
+
+/**
+ *  Everything the cover manager needs in one read: what is in use, what is
+ *  retired, and the cover-related slice of the operation log.
+ */
+export type CoverManagerData = CoverManagerData_Serialize | CoverManagerData_Deserialize;
+
+/**
+ *  Everything the cover manager needs in one read: what is in use, what is
+ *  retired, and the cover-related slice of the operation log.
+ */
+export type CoverManagerData_Deserialize = {
+  /**  Downloaded covers currently pointed at by a book. */
+  active: ManagedCover_Deserialize[];
+  /**  Retired covers, newest retirement first. */
+  retired: ManagedCover_Deserialize[];
+  /**  Sum of `active` sizes — matches the stats card's 补充封面 number. */
+  activeBytes: number;
+  /**  Space the retired covers still take; purging reclaims it. */
+  retiredBytes: number;
+  /**  Cover-related operation log rows, newest first. */
+  history: CoverHistoryRow_Deserialize[];
+  /**
+   *  `.dl.` files no book points at any more — bytes on disk that the stats
+   *  card deliberately does not count. Found by scanning the directory, not
+   *  the database (see [`find_orphans`]).
+   */
+  orphans: ManagedCover_Deserialize[];
+  /**  Sum of orphan sizes — what 一键清理 reclaims. */
+  orphanBytes: number;
+  /**
+   *  Groups of in-use covers with identical bytes. Every group has at least
+   *  two members. Only reported, never auto-merged (see module note).
+   */
+  duplicateGroups: CoverDuplicateGroup[];
+  /**
+   *  Total bytes that could be reclaimed by merging every duplicate group
+   *  down to one copy each.
+   */
+  duplicateBytes: number;
+};
+
+/**
+ *  Everything the cover manager needs in one read: what is in use, what is
+ *  retired, and the cover-related slice of the operation log.
+ */
+export type CoverManagerData_Serialize = {
+  /**  Downloaded covers currently pointed at by a book. */
+  active: ManagedCover_Serialize[];
+  /**  Retired covers, newest retirement first. */
+  retired: ManagedCover_Serialize[];
+  /**  Sum of `active` sizes — matches the stats card's 补充封面 number. */
+  activeBytes: number;
+  /**  Space the retired covers still take; purging reclaims it. */
+  retiredBytes: number;
+  /**  Cover-related operation log rows, newest first. */
+  history: CoverHistoryRow_Serialize[];
+  /**
+   *  `.dl.` files no book points at any more — bytes on disk that the stats
+   *  card deliberately does not count. Found by scanning the directory, not
+   *  the database (see [`find_orphans`]).
+   */
+  orphans: ManagedCover_Serialize[];
+  /**  Sum of orphan sizes — what 一键清理 reclaims. */
+  orphanBytes: number;
+  /**
+   *  Groups of in-use covers with identical bytes. Every group has at least
+   *  two members. Only reported, never auto-merged (see module note).
+   */
+  duplicateGroups: CoverDuplicateGroup[];
+  /**
+   *  Total bytes that could be reclaimed by merging every duplicate group
+   *  down to one copy each.
+   */
+  duplicateBytes: number;
+};
+
+/**
+ *  How many of a batch landed. Skips are not errors: a cover fixed by a newer
+ *  write, or a book already purged, should not fail the other nine.
+ */
+export type CoverOpResult = {
+  done: number;
+  skipped: number;
+};
+
+/**
+ *  Where a cover came from, as far as the log actually says. The fill writes
+ *  only 「从目录补全了 N 本」 and never records which catalogue served each
+ *  picture, so naming Douban vs NeoDB here would be a guess. We show the real
+ *  operation summary and its time; a `None` cover has no surviving log row.
+ */
+export type CoverSource = {
+  /**  The operation's own summary, e.g. 「从目录补全了 1 本」. */
+  label: string;
+  /**  Unix seconds of that operation. */
+  at: number;
 };
 
 /**  Reading time for one calendar day. */
@@ -2759,6 +2953,111 @@ export type Lookup_Serialize =
    *  unfulfilled and fail the gate.
    */
   | { status: "unavailable" };
+
+/**
+ *  A downloaded cover as the manager shows it. `key` is the file name: the
+ *  stable handle every mutating command takes, so the UI never has to invent an
+ *  id for a file.
+ */
+export type ManagedCover = ManagedCover_Serialize | ManagedCover_Deserialize;
+
+/**
+ *  A downloaded cover as the manager shows it. `key` is the file name: the
+ *  stable handle every mutating command takes, so the UI never has to invent an
+ *  id for a file.
+ */
+export type ManagedCover_Deserialize = {
+  /**  File name inside `covers_dir`, e.g. `b1.dl.jpg` or `b1.retired.1699.jpg`. */
+  key: string;
+  bookId: string;
+  bookTitle?: string | null;
+  bytes: number;
+  /**  `true` once this cover has been retired (a `.retired.` file). */
+  retired: boolean;
+  /**
+   *  Unix seconds from the file name's timestamp, or the file's mtime for an
+   *  active cover. Used only to order the retired list.
+   */
+  at: number;
+  /**
+   *  Resource-protocol URL that renders this exact file, retired ones
+   *  included. The version is the timestamp so a reused key refetches.
+   */
+  url: string;
+  /**
+   *  The book's own cover that this download replaced (`{id}.prev.{ext}`),
+   *  shown next to the download so the two can be compared at a glance.
+   *  `None` when the book had no cover of its own.
+   */
+  originalUrl?: string | null;
+  /**  Size of that original cover, for the side-by-side caption. */
+  originalBytes?: number | null;
+  /**
+   *  Pixel width/height decoded from the image header, when it is a format
+   *  we can read without a decoder. `None` for an unrecognised header.
+   */
+  width?: number | null;
+  height?: number | null;
+  /**
+   *  A suspiciously small or tiny-dimension image — a placeholder the
+   *  catalogue served instead of a real cover. Flagged, never auto-deleted.
+   */
+  placeholder: boolean;
+  /**
+   *  Where the log says this cover came from, and when. Best-effort: older
+   *  downloads predate provider recording, so `None` is common and honest.
+   */
+  source?: CoverSource | null;
+};
+
+/**
+ *  A downloaded cover as the manager shows it. `key` is the file name: the
+ *  stable handle every mutating command takes, so the UI never has to invent an
+ *  id for a file.
+ */
+export type ManagedCover_Serialize = {
+  /**  File name inside `covers_dir`, e.g. `b1.dl.jpg` or `b1.retired.1699.jpg`. */
+  key: string;
+  bookId: string;
+  bookTitle: string | null;
+  bytes: number;
+  /**  `true` once this cover has been retired (a `.retired.` file). */
+  retired: boolean;
+  /**
+   *  Unix seconds from the file name's timestamp, or the file's mtime for an
+   *  active cover. Used only to order the retired list.
+   */
+  at: number;
+  /**
+   *  Resource-protocol URL that renders this exact file, retired ones
+   *  included. The version is the timestamp so a reused key refetches.
+   */
+  url: string;
+  /**
+   *  The book's own cover that this download replaced (`{id}.prev.{ext}`),
+   *  shown next to the download so the two can be compared at a glance.
+   *  `None` when the book had no cover of its own.
+   */
+  originalUrl: string | null;
+  /**  Size of that original cover, for the side-by-side caption. */
+  originalBytes: number | null;
+  /**
+   *  Pixel width/height decoded from the image header, when it is a format
+   *  we can read without a decoder. `None` for an unrecognised header.
+   */
+  width: number | null;
+  height: number | null;
+  /**
+   *  A suspiciously small or tiny-dimension image — a placeholder the
+   *  catalogue served instead of a real cover. Flagged, never auto-deleted.
+   */
+  placeholder: boolean;
+  /**
+   *  Where the log says this cover came from, and when. Best-effort: older
+   *  downloads predate provider recording, so `None` is common and honest.
+   */
+  source: CoverSource | null;
+};
 
 /**  One book's share of a batch fill: the fields the reader accepted. */
 export type MetadataFill = MetadataFill_Serialize | MetadataFill_Deserialize;
@@ -3340,6 +3639,12 @@ export type StorageSummary = {
   totalBytes: number;
   byFormat: StorageFormat[];
   topBooks: StorageTopBook[];
+  /**
+   *  Bytes in `.dl.` files no book points at, and how many there are. Shown
+   *  as a hint on the 补充封面 slice; not part of `covers_bytes` or `total`.
+   */
+  orphanCoversBytes: number;
+  orphanCoversCount: number;
 };
 
 /**  One row of the "biggest books" list. */

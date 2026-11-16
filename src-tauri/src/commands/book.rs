@@ -114,6 +114,12 @@ pub async fn book_storage(state: State<'_, AppState>) -> AppResult<StorageSummar
         let database_bytes = std::fs::metadata(layout.data_dir.join(crate::db::DB_FILE))
             .map(|meta| meta.len() as i64)
             .unwrap_or(0);
+        // Orphans are deliberately outside the total — they are not any book's
+        // cover — but surfacing them lets the reader clean up what the scan
+        // found. One more short read inside the same lock acquisition.
+        let (orphan_covers_bytes, orphan_covers_count) = library
+            .with(|conn| crate::library::covers::orphan_stats(conn, &layout.covers_dir))
+            .unwrap_or((0, 0));
         let total_bytes = books_bytes + covers_bytes + database_bytes;
         Ok(StorageSummary {
             books_bytes,
@@ -122,6 +128,8 @@ pub async fn book_storage(state: State<'_, AppState>) -> AppResult<StorageSummar
             total_bytes,
             by_format,
             top_books,
+            orphan_covers_bytes,
+            orphan_covers_count,
         })
     })
     .await
@@ -925,6 +933,25 @@ mod tests {
 
         // No previous picture at all.
         assert_eq!(move_aside(None, &covers, "b1"), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_retained_original_is_not_deleted_when_replaced_again() {
+        // Undo points the row back at `{id}.prev.{ext}`. Re-downloading must
+        // keep that file — the old code called forget_backups first, deleted
+        // the source, then failed the rename: the book lost its own cover.
+        let dir = crate::document::fixture::temp_dir("book-cover-retained");
+        let covers = dir.join("covers");
+        std::fs::create_dir_all(&covers).expect("covers");
+        let prev = covers.join("b1.prev.jpg");
+        std::fs::write(&prev, b"\xff\xd8\xfforiginal").expect("original");
+
+        let (from, kept) =
+            move_aside(Some(prev.to_str().expect("path")), &covers, "b1").expect("kept in place");
+        assert_eq!(from, prev);
+        assert_eq!(kept, prev);
+        assert_eq!(std::fs::read(&prev).expect("still there"), b"\xff\xd8\xfforiginal");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -11,6 +11,7 @@ pub mod bookmark;
 pub mod calibre;
 pub mod clippings;
 pub mod conversation;
+pub mod covers;
 pub mod dictionary;
 pub mod export;
 pub mod font;

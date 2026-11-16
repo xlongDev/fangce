@@ -5,6 +5,7 @@ import {
   ArrowSquareOut,
   BookOpenText,
   CaretDown,
+  CaretRight,
   ClockCounterClockwise,
   CloudArrowUp,
   Monitor,
@@ -16,7 +17,7 @@ import {
   TextAa,
 } from "@phosphor-icons/react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -689,6 +690,26 @@ export interface OperationKind {
  * grouping dimensions nested is a fold inside a fold, and a reader would have
  * to open two things to see one row.
  */
+/**
+ * Whether a log line is about a cover, and so leads to the cover manager.
+ * `fill_metadata` is shared by plain fills and cover fills, so the summary
+ * has to break the tie — a publisher batch must not offer a cover jump.
+ */
+export function isCoverOperation(action: string, summary: string): boolean {
+  if (
+    action === "cover" ||
+    action === "update_metadata_cover" ||
+    action === "cover_retire" ||
+    action === "cover_restore" ||
+    action === "cover_purge" ||
+    action === "cover_orphan_cleanup" ||
+    action === "cover_dedupe"
+  ) {
+    return true;
+  }
+  return action === "fill_metadata" && summary.includes("封面");
+}
+
 export const KINDS: OperationKind[] = [
   { key: "all", label: "全部", matches: () => true },
   {
@@ -715,11 +736,24 @@ function OperationsSection() {
   // fifty rows was one afternoon of fills, which made 「上周」 unreachable.
   const { data, isPending, isError } = useOperations(200);
   const undo = useUndoOperation();
+  const navigate = useNavigate();
+  const { state } = useLocation();
+  /** A cover-management row can send the reader here to see its timeline
+   *  entry. Consumed once: it opens the day and lights the row, but a later
+   *  refetch or a filter change must not keep a stale row highlighted. */
+  const focusCallId =
+    state && typeof state === "object" && "focusOperation" in state
+      ? String((state as { focusOperation: unknown }).focusOperation)
+      : null;
   const calls = useMemo(() => groupByCall(data ?? []), [data]);
   const [picked, setPicked] = useState("all");
   const kind = KINDS.find((entry) => entry.key === picked) ?? KINDS[0]!;
   const visible = useMemo(() => calls.filter((call) => kind.matches(call.action)), [calls, kind]);
   const days = useMemo(() => groupByDay(visible), [visible]);
+  /** The day holding the focused call is opened even when it is old. */
+  const focusDay = focusCallId
+    ? days.find((day) => day.calls.some((call) => call.callId === focusCallId))?.key
+    : undefined;
   /** Per-day overrides; a day not named here follows `day.recent`. Keyed by the
    *  day, not by index, so the state survives a refetch that adds a new day. */
   const [closed, setClosed] = useState<Record<string, boolean>>({});
@@ -784,15 +818,17 @@ function OperationsSection() {
                 <OperationsDay
                   key={day.key}
                   day={day}
-                  expanded={closed[day.key] ?? day.recent}
+                  expanded={closed[day.key] ?? (day.recent || day.key === focusDay)}
+                  focusCallId={focusCallId}
                   onToggle={() =>
                     setClosed((current) => ({
                       ...current,
-                      [day.key]: !(current[day.key] ?? day.recent),
+                      [day.key]: !(current[day.key] ?? (day.recent || day.key === focusDay)),
                     }))
                   }
                   undoPending={undo.isPending}
                   onUndo={(callId) => undo.mutate(callId)}
+                  onOpenCovers={() => navigate("/covers")}
                 />
               ))}
             </div>
@@ -806,9 +842,12 @@ function OperationsSection() {
 interface OperationsDayProps {
   day: OperationDay;
   expanded: boolean;
+  /** Call to light up when arriving from 封面管理, or null. */
+  focusCallId: string | null;
   onToggle: () => void;
   undoPending: boolean;
   onUndo: (callId: string) => void;
+  onOpenCovers: () => void;
 }
 
 /**
@@ -823,7 +862,15 @@ interface OperationsDayProps {
  * sheet's rows use: this is a block becoming visible, not something travelling
  * through space. A spring here would overshoot past its own content.
  */
-function OperationsDay({ day, expanded, onToggle, undoPending, onUndo }: OperationsDayProps) {
+function OperationsDay({
+  day,
+  expanded,
+  focusCallId,
+  onToggle,
+  undoPending,
+  onUndo,
+  onOpenCovers,
+}: OperationsDayProps) {
   const reduce = useReducedMotion();
   const transition = reduce ? { duration: 0 } : { duration: 0.18, ease: EASE_OUT };
 
@@ -862,11 +909,33 @@ function OperationsDay({ day, expanded, onToggle, undoPending, onUndo }: Operati
           >
             <ul className="divide-hairline divide-y">
               {day.calls.map((call) => (
-                <li key={call.callId} className="flex items-center gap-3 px-5 py-2 text-[13px]">
+                <li
+                  key={call.callId}
+                  className={cn(
+                    "flex items-center gap-3 px-5 py-2 text-[13px]",
+                    focusCallId === call.callId && "bg-accent-soft",
+                  )}
+                >
                   <time className="text-text-3 w-11 shrink-0 tabular-nums">
                     {TIME.format(new Date(call.at * 1000))}
                   </time>
-                  <span className="text-text-1 min-w-0 flex-1 truncate">{call.summary}</span>
+                  {isCoverOperation(call.action, call.summary) ? (
+                    <button
+                      type="button"
+                      onClick={onOpenCovers}
+                      title="在封面管理中查看"
+                      className="focus-visible:focus-ring text-text-1 hover:text-accent group -mx-1 flex min-w-0 flex-1 items-center gap-0.5 truncate rounded px-1 text-left"
+                    >
+                      <span className="min-w-0 flex-1 truncate">{call.summary}</span>
+                      <CaretRight
+                        size={11}
+                        aria-hidden
+                        className="text-text-3 group-hover:text-accent shrink-0 transition-colors"
+                      />
+                    </button>
+                  ) : (
+                    <span className="text-text-1 min-w-0 flex-1 truncate">{call.summary}</span>
+                  )}
                   <span
                     className="text-text-2 max-w-36 shrink-0 truncate"
                     title={call.title ?? undefined}

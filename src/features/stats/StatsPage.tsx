@@ -365,6 +365,9 @@ export function StatsPage() {
     navigate("/", { state: { shelfFormat: format } });
   };
 
+  /** 从「补充封面」进独立的封面管理页。 */
+  const openCovers = () => navigate("/covers");
+
   /** Irreversible, so it asks; the toast is the only feedback after the fact
    *  because what it wiped is no longer on screen to show. */
   const confirmClear = () => {
@@ -539,6 +542,7 @@ export function StatsPage() {
             onLocateBook={locateBook}
             onSortBySize={sortBySize}
             onFilterByFormat={filterByFormat}
+            onOpenCovers={openCovers}
           />
         </Reveal>
       </div>

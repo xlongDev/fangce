@@ -26,6 +26,7 @@ mod transfer;
 /// Not under `io/`: it neither reads nor writes the library, it asks somebody
 /// else a question. The write, when the reader accepts an answer, is the same
 /// `repository::update_metadata` every other edit uses.
+pub mod covers;
 pub mod duplicates;
 pub mod metadata;
 
@@ -112,6 +113,14 @@ pub fn cover_url(book_id: &str, version: i64) -> String {
     format!("{}/cover/{book_id}?v={version}", resource_origin())
 }
 
+/// URL for a cover the manager addresses by file name rather than book id.
+/// A retired cover is no longer referenced by a row, so it cannot be resolved
+/// through `cover_url`; this goes through `/managed-cover/` instead. `version`
+/// (the file's mtime or retirement stamp) busts the cache when a key is reused.
+pub fn managed_cover_url(key: &str, version: i64) -> String {
+    format!("{}/managed-cover/{key}?v={version}", resource_origin())
+}
+
 /// Moves the picture a replacement is about to take away, so 撤销 can put it
 /// back.
 ///
@@ -134,6 +143,18 @@ pub fn move_aside(
     let old = PathBuf::from(previous?);
     if old.parent() != Some(covers_dir) || !old.exists() {
         return None;
+    }
+    // After an undo the row already points at the retained original
+    // (`{id}.prev.{ext}`). It *is* the backup — deleting backups first would
+    // delete this very file and lose the book's own cover for good, leaving a
+    // placeholder in the cover manager. Nothing to move: report it in place.
+    let prefix = format!("{id}.prev.");
+    if old
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(&prefix) && name.len() > prefix.len())
+    {
+        return Some((old.clone(), old));
     }
     forget_backups(covers_dir, id);
     let extension = old.extension().and_then(|value| value.to_str()).unwrap_or("jpg");
@@ -363,6 +384,15 @@ mod tests {
         let url = cover_url("abc", 42);
         assert!(url.starts_with(resource_origin()), "{url}");
         assert!(url.contains("/cover/abc"), "{url}");
+    }
+
+    #[test]
+    fn managed_cover_urls_address_the_file_and_carry_a_version() {
+        let url = managed_cover_url("b1.retired.1699.jpg", 1699);
+        assert!(url.starts_with(resource_origin()), "{url}");
+        assert!(url.contains("/managed-cover/b1.retired.1699.jpg"), "{url}");
+        assert!(url.contains("v=1699"), "{url}");
+        assert_ne!(url, managed_cover_url("b1.retired.1699.jpg", 1700));
     }
 
     /// The version is what makes a replacement visible, so it has to be in the

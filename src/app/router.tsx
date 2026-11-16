@@ -19,6 +19,9 @@ const SettingsPage = lazy(() =>
 const StatsPage = lazy(() =>
   import("@/features/stats/StatsPage").then((m) => ({ default: m.StatsPage })),
 );
+const CoversPage = lazy(() =>
+  import("@/features/covers/CoversPage").then((m) => ({ default: m.CoversPage })),
+);
 const NotesPage = lazy(() =>
   import("@/features/notes/NotesPage").then((m) => ({ default: m.NotesPage })),
 );
@@ -37,6 +40,7 @@ const routes: RouteObject[] = [
       { path: "reader", element: <ReaderPage /> },
       { path: "search", element: <SearchPage /> },
       { path: "stats", element: <StatsPage /> },
+      { path: "covers", element: <CoversPage /> },
       { path: "settings", element: <SettingsPage /> },
     ],
   },

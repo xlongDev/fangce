@@ -261,6 +261,25 @@ fn write(
 ///
 /// Undo rows are filtered out: they are bookkeeping for this module, and a log
 /// that shows 「撤销了一次撤销」 is a log nobody reads.
+/// Auto-archive of the operation log. Deletes change rows older than
+/// `older_than_days`, but never touches the newest `keep_rows` rows regardless
+/// of age — so a burst of activity cannot get trimmed, and the recent history
+/// the settings page actually shows (and can undo) always survives.
+///
+/// Deliberately generous defaults and a startup-only call: this is a safety
+/// valve against unbounded growth, not a cache. An `undo` marker shares its
+/// call's `at`, so an old call and its undo row are pruned together; a call
+/// undone long after the fact leaves only a marker the list never reads.
+pub fn archive(conn: &Connection, older_than_days: i64, keep_rows: i64) -> AppResult<usize> {
+    let cutoff = crate::library::now_seconds() - older_than_days.saturating_mul(86_400);
+    let removed = conn.execute(
+        "DELETE FROM operations WHERE at < ?1 \
+           AND id NOT IN (SELECT id FROM operations ORDER BY at DESC, id DESC LIMIT ?2)",
+        params![cutoff, keep_rows],
+    )?;
+    Ok(removed)
+}
+
 pub fn list(conn: &Connection, limit: usize) -> AppResult<Vec<Operation>> {
     let limit = limit.clamp(1, 500);
     let mut stmt = conn.prepare(
@@ -1086,5 +1105,45 @@ mod tests {
         let outcome = library.with_tx(|tx| undo(tx, &call_id, &covers_dir(&dir))).expect("undo");
         assert_eq!(outcome, Undo { undone: 1, skipped: 1 });
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn archive_deletes_only_old_rows_beyond_the_keep_floor() {
+        let dir = crate::document::fixture::temp_dir("ops-archive");
+        let library = Library::open(&dir).expect("open");
+        let now = crate::library::now_seconds();
+        library
+            .with(|conn| {
+                // One very old row, two recent keep-floor rows, one old row that
+                // must survive because it is within the newest `keep_rows`.
+                for (at, summary) in [
+                    (now - 800 * 86_400, "very old"),
+                    (now - 5 * 86_400, "recent"),
+                    (now - 10 * 86_400, "newest"),
+                ] {
+                    conn.execute(
+                        "INSERT INTO operations (at, source, action, summary, call_id) \
+                         VALUES (?1, 'ui', 'cover', ?2, ?3)",
+                        params![at, summary, format!("call-{summary}")],
+                    )?;
+                }
+                Ok::<(), crate::error::AppError>(())
+            })
+            .expect("seed");
+
+        // older_than = 365 days, keep newest 3 of ALL rows → the very old row
+        // is both old and outside the newest 3? There are 3 rows total, so it
+        // is inside the floor and survives. Lower the floor to exercise prune.
+        let removed = library.with(|conn| archive(conn, 365, 1)).expect("archive");
+        assert_eq!(removed, 1, "only the old row outside the floor is removed");
+        let summaries: Vec<String> = library
+            .with(|conn| {
+                let mut s = conn.prepare("SELECT summary FROM operations ORDER BY at ASC")?;
+                let rows = s.query_map([], |r| r.get::<_, String>(0))?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .expect("read");
+        assert!(!summaries.iter().any(|s| s == "very old"));
+        assert!(summaries.iter().any(|s| s == "newest"), "newest always kept");
     }
 }

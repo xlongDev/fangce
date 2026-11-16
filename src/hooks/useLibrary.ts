@@ -8,6 +8,9 @@ import { renderFirstPagePng } from "@/lib/pdf";
 import { showToast } from "@/stores/toasts";
 import type {
   BookInfoSummary,
+  CleanupResult,
+  CoverManagerData,
+  CoverOpResult,
   BookMetadataPatch,
   BookQuery,
   BookSummary,
@@ -112,7 +115,107 @@ const EMPTY_STORAGE: StorageSummary = {
   totalBytes: 0,
   byFormat: [],
   topBooks: [],
+  orphanCoversBytes: 0,
+  orphanCoversCount: 0,
 };
+
+const EMPTY_COVERS: CoverManagerData = {
+  active: [],
+  retired: [],
+  activeBytes: 0,
+  retiredBytes: 0,
+  history: [],
+  orphans: [],
+  orphanBytes: 0,
+  duplicateGroups: [],
+  duplicateBytes: 0,
+};
+
+/** Everything the 设置 › 封面管理 section shows. Desktop-only: the browser
+    has no covers directory to walk, so it gets an empty manager rather than a
+    query it cannot answer (see `desktopQuery`). */
+export function useCovers() {
+  return useQuery<CoverManagerData>({
+    queryKey: ["covers", "manager"],
+    queryFn: desktopQuery<CoverManagerData>(EMPTY_COVERS, () => ipc.coverList()),
+    staleTime: 15_000,
+  });
+}
+
+/** Retire / restore / purge all change both the covers directory and the book
+    rows, so every one refreshes the manager, the shelf and storage together. */
+function useCoverMutation(fn: (keys: string[]) => Promise<CoverOpResult>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: (result) => {
+      const word = result.skipped > 0 ? `，跳过 ${result.skipped} 张` : "";
+      showToast("success", `已处理 ${result.done} 张封面${word}`);
+      void queryClient.invalidateQueries({ queryKey: ["covers"] });
+      void queryClient.invalidateQueries({ queryKey: ["books"] });
+      void queryClient.invalidateQueries({ queryKey: ["operations"] });
+    },
+  });
+}
+
+export function useRetireCovers() {
+  return useCoverMutation((keys) => ipc.coverRetire(keys));
+}
+
+export function useRestoreCovers() {
+  return useCoverMutation((keys) => ipc.coverRestore(keys));
+}
+
+export function usePurgeCovers() {
+  return useCoverMutation((keys) => ipc.coverPurge(keys));
+}
+
+/** Cleanup / dedupe change files on disk but, unlike retire/restore, do not
+ *  move a book between tabs. Both report reclaimed bytes, so the toast says so.
+ *  Every one invalidates the storage card too: orphan cleanup removes bytes the
+ *  footprint report counted as 「发现无主封面」. */
+function useCoverCleanup<TVars>(fn: (vars: TVars) => Promise<CleanupResult>, success: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: (result) => {
+      showToast(
+        "success",
+        result.files > 0
+          ? `${success} ${result.files} 张，回收 ${formatBytes(result.bytes)}`
+          : "没有需要处理的文件",
+      );
+      void queryClient.invalidateQueries({ queryKey: ["covers"] });
+      void queryClient.invalidateQueries({ queryKey: ["books"] });
+      void queryClient.invalidateQueries({ queryKey: ["books", "storage"] });
+      void queryClient.invalidateQueries({ queryKey: ["operations"] });
+    },
+  });
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function useCleanupOrphanCovers() {
+  return useCoverCleanup<string[]>((keys) => ipc.coverCleanupOrphans(keys), "已清理");
+}
+
+export function useDedupeCovers() {
+  return useCoverCleanup<{ keeper: string; keys: string[] }>(
+    ({ keeper, keys }) => ipc.coverDedupe(keeper, keys),
+    "已合并",
+  );
+}
+
+/** Exports selected covers to a folder picked in the UI. The shelf is not
+ *  touched, so nothing to invalidate. */
+export function useExportCovers() {
+  return useMutation({
+    mutationFn: ({ keys, dest }: { keys: string[]; dest: string }) => ipc.coverExport(keys, dest),
+  });
+}
 
 function useInvalidateShelf() {
   const queryClient = useQueryClient();

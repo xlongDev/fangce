@@ -46,29 +46,48 @@ function formatLabel(format: string): string {
   return FORMAT_LABELS[format] ?? format.toUpperCase();
 }
 
-/** One of the three contributing parts, as a labelled share of the whole. */
+/** One of the three contributing parts, as a labelled share of the whole.
+ *  A part may carry a click action (补充封面 opens the cover manager). */
 function Part({
   label,
   bytes,
   total,
   color,
+  hint,
+  onClick,
 }: {
   label: string;
   bytes: number;
   total: number;
   color: string;
+  hint?: string;
+  onClick?: () => void;
 }) {
   const percent = total > 0 ? Math.round((bytes / total) * 100) : 0;
-  return (
-    <div className="glass min-w-0 rounded-lg px-3 py-2.5">
+  const inner = (
+    <>
       <div className="flex items-center gap-1.5">
         <span className="h-2 w-2 shrink-0 rounded-[2px]" style={{ background: color }} />
         <span className="text-text-3 text-[11px]">{label}</span>
       </div>
       <p className="text-text-1 mt-1 text-sm font-medium tabular-nums">{formatBytes(bytes)}</p>
       <p className="text-text-3 mt-0.5 text-[11px] tabular-nums">{percent}%</p>
-    </div>
+      {hint && <p className="text-accent mt-0.5 text-[10px]">{hint}</p>}
+    </>
   );
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        title="打开封面管理"
+        className="focus-visible:focus-ring hover:bg-text-1/8 glass group -mx-0.5 min-w-0 cursor-pointer rounded-lg px-3 py-2.5 text-left transition-colors"
+      >
+        {inner}
+      </button>
+    );
+  }
+  return <div className="glass min-w-0 rounded-lg px-3 py-2.5">{inner}</div>;
 }
 
 function FormatRow({
@@ -111,10 +130,12 @@ export function StorageCard({
   onLocateBook,
   onSortBySize,
   onFilterByFormat,
+  onOpenCovers,
 }: {
   onLocateBook: (title: string) => void;
   onSortBySize: () => void;
   onFilterByFormat: (format: string) => void;
+  onOpenCovers: () => void;
 }) {
   const { data, error, refetch } = useStorage();
 
@@ -141,6 +162,7 @@ export function StorageCard({
           onLocateBook={onLocateBook}
           onSortBySize={onSortBySize}
           onFilterByFormat={onFilterByFormat}
+          onOpenCovers={onOpenCovers}
         />
       )}
     </GlassPanel>
@@ -152,17 +174,32 @@ function StorageBody({
   onLocateBook,
   onSortBySize,
   onFilterByFormat,
+  onOpenCovers,
 }: {
   data: StorageSummary | undefined;
   onLocateBook: (title: string) => void;
   onSortBySize: () => void;
   onFilterByFormat: (format: string) => void;
+  onOpenCovers: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const total = data?.totalBytes ?? 0;
-  const parts: { label: string; bytes: number; color: string }[] = [
+  const orphans = data?.orphanCoversCount ?? 0;
+  const parts: {
+    label: string;
+    bytes: number;
+    color: string;
+    hint?: string;
+    onClick?: () => void;
+  }[] = [
     { label: "书籍文件", bytes: data?.booksBytes ?? 0, color: "var(--color-accent)" },
-    { label: "补充封面", bytes: data?.coversBytes ?? 0, color: "#1D9E75" },
+    {
+      label: "补充封面",
+      bytes: data?.coversBytes ?? 0,
+      color: "#1D9E75",
+      hint: orphans > 0 ? `发现 ${orphans} 张无主封面 ›` : undefined,
+      onClick: onOpenCovers,
+    },
     { label: "数据库", bytes: data?.databaseBytes ?? 0, color: "#BA7517" },
   ];
   const byFormat = data?.byFormat ?? [];

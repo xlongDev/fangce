@@ -377,6 +377,10 @@ pub struct StorageSummary {
     pub total_bytes: i64,
     pub by_format: Vec<StorageFormat>,
     pub top_books: Vec<StorageTopBook>,
+    /// Bytes in `.dl.` files no book points at, and how many there are. Shown
+    /// as a hint on the 补充封面 slice; not part of `covers_bytes` or `total`.
+    pub orphan_covers_bytes: i64,
+    pub orphan_covers_count: i64,
 }
 
 /// The SQLite half of the storage report: per-format sums and the biggest
