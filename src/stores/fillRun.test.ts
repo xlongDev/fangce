@@ -16,6 +16,7 @@ const proposal = (id: string, over: Partial<Proposal_Serialize> = {}): Proposal_
   bookTitle: id,
   fills: [{ field: "publisher", from: null, to: "某出版社" }],
   skipped: null,
+  throttledForMs: null,
   matchScore: 0.95,
   rating: null,
   ratingCount: null,
@@ -28,6 +29,13 @@ const proposal = (id: string, over: Partial<Proposal_Serialize> = {}): Proposal_
 });
 
 const ids = (count: number) => Array.from({ length: count }, (_, i) => `b${i}`);
+
+const throttledProposal = (id: string): Proposal_Serialize =>
+  proposal(id, {
+    fills: [],
+    skipped: "查询失败：豆瓣 返回 403，建议 20 秒后重试",
+    throttledForMs: 10,
+  });
 
 /** The loop is async and touches a store; give it a turn to settle. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -55,7 +63,7 @@ describe("the whole-shelf run", () => {
     expect(state.stopped).toBeNull();
   });
 
-  /** 「连已有封面一起换」 is a decision the whole run carries to every batch,
+  /** 替换已有封面 is a decision the whole run carries to every batch,
    *  not something one dialog re-decides per chunk. */
   it("carries the cover-replacement answer to every batch", async () => {
     useFillRun.getState().start(ids(CHUNK + 1), true);
@@ -129,6 +137,91 @@ describe("the whole-shelf run", () => {
     expect(propose).toHaveBeenCalledTimes(1);
     expect(state.stopped).toContain("403");
     expect(state.failed).toBeGreaterThan(0);
+    // The count is useless without the books: keep each failure's title and
+    // the catalogue's own reason so the dialog can list them.
+    expect(state.failures).toHaveLength(state.failed);
+    expect(state.failures[0]).toMatchObject({
+      bookId: "b0",
+      bookTitle: "b0",
+      skipped: expect.stringContaining("403"),
+    });
+  });
+
+  it("retries a throttled book in a later batch instead of failing it", async () => {
+    propose.mockImplementationOnce((asked: string[]) =>
+      Promise.resolve(
+        asked.map((id, index) =>
+          index === 0
+            ? proposal(id, {
+                fills: [],
+                skipped: "查询失败：豆瓣 返回 403，建议 20 秒后重试",
+                throttledForMs: 10,
+              })
+            : proposal(id),
+        ),
+      ),
+    );
+    useFillRun.getState().start(ids(CHUNK + 1));
+    await vi.waitFor(() => expect(useFillRun.getState().running).toBe(false));
+
+    expect(propose).toHaveBeenCalledTimes(2);
+    // The held book is asked again, not written off with the failures.
+    expect(propose.mock.calls[1]![0]).toEqual(["b40", "b0"]);
+    const state = useFillRun.getState();
+    expect(state.failed).toBe(0);
+    expect(state.deferred).toBe(0);
+    expect(state.written).toBe(CHUNK + 1);
+    expect(state.done).toBe(CHUNK + 1);
+    expect(state.stopped).toBeNull();
+  });
+
+  // Two mostly-throttled batches mean the provider rejected this machine, not
+  // that four thousand books are hard to match. Stop before the loop works
+  // through the rest of the shelf and keeps poking a server that said no.
+  it("pauses the whole run after two throttled batches", async () => {
+    propose.mockImplementation((asked: string[]) => Promise.resolve(asked.map(throttledProposal)));
+    useFillRun.getState().start(ids(CHUNK * 3));
+    await vi.waitFor(() => expect(useFillRun.getState().running).toBe(false));
+
+    expect(propose).toHaveBeenCalledTimes(2);
+    const state = useFillRun.getState();
+    expect(state.stopped).toContain("平台限流");
+    // The message names the source, the status and the suggested wait.
+    expect(state.stopped).toContain("豆瓣 返回 403，建议 20 秒后重试");
+    expect(state.failed).toBe(0);
+    expect(state.done).toBe(0);
+    // The asked books and the unasked remainder are all still available.
+    expect(state.pending).toHaveLength(CHUNK * 3);
+  });
+
+  // A blocked address must not turn into an infinite loop, but being blocked
+  // is not a failed lookup either: after two asks the book stays pending.
+  it("keeps a twice-throttled book pending instead of failing it", async () => {
+    let calls = 0;
+    propose.mockImplementation((asked: string[]) => {
+      calls += 1;
+      return Promise.resolve(
+        asked.map((id) => (id === "b0" && calls <= 2 ? throttledProposal(id) : proposal(id))),
+      );
+    });
+    useFillRun.getState().start(ids(CHUNK + 1), true);
+    await vi.waitFor(() => expect(useFillRun.getState().running).toBe(false));
+
+    const state = useFillRun.getState();
+    expect(state.failed).toBe(0);
+    expect(state.pending).toEqual(["b0"]);
+    expect(state.done).toBe(CHUNK);
+    expect(state.stopped).toBeNull();
+
+    // The retry asks only that book and remembers the cover decision.
+    useFillRun.getState().retryPending();
+    await vi.waitFor(() => expect(useFillRun.getState().running).toBe(false));
+    expect(propose.mock.calls[2]![0]).toEqual(["b0"]);
+    expect(propose.mock.calls[2]![1]).toBe(true);
+    const retried = useFillRun.getState();
+    expect(retried.pending).toEqual([]);
+    // The retry is its own run; the earlier batch's counts are not carried.
+    expect(retried.written).toBe(1);
   });
 
   it("refuses to start a second run on top of the first", async () => {

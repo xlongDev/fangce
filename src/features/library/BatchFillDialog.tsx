@@ -51,7 +51,7 @@ export function BatchFillDialog({
   onClose: () => void;
 }) {
   const run = useFillRun();
-  /** 「连已有封面一起换」. Shared by the preview and the whole-shelf run: one
+  /** 替换已有封面. Shared by the preview and the whole-shelf run: one
    *  decision, two paths, and turning it on must re-ask the catalogue. */
   const [replaceCovers, setReplaceCovers] = useState(false);
   // A run outlives this dialog — the reader can close it and watch the shelf —
@@ -78,13 +78,7 @@ export function BatchFillDialog({
             ? `整架补全 ${ids.length} 本`
             : `从目录补全 ${Math.min(ids.length, MAX_BATCH)} 本`
       }
-      description={
-        showingRun
-          ? undefined
-          : whole
-            ? "只填空着的字段，不会覆盖你已经写过的内容。按批自动跑，中途可以停。"
-            : "只填空着的字段，不会覆盖你已经写过的内容。"
-      }
+      description={showingRun ? undefined : "仅填充空白字段，不覆盖已有内容。"}
       widthClass="w-[min(92vw,560px)]"
     >
       <div className="space-y-3">
@@ -129,9 +123,9 @@ function ReplaceCoversToggle({
         className="border-hairline accent-accent focus-visible:focus-ring mt-0.5 h-4 w-4 shrink-0 rounded"
       />
       <span className="text-text-2 text-xs leading-relaxed">
-        连已有封面一起换
+        替换已有封面
         <span className="text-text-3 block">
-          默认只给没有封面的书补图。打开后，目录里的标准封面会替换书架上的图；每本可在操作记录里撤销。
+          默认仅补全缺失封面。开启后，目录封面将覆盖书架封面；每次替换均可在操作记录中撤销。
         </span>
       </span>
     </label>
@@ -157,13 +151,25 @@ function WholeBody({
 
   return (
     <div className="space-y-4">
-      <p className="text-text-2 text-[13px] leading-relaxed">
-        这次选了 {ids.length} 本，分 {batches} 批自动跑，大约 {minutes}{" "}
-        分钟。跑的时候可以随时停，已经写进去的会留着。
-      </p>
+      <dl className="border-hairline divide-hairline divide-y rounded-md border px-3">
+        <div className="flex items-baseline justify-between gap-4 py-2">
+          <dt className="text-text-3 shrink-0 text-[12px]">处理范围</dt>
+          <dd className="text-text-1 text-[13px] tabular-nums">{ids.length} 本</dd>
+        </div>
+        <div className="flex items-baseline justify-between gap-4 py-2">
+          <dt className="text-text-3 shrink-0 text-[12px]">批处理</dt>
+          <dd className="text-text-1 text-[13px] tabular-nums">
+            分 {batches} 批 · 预计 {minutes} 分钟
+          </dd>
+        </div>
+        <div className="flex items-baseline justify-between gap-4 py-2">
+          <dt className="text-text-3 shrink-0 text-[12px]">中断</dt>
+          <dd className="text-text-1 text-right text-[12px]">可随时停止，已写入内容保留</dd>
+        </div>
+      </dl>
       <p className="text-text-3 text-xs leading-relaxed">
-        整架跑没有预览——几百行的清单没人看，而且每本都要先查一遍才有预览，等于查两遍。想先看看效果，选{" "}
-        {MAX_BATCH} 本以内。
+        整架补全不提供逐本预览：生成预览需先查询全部书目，会重复请求目录。如需先确认结果，请单次选择不超过{" "}
+        {MAX_BATCH} 本。
       </p>
       <div className="flex justify-end gap-2">
         <GlassButton variant="subtle" onClick={onClose}>
@@ -182,6 +188,7 @@ function RunBody({ onClose }: { onClose: () => void }) {
   const run = useFillRun();
   const queryClient = useQueryClient();
   const finished = !run.running;
+  const paused = run.stopped?.startsWith("平台限流") ?? false;
 
   // One refresh at the end rather than one per batch: the shelf is not what the
   // reader is looking at, and twenty-four refetches of 985 rows to update a
@@ -199,7 +206,15 @@ function RunBody({ onClose }: { onClose: () => void }) {
       <div>
         <div className="flex items-baseline justify-between text-[13px]">
           <span className="text-text-1">
-            {finished ? (run.stopped ? "已停止" : "补完了") : "正在查目录并写入…"}
+            {finished
+              ? paused
+                ? "已暂停"
+                : run.stopped
+                  ? "已停止"
+                  : "补全完成"
+              : run.cooldownMs > 0
+                ? "限流退避中"
+                : "正在查询并写入…"}
           </span>
           <span className="text-text-3 tabular-nums">
             {run.done} / {run.total}
@@ -217,11 +232,44 @@ function RunBody({ onClose }: { onClose: () => void }) {
       </div>
 
       <p className="text-text-2 text-[13px]">
-        已补 {run.written} 本 · 跳过 {run.skipped} 本{run.failed > 0 && ` · 失败 ${run.failed} 本`}
+        已补全 {run.written} 本 · 跳过 {run.skipped} 本
+        {run.failed > 0 && ` · 失败 ${run.failed} 本`}
+        {run.deferred > 0 && ` · 待重试 ${run.deferred} 本`}
+        {finished && run.pending.length > 0 && ` · 待补全 ${run.pending.length} 本`}
       </p>
-      {run.stopped && <p className="text-text-3 text-xs leading-relaxed">{run.stopped}</p>}
+      {!finished && run.cooldownMs > 0 && (
+        <p className="text-text-3 text-xs leading-relaxed">
+          正在等待 {Math.ceil(run.cooldownMs / 1000)} 秒后继续（{run.deferred} 本待重试）。
+        </p>
+      )}
+      {/* A count with no names is the complaint this answers. Native details:
+          the list can be long, and folded it never pushes 关闭 off the dialog. */}
+      {run.failures.length > 0 && (
+        <details>
+          <summary className="text-text-3 hover:text-text-2 cursor-pointer text-xs transition-colors select-none">
+            失败明细（{run.failures.length} 本）
+          </summary>
+          <ul className="border-hairline divide-hairline mt-2 max-h-40 divide-y overflow-y-auto rounded-md border px-2.5">
+            {run.failures.map((failure) => (
+              <li key={failure.bookId} className="py-1.5">
+                <span className="text-text-2 block text-[12px] break-words">
+                  {failure.bookTitle}
+                </span>
+                <span className="text-text-3 block text-[11px] leading-relaxed break-all">
+                  {failure.skipped}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {run.stopped && (
+        <p className="text-text-3 max-h-24 overflow-y-auto text-xs leading-relaxed break-all">
+          {run.stopped}
+        </p>
+      )}
       {finished && !run.stopped && run.written > 0 && (
-        <p className="text-text-3 text-xs leading-relaxed">书架上已经能看到改过的信息。</p>
+        <p className="text-text-3 text-xs leading-relaxed">更新已保存到书架。</p>
       )}
 
       <div className="flex justify-end gap-2">
@@ -230,9 +278,16 @@ function RunBody({ onClose }: { onClose: () => void }) {
             停止
           </GlassButton>
         ) : (
-          <GlassButton variant="primary" onClick={onClose}>
-            关闭
-          </GlassButton>
+          <>
+            {run.pending.length > 0 && (
+              <GlassButton variant="subtle" onClick={run.retryPending}>
+                重试待补全 {run.pending.length} 本
+              </GlassButton>
+            )}
+            <GlassButton variant="primary" onClick={onClose}>
+              关闭
+            </GlassButton>
+          </>
         )}
       </div>
     </div>

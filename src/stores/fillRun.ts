@@ -31,6 +31,21 @@ export interface FillRun {
   skipped: number;
   /** Books whose lookup failed — a different thing from 「没有找到」. */
   failed: number;
+  /** The failed proposals themselves, so the summary can name the books and
+   *  quote the catalogue's reason instead of only showing a count. */
+  failures: Proposal[];
+  /** Books waiting out a catalogue cooldown, to be asked again in a later
+   *  batch. Not failures: they have no answer yet. */
+  deferred: number;
+  /** The wait a catalogue asked for after the last batch, in milliseconds. */
+  cooldownMs: number;
+  /** Books left unanswered when the run paused or finished, so the reader can
+   *  send just those again instead of reselecting the whole shelf. */
+  pending: string[];
+  /** The cover decision this run was started with; a retry must not change it. */
+  replaceCovers: boolean;
+  /** Ask only the books still pending, with the same cover decision. */
+  retryPending: () => void;
   /** Why it stopped before the end, or `null` when it ran to completion. */
   stopped: string | null;
   start: (ids: string[], replaceCovers?: boolean) => void;
@@ -55,6 +70,9 @@ export const CHUNK = 40;
  * outcome than a run that takes a few minutes longer.
  */
 const PAUSE_MS = 500;
+/// ponytail: two retries, then the book becomes a failure. Enough to ride out
+/// a short cooldown without turning a blocked IP into an infinite loop.
+const MAX_TRIES = 2;
 
 const idle = {
   running: false,
@@ -64,6 +82,11 @@ const idle = {
   written: 0,
   skipped: 0,
   failed: 0,
+  failures: [] as Proposal[],
+  deferred: 0,
+  cooldownMs: 0,
+  pending: [] as string[],
+  replaceCovers: false,
   stopped: null as string | null,
 };
 
@@ -75,8 +98,14 @@ export const useFillRun = create<FillRun>((set, get) => ({
     // One run at a time: two loops would interleave transactions and report
     // progress that belongs to neither.
     if (get().running || ids.length === 0) return;
-    set({ ...idle, running: true, total: ids.length });
+    set({ ...idle, running: true, total: ids.length, replaceCovers });
     void loop(ids, replaceCovers, set, get);
+  },
+  retryPending: () => {
+    const { pending, replaceCovers, running } = get();
+    if (running || pending.length === 0) return;
+    set({ ...idle, running: true, total: pending.length, replaceCovers });
+    void loop(pending, replaceCovers, set, get);
   },
 }));
 
@@ -90,10 +119,21 @@ async function loop(
   let written = 0;
   let skipped = 0;
   let failed = 0;
+  const failures: Proposal[] = [];
+  let deferred = 0;
+  let cooldownMs = 0;
   let stopped: string | null = null;
+  let at = 0;
+
+  // A mutable queue, not a fixed index: a book the catalogue asked us to wait
+  // on goes to the back instead of being lost to a 「失败」 it does not deserve.
+  const queue = [...ids];
+  const tries = new Map<string, number>();
+  const heldIds = new Set<string>();
+  let throttledBatches = 0;
 
   try {
-    for (let at = 0; at < ids.length; at += CHUNK) {
+    for (; at < queue.length;) {
       // Checked between batches, not inside one: a batch is a transaction, and
       // stopping in the middle of it would leave the count lying about what was
       // written.
@@ -101,7 +141,8 @@ async function loop(
         stopped = "已停止";
         break;
       }
-      const slice = ids.slice(at, at + CHUNK);
+      const slice = queue.slice(at, at + CHUNK);
+      at += slice.length;
       // The demo build has no backend to ask; it serves canned proposals so the
       // progress panel is something a browser test can actually drive.
       const demo = demoEnabled();
@@ -111,9 +152,26 @@ async function loop(
           await ipc.metadataPropose(slice, replaceCovers);
       const worth = proposals.filter(hasSomething);
       const broke = proposals.filter(isFailure);
+      const held = proposals.filter(isThrottled);
 
-      skipped += proposals.length - worth.length - broke.length;
-      failed += broke.length;
+      skipped += proposals.length - worth.length - broke.length - held.length;
+
+      // A book held in an earlier batch and answered here is done with; only
+      // the ones still waiting belong in the retry list.
+      for (const proposal of proposals) {
+        if (!isThrottled(proposal)) heldIds.delete(proposal.bookId);
+      }
+      for (const proposal of held) {
+        heldIds.add(proposal.bookId);
+        const next = (tries.get(proposal.bookId) ?? 0) + 1;
+        // Two asks is enough. After that leave the book pending rather than
+        // calling it a failure: being rate-limited is not the book's fault.
+        if (next < MAX_TRIES) {
+          tries.set(proposal.bookId, next);
+          queue.push(proposal.bookId);
+        }
+      }
+
       if (worth.length > 0) {
         // oxlint-disable-next-line no-await-in-loop -- 同上：写要按批落盘，不然进度是假的。
         written += demo
@@ -122,19 +180,40 @@ async function loop(
           : // oxlint-disable-next-line no-await-in-loop -- 同上：写要按批落盘，不然进度是假的。
             await ipc.metadataApply(worth.map(toFill));
       }
-      done += slice.length;
-      set({ done, written, skipped, failed });
+      failed += broke.length;
+      failures.push(...broke);
+      // Every throttled book is still unanswered, including one that has used
+      // up its two asks. Counting either as done would pass 100% and hide it.
+      done += slice.length - held.length;
+      deferred = queue.slice(at).filter((id) => tries.has(id)).length;
+      cooldownMs = held.reduce((longest, p) => Math.max(longest, p.throttledForMs ?? 0), 0);
+      set({ done, written, skipped, failed, failures, deferred, cooldownMs });
 
-      // Half a batch failing is not a bad match, it is a catalogue that stopped
-      // answering — and the remaining two hundred books would fail the same
-      // way, one twelve-second timeout at a time.
-      if (broke.length * 2 >= slice.length) {
-        stopped = `连续查不到，先停在这里：${broke[0]?.skipped ?? "目录没有回应"}`;
+      // Two consecutive batches that are mostly 「wait」 mean the provider is
+      // refusing this machine, not that these books are hard to find. Stop
+      // before the loop works through the rest of the shelf and turns a
+      // temporary block into 2388 unanswered books.
+      throttledBatches = held.length * 2 >= slice.length ? throttledBatches + 1 : 0;
+      if (throttledBatches >= 2) {
+        // The backend already put the source, status and suggested wait in the
+        // per-book reason. Quote it rather than making the reader guess.
+        const reason = held[0]?.skipped?.replace(/^查询失败：/, "") ?? "平台没有给出原因";
+        stopped = `平台限流，已暂停后续查询：${reason}`;
         break;
       }
-      if (at + CHUNK < ids.length) {
+      // Half a batch failing is not a bad match, it is a catalogue that stopped
+      // answering — and the remaining two hundred books would fail the same
+      // way, one twelve-second timeout at a time. A short retry batch is not a
+      // signal: one book left can be one book failing.
+      if (slice.length >= CHUNK / 2 && broke.length * 2 >= slice.length) {
+        stopped = `连续查询失败，已自动停止：${broke[0]?.skipped ?? "目录没有回应"}`;
+        break;
+      }
+      if (at < queue.length) {
         // oxlint-disable-next-line no-await-in-loop -- 间隔本身就是目的：别把别人的服务器当成压测目标。
-        await pause(PAUSE_MS);
+        await cancellablePause(Math.max(PAUSE_MS, cooldownMs), get);
+        cooldownMs = 0;
+        set({ cooldownMs });
       }
     }
   } catch (err) {
@@ -142,14 +221,44 @@ async function loop(
     // that would not open. The books already written stay written.
     stopped = err instanceof Error ? err.message : String(err);
   } finally {
-    set({ running: false, stopped, done, written, skipped, failed });
+    // Whatever was not answered — the rest of the first pass and every book
+    // held by a cooldown — stays available as one retry, not a reselection.
+    const pending = [...new Set([...queue.slice(at), ...heldIds])];
+    if (stopped) deferred = 0;
+    set({
+      running: false,
+      stopped,
+      done,
+      written,
+      skipped,
+      failed,
+      failures,
+      deferred,
+      cooldownMs,
+      pending,
+    });
   }
 }
 
+function isThrottled(proposal: Proposal): boolean {
+  return (proposal.throttledForMs ?? 0) > 0;
+}
+
 function isFailure(proposal: Proposal): boolean {
-  return proposal.skipped?.startsWith("查询失败") ?? false;
+  return !isThrottled(proposal) && (proposal.skipped?.startsWith("查询失败") ?? false);
 }
 
 function pause(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** A cooldown can be twenty seconds; 「停止」 still has to work during it. */
+async function cancellablePause(ms: number, get: () => FillRun) {
+  let left = ms;
+  while (left > 0 && !get().cancelled) {
+    const step = Math.min(left, 1000);
+    // oxlint-disable-next-line no-await-in-loop -- 每秒醒一次只为看取消标志。
+    await pause(step);
+    left -= step;
+  }
 }

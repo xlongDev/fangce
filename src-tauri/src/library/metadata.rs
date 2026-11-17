@@ -24,11 +24,15 @@
 //! Nothing here writes. A candidate is a suggestion; applying it is the reader's
 //! click, and the write path is the one `book.update` already uses.
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use reqwest::Client;
+use reqwest::header::HeaderMap;
 use serde::Serialize;
 use serde_json::Value;
+use tokio::time::sleep_until;
 
 use crate::error::{AppError, AppResult};
 
@@ -73,8 +77,108 @@ pub fn client() -> Client {
     Client::builder().connect_timeout(Duration::from_secs(3)).build().unwrap_or_default()
 }
 
+/// Minimum space between two asks of the same catalogue.
+///
+/// A batch used to fire four books at once, each with up to four autocomplete
+/// queries — a burst of sixteen requests at a server nobody owes us throughput
+/// on. One request at a time per provider, spaced out, is the difference between
+/// a fill that finishes and a fill that gets its address banned on book one.
+/// Only the search endpoints go through here: subject pages and covers are a
+/// handful by comparison, and throttling them too would double the run time.
+const SUGGEST_INTERVAL: Duration = Duration::from_millis(300);
+/// What to use when a provider says 「wait」 without saying how long.
+const DEFAULT_RETRY_AFTER: Duration = Duration::from_secs(20);
+/// A header can ask for an absurd wait; a run must remain resumable.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(300);
+
+#[derive(Debug)]
+struct GateState {
+    next: Instant,
+    cooldown_until: Instant,
+}
+
+/// Process-wide spacing for catalogue requests.
+///
+/// A static rather than an `AppState` field: there is one app and one Douban,
+/// and every path that asks a catalogue — preview, whole-shelf run, single-book
+/// search — has to share the same budget. Threading a handle through six
+/// function signatures would make it easy for one caller to forget.
+#[derive(Default)]
+pub struct CatalogueGate {
+    state: Mutex<HashMap<Provider, GateState>>,
+}
+
+impl CatalogueGate {
+    /// Take the next slot for this provider, sleeping until it arrives.
+    pub async fn wait(&self, provider: Provider) {
+        loop {
+            let at = {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                let now = Instant::now();
+                let entry =
+                    state.entry(provider).or_insert(GateState { next: now, cooldown_until: now });
+                let at = entry.next.max(entry.cooldown_until).max(now);
+                entry.next = at + SUGGEST_INTERVAL;
+                at
+            };
+            sleep_until(tokio::time::Instant::from_std(at)).await;
+            // A 403 that arrived while we slept outranks the slot reserved above.
+            if self.cooling_down(provider) {
+                continue;
+            }
+            return;
+        }
+    }
+
+    /// Push every future slot past the provider's own answer to 「when」.
+    pub fn penalize(&self, provider: Provider, retry_after: Duration) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let entry = state.entry(provider).or_insert(GateState { next: now, cooldown_until: now });
+        entry.cooldown_until = entry.cooldown_until.max(now + retry_after);
+    }
+
+    fn cooling_down(&self, provider: Provider) -> bool {
+        self.state
+            .lock()
+            .map(|state| {
+                state.get(&provider).is_some_and(|entry| entry.cooldown_until > Instant::now())
+            })
+            .unwrap_or(false)
+    }
+}
+
+static GATE: OnceLock<CatalogueGate> = OnceLock::new();
+
+pub fn gate() -> &'static CatalogueGate {
+    GATE.get_or_init(CatalogueGate::default)
+}
+
+/// `Retry-After` is either seconds or an HTTP date. No header means the
+/// provider's own default, which is deliberately long: guessing short keeps
+/// poking the server that just asked us to stop.
+fn retry_after_of(headers: &HeaderMap) -> Duration {
+    let Some(value) = headers.get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok())
+    else {
+        return DEFAULT_RETRY_AFTER;
+    };
+    let value = value.trim();
+    if let Ok(secs) = value.parse::<u64>() {
+        return Duration::from_secs(secs.clamp(1, MAX_RETRY_AFTER.as_secs()));
+    }
+    chrono::DateTime::parse_from_rfc2822(value)
+        .ok()
+        .and_then(|at| at.signed_duration_since(chrono::Utc::now()).to_std().ok())
+        .unwrap_or(DEFAULT_RETRY_AFTER)
+        .min(MAX_RETRY_AFTER)
+}
+
+fn is_throttle(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 403 | 418 | 429)
+}
+
 /// Which catalogue to ask.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Provider {
     /// First, because it is the one that works without a proxy.
     Douban,
@@ -300,6 +404,10 @@ pub struct Proposal {
     /// swallowed: 「没找到」 and 「字段都已经有了」 are different answers, and a
     /// silent skip reads as a bug.
     pub skipped: Option<String>,
+    /// Set when a catalogue asked us to wait before asking again. The caller
+    /// defers this book to a later batch and uses the value as the pause; it is
+    /// not a failed lookup and must never be counted as one.
+    pub throttled_for_ms: Option<u64>,
     pub match_score: f64,
     /// The catalogue's rating, how many people gave it, and the Douban page.
     ///
@@ -390,6 +498,7 @@ pub fn propose_failed(target: &Target, reason: &str) -> Proposal {
         book_title: target.title.clone(),
         fills: Vec::new(),
         skipped: Some(format!("查询失败：{reason}")),
+        throttled_for_ms: None,
         match_score: 0.0,
         rating: None,
         rating_count: None,
@@ -399,6 +508,25 @@ pub fn propose_failed(target: &Target, reason: &str) -> Proposal {
         cover_replaces: false,
         existing: Vec::new(),
     }
+}
+
+/// A catalogue that asked us to wait, as a proposal.
+///
+/// Same shape as a failure so the reader still sees why this book was not
+/// filled, with one extra field telling the loop to try it in a later batch
+/// instead of writing it off.
+pub fn propose_throttled(
+    target: &Target,
+    provider: &str,
+    status: u16,
+    retry_after: Duration,
+) -> Proposal {
+    let wait = retry_after.min(MAX_RETRY_AFTER);
+    let secs = wait.as_secs().max(1);
+    let mut proposal =
+        propose_failed(target, &format!("{provider} 返回 {status}，建议 {secs} 秒后重试"));
+    proposal.throttled_for_ms = Some(wait.as_millis().min(u64::MAX as u128) as u64);
+    proposal
 }
 
 /// [`propose_for_with`] without replacements.
@@ -502,6 +630,7 @@ pub fn propose_for_with(
         book_title: target.title.clone(),
         fills,
         skipped,
+        throttled_for_ms: None,
         match_score,
         rating,
         rating_count,
@@ -534,6 +663,16 @@ pub async fn search(
     }
 }
 
+/// Why a provider will not be asked again in this batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Skip {
+    /// The network or the response failed; the next book would fail the same way.
+    Down,
+    /// The provider asked us to wait. Not broken — just not right now, and the
+    /// book deserves to be tried again later rather than reported as missing.
+    Throttled { status: u16, retry_after: Duration },
+}
+
 /// What one batch learns about the network while it runs.
 ///
 /// A provider that could not be reached for book three will not be reachable
@@ -543,7 +682,7 @@ pub async fn search(
 /// instead of a dialog that appears to have hung.
 #[derive(Default)]
 pub struct Attempts {
-    down: std::sync::Mutex<Vec<Provider>>,
+    failed: Mutex<Vec<(Provider, Skip)>>,
 }
 
 impl Attempts {
@@ -551,19 +690,28 @@ impl Attempts {
         Self::default()
     }
 
-    fn is_down(&self, provider: Provider) -> bool {
-        self.down.lock().is_ok_and(|down| down.contains(&provider))
+    pub fn skip(&self, provider: Provider) -> Option<Skip> {
+        self.failed.lock().ok()?.iter().find(|(p, _)| *p == provider).map(|(_, skip)| *skip)
     }
 
-    /// A poisoned lock means another task panicked while holding it. Treating
-    /// that as 「not down」 asks one more question; treating it as 「down」 would
-    /// silently drop a provider for the rest of the batch.
-    fn mark_down(&self, provider: Provider) {
-        if let Ok(mut down) = self.down.lock()
-            && !down.contains(&provider)
-        {
-            down.push(provider);
+    /// A poisoned lock means another task panicked while holding it. Asking one
+    /// more question is better than silently dropping a provider for the batch.
+    fn record(&self, provider: Provider, skip: Skip) {
+        if let Ok(mut failed) = self.failed.lock() {
+            if let Some(entry) = failed.iter_mut().find(|(p, _)| *p == provider) {
+                entry.1 = skip;
+            } else {
+                failed.push((provider, skip));
+            }
         }
+    }
+
+    fn mark_down(&self, provider: Provider) {
+        self.record(provider, Skip::Down);
+    }
+
+    fn mark_throttled(&self, provider: Provider, status: u16, retry_after: Duration) {
+        self.record(provider, Skip::Throttled { status, retry_after });
     }
 }
 
@@ -585,13 +733,32 @@ pub async fn find(
 ) -> AppResult<Vec<Candidate>> {
     let mut results = Vec::new();
     for provider in Provider::CHAIN {
-        if attempts.is_down(provider) {
-            results.push((provider, Err(AppError::Message("这次查询里连不上，已跳过".into()))));
-            continue;
+        match attempts.skip(provider) {
+            Some(Skip::Down) => {
+                results.push((provider, Err(AppError::Message("这次查询里连不上，已跳过".into()))));
+                continue;
+            }
+            Some(Skip::Throttled { status, retry_after }) => {
+                results.push((
+                    provider,
+                    Err(AppError::Throttled {
+                        provider: provider.label().to_string(),
+                        status,
+                        retry_after,
+                    }),
+                ));
+                continue;
+            }
+            None => {}
         }
         let outcome = search(client, provider, lookup, depth).await;
-        if outcome.is_err() {
-            attempts.mark_down(provider);
+        if let Err(ref err) = outcome {
+            match err {
+                AppError::Throttled { status, retry_after, .. } => {
+                    attempts.mark_throttled(provider, *status, *retry_after)
+                }
+                _ => attempts.mark_down(provider),
+            }
         }
         let settled = matches!(&outcome, Ok(found) if is_strong(found));
         results.push((provider, outcome));
@@ -616,6 +783,7 @@ fn choose(results: Vec<(Provider, AppResult<Vec<Candidate>>)>) -> AppResult<Vec<
     let mut notes = Vec::new();
     let mut answered = false;
     let mut weak: Option<Vec<Candidate>> = None;
+    let mut throttled: Option<AppError> = None;
     for (provider, outcome) in results {
         match outcome {
             Ok(found) if is_strong(&found) => return Ok(found),
@@ -629,6 +797,11 @@ fn choose(results: Vec<(Provider, AppResult<Vec<Candidate>>)>) -> AppResult<Vec<
                 answered = true;
                 notes.push(format!("{}：没有找到", provider.label()));
             }
+            Err(err) if matches!(err, AppError::Throttled { .. }) => {
+                // Still an error: a book whose only answer was 「wait」 must be
+                // retried, not filed under 「not found」 alongside a real miss.
+                throttled.get_or_insert(err);
+            }
             Err(err) => notes.push(format!("{}：{err}", provider.label())),
         }
     }
@@ -637,6 +810,9 @@ fn choose(results: Vec<(Provider, AppResult<Vec<Candidate>>)>) -> AppResult<Vec<
     }
     if answered {
         return Ok(Vec::new());
+    }
+    if let Some(err) = throttled {
+        return Err(err);
     }
     Err(AppError::Message(notes.join("；")))
 }
@@ -653,6 +829,7 @@ async fn search_neodb(
     lookup: &Lookup<'_>,
 ) -> AppResult<Vec<Candidate>> {
     let url = build_url(base, lookup)?;
+    gate().wait(Provider::Neodb).await;
     let response = client
         .get(url)
         .timeout(Duration::from_secs(12))
@@ -663,11 +840,18 @@ async fn search_neodb(
         .await
         .map_err(|err| AppError::Message(format!("连不上 NeoDB：{err}")))?;
 
-    if !response.status().is_success() {
-        return Err(AppError::Message(format!(
-            "NeoDB 返回了 {}，过一会儿再试",
-            response.status().as_u16()
-        )));
+    let status = response.status();
+    if !status.is_success() {
+        let wait = retry_after_of(response.headers());
+        gate().penalize(Provider::Neodb, wait);
+        if is_throttle(status) {
+            return Err(AppError::Throttled {
+                provider: Provider::Neodb.label().to_string(),
+                status: status.as_u16(),
+                retry_after: wait,
+            });
+        }
+        return Err(AppError::Message(format!("NeoDB 返回了 {}，过一会儿再试", status.as_u16())));
     }
     let body: Value = response
         .json()
@@ -716,6 +900,7 @@ async fn suggest(client: &Client, query: &str) -> AppResult<Value> {
     let mut url = reqwest::Url::parse(DOUBAN_SUGGEST)
         .map_err(|err| AppError::Message(format!("书源地址不合法：{err}")))?;
     url.query_pairs_mut().append_pair("q", query);
+    gate().wait(Provider::Douban).await;
     let response = client
         .get(url)
         .timeout(Duration::from_secs(12))
@@ -724,11 +909,18 @@ async fn suggest(client: &Client, query: &str) -> AppResult<Value> {
         .send()
         .await
         .map_err(|err| AppError::Message(format!("连不上豆瓣：{err}")))?;
-    if !response.status().is_success() {
-        return Err(AppError::Message(format!(
-            "豆瓣返回了 {}，过一会儿再试",
-            response.status().as_u16()
-        )));
+    let status = response.status();
+    if !status.is_success() {
+        let wait = retry_after_of(response.headers());
+        gate().penalize(Provider::Douban, wait);
+        if is_throttle(status) {
+            return Err(AppError::Throttled {
+                provider: Provider::Douban.label().to_string(),
+                status: status.as_u16(),
+                retry_after: wait,
+            });
+        }
+        return Err(AppError::Message(format!("豆瓣返回了 {}，过一会儿再试", status.as_u16())));
     }
     response.json().await.map_err(|err| AppError::Message(format!("豆瓣的回复看不懂：{err}")))
 }
@@ -2098,10 +2290,65 @@ mod tests {
     #[test]
     fn a_provider_that_failed_is_not_asked_again_in_the_same_batch() {
         let attempts = Attempts::new();
-        assert!(!attempts.is_down(Provider::Neodb));
+        assert_eq!(attempts.skip(Provider::Neodb), None);
         attempts.mark_down(Provider::Neodb);
-        assert!(attempts.is_down(Provider::Neodb));
-        assert!(!attempts.is_down(Provider::Douban), "一个来源挂了不影响另一个");
+        assert_eq!(attempts.skip(Provider::Neodb), Some(Skip::Down));
+        assert_eq!(attempts.skip(Provider::Douban), None, "一个来源挂了不影响另一个");
+    }
+
+    #[test]
+    fn a_throttled_provider_is_remembered_as_waiting_not_broken() {
+        let attempts = Attempts::new();
+        attempts.mark_throttled(Provider::Douban, 403, Duration::from_secs(30));
+        assert_eq!(
+            attempts.skip(Provider::Douban),
+            Some(Skip::Throttled { status: 403, retry_after: Duration::from_secs(30) })
+        );
+        // The next book in the batch gets the same answer, with the status and
+        // the wait the reader needs in order to know when to try again.
+        let err = AppError::Throttled {
+            provider: Provider::Douban.label().to_string(),
+            status: 403,
+            retry_after: Duration::from_secs(30),
+        };
+        assert!(err.to_string().contains("403"));
+        let target = Target {
+            id: "b1".into(),
+            title: "书".into(),
+            subtitle: None,
+            authors: Vec::new(),
+            publisher: None,
+            language: None,
+            isbn: None,
+            published_year: None,
+            description: None,
+            rating: None,
+            douban_url: None,
+            has_cover: false,
+        };
+        let proposal = propose_throttled(&target, "豆瓣", 403, Duration::from_secs(30));
+        assert_eq!(proposal.skipped.as_deref(), Some("查询失败：豆瓣 返回 403，建议 30 秒后重试"));
+    }
+
+    #[test]
+    fn retry_after_accepts_seconds_and_falls_back_to_a_long_wait() {
+        let mut headers = HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "7".parse().unwrap());
+        assert_eq!(retry_after_of(&headers), Duration::from_secs(7));
+
+        headers.insert(reqwest::header::RETRY_AFTER, "nonsense".parse().unwrap());
+        assert_eq!(retry_after_of(&headers), DEFAULT_RETRY_AFTER);
+    }
+
+    #[test]
+    fn a_cooled_down_provider_does_not_hand_out_a_slot_immediately() {
+        let gate = CatalogueGate::default();
+        gate.penalize(Provider::Douban, Duration::from_millis(200));
+        tauri::async_runtime::block_on(async {
+            let waited =
+                tokio::time::timeout(Duration::from_millis(50), gate.wait(Provider::Douban)).await;
+            assert!(waited.is_err(), "限流冷却期内不该放行请求");
+        });
     }
 
     #[test]

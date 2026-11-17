@@ -3317,6 +3317,12 @@ export type Proposal_Deserialize = {
    *  silent skip reads as a bug.
    */
   skipped?: string | null;
+  /**
+   *  Set when a catalogue asked us to wait before asking again. The caller
+   *  defers this book to a later batch and uses the value as the pause; it is
+   *  not a failed lookup and must never be counted as one.
+   */
+  throttledForMs?: number | null;
   matchScore: number | null;
   /**
    *  The catalogue's rating, how many people gave it, and the Douban page.
@@ -3371,6 +3377,12 @@ export type Proposal_Serialize = {
    *  silent skip reads as a bug.
    */
   skipped: string | null;
+  /**
+   *  Set when a catalogue asked us to wait before asking again. The caller
+   *  defers this book to a later batch and uses the value as the pause; it is
+   *  not a failed lookup and must never be counted as one.
+   */
+  throttledForMs: number | null;
   matchScore: number | null;
   /**
    *  The catalogue's rating, how many people gave it, and the Douban page.

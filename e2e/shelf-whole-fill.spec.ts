@@ -29,9 +29,9 @@ test("a whole-shelf run reports progress and finishes", async ({ page }) => {
   await expect(sheet.getByRole("button", { name: "停止" })).toBeVisible();
 
   // Canned proposals are instant, so this is the finished state.
-  await expect(sheet).toContainText("补完了", { timeout: 10_000 });
+  await expect(sheet).toContainText("补全完成", { timeout: 10_000 });
   await expect(sheet).toContainText("60 / 60");
   // Two thirds of the demo rows have something to write.
-  await expect(sheet).toContainText(/已补 \d+ 本 · 跳过 \d+ 本/);
+  await expect(sheet).toContainText(/已补全 \d+ 本 · 跳过 \d+ 本/);
   await expect(sheet.getByRole("button", { name: "关闭" })).toBeVisible();
 });

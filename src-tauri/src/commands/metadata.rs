@@ -142,6 +142,9 @@ pub async fn metadata_propose(
                         found.into_iter().next(),
                         replace_covers,
                     ),
+                    Err(AppError::Throttled { provider, status, retry_after }) => {
+                        metadata::propose_throttled(&target, &provider, status, retry_after)
+                    }
                     Err(err) => metadata::propose_failed(&target, &err.to_string()),
                 }
             }

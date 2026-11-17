@@ -675,6 +675,7 @@ export function demoProposals(ids: string[]): Proposal[] {
         bookTitle: title,
         fills: [],
         skipped: "没有找到相近的书",
+        throttledForMs: null,
         matchScore: 0,
         rating: null,
         ratingCount: null,
@@ -701,6 +702,7 @@ export function demoProposals(ids: string[]): Proposal[] {
       bookTitle: title,
       fills,
       skipped: null,
+      throttledForMs: null,
       matchScore: 0.92,
       // The demo shows the rating line and the Douban link, so the fixture
       // carries them the way a real answer does — with 人类简史's actual Douban

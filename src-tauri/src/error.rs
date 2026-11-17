@@ -4,6 +4,7 @@
 //! rejection payload, so the message must be safe and useful to show a user.
 
 use serde::{Serialize, Serializer};
+use std::time::Duration;
 
 /// Every failure that can cross the IPC boundary.
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +46,12 @@ pub enum AppError {
     /// message is what tells them which field to retype.
     #[error("凭据不可用：{0}")]
     Secrets(String),
+
+    /// A catalogue asked us to wait rather than refusing the book. Distinct
+    /// from every other error because the right answer is to defer this book
+    /// and try it in a later batch, not to tell the reader it does not exist.
+    #[error("{provider} 返回 {status}，请稍后再试")]
+    Throttled { provider: String, status: u16, retry_after: Duration },
 
     #[error("{0}")]
     Message(String),
