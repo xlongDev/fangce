@@ -4,7 +4,7 @@ import { motion, type HTMLMotionProps } from "motion/react";
 import { cn } from "@/lib/cn";
 import { useMotion } from "@/lib/motion";
 
-type Variant = "primary" | "ghost" | "subtle";
+type Variant = "primary" | "accent-glass" | "ghost" | "subtle";
 type Size = "sm" | "md" | "lg";
 
 // `motion` overrides a few DOM events (`onAnimationStart`, `onDrag*`), so the
@@ -19,6 +19,9 @@ interface GlassButtonProps extends Omit<HTMLMotionProps<"button">, "ref" | "chil
 
 const VARIANT: Record<Variant, string> = {
   primary: "bg-accent text-on-accent border-transparent shadow-glass",
+  // The shelf's own primary: the liquid-glass material with an accent tint.
+  // Kept separate from `primary` so the flat CTA in dialogs is untouched.
+  "accent-glass": "glass-accent text-accent",
   // `glass` is the default now. Every surface in this app is a lit pane, so a
   // flat `bg-surface-1 + border-hairline` fill reads as a hole cut in one —
   // the sidebar footer, the shelf toolbar and the header buttons each had to

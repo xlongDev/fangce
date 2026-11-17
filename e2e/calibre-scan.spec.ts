@@ -4,7 +4,8 @@ const SHELF = "/?demo=1&books=24";
 
 /**
  * The Calibre scan is desktop-only (it opens a real directory), so the web
- * build can only be checked for an honest refusal.
+ * build disables it and says why instead of offering a click that can only
+ * refuse.
  *
  * The entry lives in `ShelfHeader` with the other "where a book comes from"
  * buttons, so the toolbar keeps the seven controls whose reflow is pinned by
@@ -16,18 +17,18 @@ const SHELF = "/?demo=1&books=24";
  * third row even with the extra button removed. Vertical centres are the row
  * identity.
  */
-test("the web build says the scan needs the desktop app", async ({ page }) => {
+test("the web build disables the scan and says why", async ({ page }) => {
   await page.setViewportSize({ width: 1080, height: 800 });
   await page.goto(SHELF);
   await expect(page.locator("[data-book-cover]").first()).toBeVisible();
 
-  const button = page.getByRole("button", { name: "扫描 Calibre 书库" });
+  const button = page.getByRole("button", { name: /Calibre/ });
   await expect(button).toBeVisible();
-  await button.click();
+  await expect(button).toBeDisabled();
+  await expect(button).toContainText("仅桌面");
 
-  await expect(page.getByText(/只在桌面版可用/)).toBeVisible();
-  // Not an empty picker that pretends there is nothing to scan, and no import
-  // action that could never work without a filesystem.
+  // No half-working control: nothing opens, so there is no empty picker and
+  // no import action that could never work without a filesystem.
   await expect(page.getByRole("button", { name: /选择书库目录/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /导入选中的/ })).toHaveCount(0);
 });

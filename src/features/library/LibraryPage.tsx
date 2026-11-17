@@ -64,6 +64,7 @@ import {
 } from "@/hooks/useLibrary";
 import { useMigrateEdition } from "@/hooks/useMigrateEdition";
 import { showToast } from "@/stores/toasts";
+import { useImportRequest } from "@/stores/import-request";
 import { useMotion } from "@/lib/motion";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { useBookHandoff } from "@/stores/book-handoff";
@@ -498,6 +499,34 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
     }
     void pickPaths().then(importPaths);
   };
+
+  // The palette's 导入书籍 command and ⌘O cannot reach into this page's
+  // mutations, so they leave a request in the store. Taking it here keeps one
+  // implementation of the picker — the same one the header button uses — and
+  // the seq dependency re-runs for a second request while this page stays put.
+  const importSeq = useImportRequest((state) => state.seq);
+  // The picker closure changes every render (its mutations do too). Keep the
+  // freshest one in a ref so the request effect can depend on the seq alone —
+  // a second request after a re-render must still reach the current mutations.
+  const startImportRef = useRef(startImport);
+  useEffect(() => {
+    startImportRef.current = startImport;
+  });
+  // Below the store's first seq so a request left while no shelf was mounted
+  // is taken on this page's first effect pass.
+  const takenSeq = useRef(-1);
+  useEffect(() => {
+    if (takenSeq.current === importSeq) return;
+    takenSeq.current = importSeq;
+    if (useImportRequest.getState().take()) startImportRef.current();
+  }, [importSeq]);
+  // Separate from the request effect: registering on every seq change would
+  // briefly unregister the shelf and make a concurrent command navigate away.
+  useEffect(() => {
+    const store = useImportRequest.getState();
+    store.shelfMounted();
+    return () => useImportRequest.getState().shelfUnmounted();
+  }, []);
 
   /** The shelf's own column: toolbar, grid. It is one node because the tag
    *  shelf puts it beside the index, and every other view keeps it alone. */

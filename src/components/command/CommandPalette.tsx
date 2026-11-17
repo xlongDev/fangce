@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { motion } from "motion/react";
 import { ArrowUDownLeft, MagnifyingGlass } from "@phosphor-icons/react";
 
 import { effectiveKeys, formatShortcut, scoreCommand, type Command } from "@/lib/commands";
@@ -12,24 +11,15 @@ import { useCommandPalette } from "@/stores/command-palette";
 import { useSettings } from "@/stores/settings";
 import { GlassDialog } from "@/components/glass/overlay";
 import { cn } from "@/lib/cn";
-import { EASE_OUT, useMotion } from "@/lib/motion";
+import { useMotion } from "@/lib/motion";
 
 interface Scored {
   command: Command;
   score: number;
 }
 
-/**
- * How the highlight follows the pointer.
- *
- * Not the spring: it trails the hand by ~250 ms, which reads as lag. Not a hard
- * cut either — a row-to-row jump with no transition at all reads as a flicker,
- * because the old row's tint vanishes in the same frame the new one appears.
- * A 120 ms ease-out is the middle: 80% of the travel is done in the first 40 ms
- * (below the threshold where a pointer feels disconnected), and the landing is
- * soft instead of a snap.
- */
-const POINTER_CURSOR = { duration: 0.12, ease: EASE_OUT } as const;
+/** The row highlight's glide, shared with the e2e that pins it. */
+export const CURSOR_TRANSITION = "transform 340ms var(--ease-spring)";
 
 /**
  * ⌘K and ⌘F open the same shell with different bodies.
@@ -109,18 +99,9 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   const overrides = useSettings((s) => s.keyOverrides);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
-  /**
-   * Whether the last move of the cursor came from the pointer.
-   *
-   * The row highlight is one element gliding between rows, which is right for
-   * ↑↓ — a thing that moves is easier to follow than a class blinking on. Under
-   * a mouse it is wrong: the spring takes ~250ms to arrive, so the highlight
-   * trails the pointer down the list and reads as lag. Pointer-driven state has
-   * to be where the pointer is, on the same frame.
-   */
-  const [pointerMoved, setPointerMoved] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const cursorRef = useRef<HTMLSpanElement>(null);
   const m = useMotion();
 
   // Focus after Radix has mounted the dialog content.
@@ -130,11 +111,52 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   }, []);
 
   // Arrowing past the fold has to bring the row with it — the cursor is the
-  // only thing telling the reader where they are. Queried by index rather than
-  // by a boolean flag so the effect genuinely reads `active`.
+  // only thing telling the reader where they are. The highlight lives inside
+  // the scroller, so once it is placed this only moves them together.
   useEffect(() => {
     listRef.current?.querySelector(`[data-row="${active}"]`)?.scrollIntoView({ block: "nearest" });
   }, [active]);
+
+  /**
+   * Point the single highlight at the active row.
+   *
+   * No dependency list on purpose — like the sidebar indicator, placement is
+   * a pure function of the DOM and every input that matters (active index,
+   * result set) has already re-rendered by the time this runs. Geometry is
+   * measured, not assumed: rows differ in height (with and without a
+   * description), and adding scrollTop keeps the highlight aligned after the
+   * scroll-into-view below moves the list.
+   */
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const cursor = cursorRef.current;
+    if (!list || !cursor) return;
+    const row = list.querySelector<HTMLElement>(`[data-row="${active}"]`);
+    if (!row) {
+      cursor.style.opacity = "0";
+      return;
+    }
+    cursor.style.opacity = "1";
+    const box = row.getBoundingClientRect();
+    const listBox = list.getBoundingClientRect();
+    cursor.style.width = `${box.width}px`;
+    cursor.style.height = `${box.height}px`;
+    cursor.style.transform = `translate(${box.left - listBox.left + list.scrollLeft}px, ${box.top - listBox.top + list.scrollTop}px)`;
+  });
+
+  /**
+   * The highlight travels as one object from row to row.
+   *
+   * `--ease-spring` is the curve the tag rail already uses for the same job:
+   * it runs past the target and settles, so the eye follows a pane arriving
+   * rather than a tint repainting. The first attempt used `--ease-out` at
+   * 120ms — measured over a 126px hop it covered 62% in 30ms and 94% in 60ms,
+   * which read as a jump. 340ms on the spring keeps the whole hop visible.
+   * One element never unmounting is what keeps that glide on the compositor;
+   * a per-row `layoutId` re-measured and re-rasterised the glass on every
+   * enter, which is what made hovering feel sticky.
+   */
+  const cursorMotion = m.reduce ? { transition: "none" } : { transition: CURSOR_TRANSITION };
 
   const bookCommands = useBookCommands(query);
 
@@ -172,17 +194,14 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   function updateQuery(next: string) {
     setQuery(next);
     setActive(0);
-    setPointerMoved(false);
   }
 
   function handleKey(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setPointerMoved(false);
       setActive((i) => Math.min(results.length - 1, i + 1));
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      setPointerMoved(false);
       setActive((i) => Math.max(0, i - 1));
     } else if (event.key === "Enter") {
       event.preventDefault();
@@ -211,7 +230,20 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
           className="text-text-1 placeholder:text-text-3 h-full w-full min-w-0 bg-transparent text-sm outline-none"
         />
       </div>
-      <div ref={listRef} className="-mx-1 max-h-[60vh] overflow-y-auto px-1">
+      <div ref={listRef} className="relative -mx-1 max-h-[60vh] overflow-y-auto px-1">
+        {/* One highlight for the whole list, absolutely placed under the active
+            row. It never unmounts, so a hover re-targets a CSS transform instead
+            of tearing down a layout-animated element and re-rasterising the
+            glass on every row — the sticky-hover this replaced. `top-0 left-0`
+            plus the measured translate lands it on the row; will-change keeps
+            the tween on the compositor. */}
+        <span
+          ref={cursorRef}
+          aria-hidden
+          data-palette-cursor
+          style={cursorMotion}
+          className="bg-accent-soft pointer-events-none absolute top-0 left-0 rounded-md opacity-0 will-change-transform"
+        />
         {results.length === 0 && (
           <div className="text-text-2 px-2 py-6 text-center text-sm">没有匹配的命令或书籍</div>
         )}
@@ -230,27 +262,10 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
                   effectiveKeys(entry.command.id, entry.command.shortcut, overrides) ?? [];
                 return (
                   <li key={entry.command.id} data-row={index} className="relative">
-                    {/* One element gliding between rows, rather than a class
-                        toggling on and off: ↑↓ is the primary way to move
-                        here, and the eye can follow a thing that moves.
-                        Pointer moves get a short tween instead — see
-                        `POINTER_CURSOR`. */}
-                    {on && (
-                      <motion.span
-                        layoutId="palette-cursor"
-                        className="bg-accent-soft absolute inset-0 rounded-md"
-                        transition={
-                          pointerMoved ? (m.reduce ? { duration: 0 } : POINTER_CURSOR) : m.layout
-                        }
-                      />
-                    )}
                     <button
                       type="button"
                       data-active={on || undefined}
-                      onMouseEnter={() => {
-                        setPointerMoved(true);
-                        setActive(index);
-                      }}
+                      onMouseEnter={() => setActive(index)}
                       onClick={() => {
                         onClose();
                         void entry.command.run();

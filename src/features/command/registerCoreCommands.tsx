@@ -13,13 +13,16 @@ import {
   Monitor,
   SidebarSimple,
   Command as CommandIcon,
+  FilePlus,
+  ImageSquare,
 } from "@phosphor-icons/react";
 
-import type { Command } from "@/lib/commands";
+import type { Command, Shortcut } from "@/lib/commands";
 import { useCommandStore } from "@/stores/commands";
+import { useImportRequest } from "@/stores/import-request";
 import { useSettings, type ThemeMode } from "@/stores/settings";
 import { createLogger, describeError } from "@/lib/log";
-import { desktopQuery, ipc } from "@/lib/ipc";
+import { desktopQuery, ipc, isDesktopRuntime } from "@/lib/ipc";
 import { showToast } from "@/stores/toasts";
 import type { BookSummary } from "@/types/ipc";
 
@@ -34,12 +37,17 @@ const PALETTE = { mod: true, key: "k" } as const;
 const SEARCH = { mod: true, key: "f" } as const;
 const SIDEBAR = { mod: true, key: "b" } as const;
 const PREFERENCES = { mod: true, key: "," } as const;
+/** Shared with the shelf button's hint so a rebind shows the same key there. */
+export const IMPORT_BOOKS_SHORTCUT: Shortcut = { mod: true, key: "o" };
+const IMPORT = IMPORT_BOOKS_SHORTCUT;
 
 export function registerCoreCommands({ openPalette, openSearch }: Deps): () => void {
   const commands: Command[] = [
     paletteCommand(openPalette),
     globalSearchCommand(openSearch),
     continueReadingCommand(),
+    importBooksCommand(),
+    coversCommand(),
     searchCommand(),
     sidebarCommand(),
     ...themeCommands(),
@@ -117,6 +125,58 @@ function continueReadingCommand(): Command {
         showToast("error", describeError(error).message);
       }
     },
+  };
+}
+
+/**
+ * Opens the book picker. The picker and every import mutation live on the
+ * shelf, so this cannot do the work itself: it asks for an import and lands on
+ * the library, where `LibraryPage` takes the request and runs the picker.
+ *
+ * `navigateTo("/")` is safe from anywhere — including the shelf it is already
+ * on (React Router treats a same-route push as a no-op) — which keeps the
+ * command useful from the palette, a hotkey or a deep link with one path.
+ */
+function importBooksCommand(): Command {
+  return {
+    id: "book.import",
+    title: "导入书籍",
+    description: "从本机选择书文件加入书库",
+    group: "书籍",
+    icon: <FilePlus size={16} />,
+    keywords: ["import", "导入", "添加", "添加书籍", "文件"],
+    shortcut: [IMPORT],
+    run: () => {
+      useImportRequest.getState().request();
+      // Only leave the current page when there is no shelf to receive the
+      // request. Otherwise navigating would drop the reader's filter and could
+      // open the picker from an instance the page swap is about to unmount.
+      if (useImportRequest.getState().shelves === 0) navigateTo("/");
+    },
+  };
+}
+
+/**
+ * The cover manager is a maintenance page reached today only through a small
+ * slice on 统计 — easy to forget once you know the app. The palette is where a
+ * remembered-but-unfindable destination belongs, so it gets a searchable row.
+ *
+ * Deliberately *not* a `navCommand` in the 导航 group: that group is only the
+ * high-frequency browsing views (and even 笔记/统计/回收站 are not in it), and
+ * this is a lower-frequency tool. No shortcut — the ⌘ row is full, and a
+ * maintenance page does not deserve one. `isEnabled` keeps the dead entry out
+ * of the web build, where the page itself only renders a "desktop only" note.
+ */
+function coversCommand(): Command {
+  return {
+    id: "tool.covers",
+    title: "封面管理",
+    description: "补充封面、合并重复图、清理无主文件",
+    group: "工具",
+    icon: <ImageSquare size={16} />,
+    keywords: ["cover", "封面", "补充封面", "去重", "清理", "维护"],
+    isEnabled: () => isDesktopRuntime,
+    run: () => navigateTo("/covers"),
   };
 }
 

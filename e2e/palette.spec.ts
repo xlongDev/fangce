@@ -101,6 +101,56 @@ test("⌘F opens the library-wide search", async ({ page }) => {
   await expect(dialog).toHaveCount(0);
 });
 
+/**
+ * The row highlight is ONE element that glides from row to row, not one that
+ * remounts per row. A `layoutId` on each active row re-measured and re-rasterised
+ * the glass on every hover, which read as sticky; a single measured element
+ * hands the tween to the compositor. The glide must also be *visible*: the
+ * first attempt used a 120ms expo-out that covered 94% of a 126px hop in 60ms
+ * and looked like a jump, so this pins a mid-flight frame between two rows.
+ */
+test("the palette cursor glides between rows as one element", async ({ page }) => {
+  await page.goto("/?demo=1");
+  await expect(page.locator("[data-shelf-scroller]")).toBeVisible();
+  await page.keyboard.press("Control+k");
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  const cursor = page.locator("[data-palette-cursor]");
+  const rows = dialog.locator("li[data-row]");
+  await expect(cursor).toHaveCount(1);
+
+  // Settle on the first row, then jump to a row three down and sample the
+  // journey. A visible glide has a frame strictly between the two positions;
+  // the old expo-out was already at the target by the first sample.
+  await rows.nth(0).hover();
+  const fromY = (await cursor.boundingBox())!.y;
+  const target = (await rows.nth(3).boundingBox())!;
+  await rows.nth(3).hover();
+  await page.waitForTimeout(90);
+  const midY = (await cursor.boundingBox())!.y;
+  expect(midY).toBeGreaterThan(fromY + 8);
+  expect(midY).toBeLessThan(target.y - 8);
+
+  // It lands on the row, keeps its own height (rows differ), and stays one
+  // node under both pointer and keyboard moves. The spring curve is shared
+  // with the tag rail's highlight.
+  await expect
+    .poll(async () => Math.abs((await cursor.boundingBox())!.y - target.y))
+    .toBeLessThan(3);
+  expect(Math.abs((await cursor.boundingBox())!.height - target.height)).toBeLessThan(3);
+  await expect(cursor).toHaveCount(1);
+  expect(await cursor.evaluate((el) => getComputedStyle(el).transitionDuration)).toBe("0.34s");
+  expect(await cursor.evaluate((el) => getComputedStyle(el).transitionTimingFunction)).toContain(
+    "cubic-bezier(0.34, 1.26, 0.64, 1)",
+  );
+
+  await dialog.getByRole("textbox").focus();
+  await page.keyboard.press("ArrowUp");
+  await expect(cursor).toHaveCount(1);
+  expect(await cursor.evaluate((el) => getComputedStyle(el).transitionDuration)).toBe("0.34s");
+});
+
 test("a copy press still reaches the book", async ({ page }) => {
   await openKindleBook(page);
 

@@ -1,15 +1,20 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { FilePlus, FolderOpen, Globe, Highlighter, Trash } from "@phosphor-icons/react";
+import { FilePlus, Folder, FolderOpen, Globe, Highlighter, Trash } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
-import { DURATION, EASE_OUT, useMotion } from "@/lib/motion";
+import { IconSwap } from "@/components/motion/IconSwap";
+import { IMPORT_BOOKS_SHORTCUT } from "@/features/command/registerCoreCommands";
+import { effectiveKeys, formatShortcut } from "@/lib/commands";
+import { isDesktopRuntime } from "@/lib/ipc";
+import { useSettings } from "@/stores/settings";
+import { DURATION, EASE_LAND, EASE_OUT, useMotion } from "@/lib/motion";
 import { greeting, type LibraryFilter } from "@/features/library/shelfQuery";
 
 // Hover feedback for the shelf toolbar icons. Each nudge follows what its
 // action reads as — the marker tips to write, the globe turns, the file lifts
-// to be added — on top of a shared slight scale. `motion-safe` opts the whole
-// thing out for reduced-motion users; the glass button itself never moves.
+// to be added, the folder opens — on top of a shared slight scale. `motion-safe`
+// opts the whole thing out for reduced-motion users; the button itself never moves.
 // The shared `--ease-spring` curve overshoots a touch and settles, so each
 // nudge lands as an object instead of easing mechanically into place.
 const TOOLBAR_ICON =
@@ -63,8 +68,8 @@ export function ShelfHeader({
   onClippings: () => void;
   onSource: () => void;
   onImport: () => void;
-  /** Scan an external Calibre library. Icon-only: the three worded buttons
-   *  already wrap on a narrow pane, and this one starts a read-only report. */
+  /** Scan an external Calibre library. Labelled, and disabled in the web build
+   *  where there is no directory to pick; the scan itself is read-only. */
   onCalibre: () => void;
   /** Whether the bin is empty — the only state in which 清空回收站 has nothing
    *  to do. Defaults to `true` so a caller that forgets cannot offer a button
@@ -74,6 +79,9 @@ export function ShelfHeader({
 }) {
   const m = useMotion();
   const now = useNow();
+  const [calibreHover, setCalibreHover] = useState(false);
+  const keyOverrides = useSettings((state) => state.keyOverrides);
+  const [importKey] = effectiveKeys("book.import", [IMPORT_BOOKS_SHORTCUT], keyOverrides) ?? [];
   return (
     <header className="px-8 pt-8 pb-6">
       <p className="text-text-2 text-sm">{greeting(now)}</p>
@@ -109,31 +117,85 @@ export function ShelfHeader({
             </GlassButton>
           ) : (
             <>
-              <button
-                type="button"
-                aria-label="扫描 Calibre 书库"
-                title="扫描 Calibre 书库（只读，不导入）"
+              {/* The three slower paths read first, then a hairline, then the
+                  one warm liquid-glass pane at the far right. Ending on the
+                  primary keeps it away from the page title beside this row. */}
+              <GlassButton
+                size="md"
+                variant="subtle"
+                className="group"
+                disabled={!isDesktopRuntime}
+                title={
+                  isDesktopRuntime ? "扫描 Calibre 书库（只读原库，可导入方册）" : "仅桌面版可用"
+                }
                 onClick={onCalibre}
-                className="glass text-text-2 hover:text-text-1 focus-visible:focus-ring press inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md"
+                onHoverStart={() => setCalibreHover(true)}
+                onHoverEnd={() => setCalibreHover(false)}
               >
-                <FolderOpen size={15} />
-              </button>
-              <GlassButton size="md" className="group" onClick={onClippings}>
+                {m.reduce ? (
+                  <FolderOpen size={15} />
+                ) : (
+                  <IconSwap
+                    state={calibreHover ? "open" : "closed"}
+                    className="h-4 w-4"
+                    // The folder opening is the one glyph here with a real
+                    // choreography, so it borrows the same landing bezier the
+                    // cover and the import arrow use — a 0.22s settle instead
+                    // of the IconSwap default's 0.15s expo flick.
+                    transition={{ duration: DURATION.base, ease: EASE_LAND }}
+                  >
+                    {calibreHover ? (
+                      <FolderOpen size={15} className={TOOLBAR_ICON} />
+                    ) : (
+                      <Folder size={15} className={TOOLBAR_ICON} />
+                    )}
+                  </IconSwap>
+                )}{" "}
+                Calibre
+                {!isDesktopRuntime && <span className="text-text-3 text-[11px]">仅桌面</span>}
+              </GlassButton>
+              <GlassButton size="md" variant="subtle" className="group" onClick={onClippings}>
                 <Highlighter
                   size={15}
                   className={`${TOOLBAR_ICON} motion-safe:group-hover:-rotate-12`}
                 />{" "}
                 导入摘录
               </GlassButton>
-              <GlassButton size="md" className="group" onClick={onSource}>
+              <GlassButton size="md" variant="subtle" className="group" onClick={onSource}>
                 <Globe size={15} className={`${TOOLBAR_ICON} motion-safe:group-hover:rotate-12`} />{" "}
                 在线找书
               </GlassButton>
+              <span
+                data-shelf-header-divider
+                aria-hidden="true"
+                className="bg-hairline mx-1 h-5 w-px shrink-0"
+              />
               <GlassButton
                 size="md"
-                className="group text-accent font-semibold"
+                variant="accent-glass"
+                className="group"
                 disabled={importing}
                 onClick={onImport}
+                trailing={
+                  isDesktopRuntime ? (
+                    // A real keycap, not faint text glued to the label: the
+                    // border gives ⌘O a shape so the letter O cannot be read
+                    // as a zero, and mono keeps the two glyphs distinct. The
+                    // fill is deliberately faint — the border, not a tinted
+                    // block, is what makes it read as a key. One keycap is one
+                    // chord, so the space is dropped here; the settings panel
+                    // keeps it, where the text is longer and needs the room.
+                    importKey && (
+                      <kbd className="border-accent/30 bg-accent/4 text-accent -ml-1 rounded border px-1.5 py-1 font-mono text-[11px] leading-none">
+                        {formatShortcut(importKey).replace(/\s/g, "")}
+                      </kbd>
+                    )
+                  ) : (
+                    // The web build has no directory dialog, so the useful
+                    // hint there is the one it can actually honour.
+                    <span className="text-[11px] opacity-75">可拖入文件</span>
+                  )
+                }
               >
                 <FilePlus
                   size={15}

@@ -55,6 +55,11 @@ export const RISE = 10;
  *  curve as a value rather than a class. */
 export const EASE_OUT: [number, number, number, number] = [0.16, 1, 0.3, 1];
 
+/** Mirrors `--ease-land` in `globals.css`: travel that has to arrive rather
+ *  than drift in. Shared so the JS-driven icon swaps can use the same landing
+ *  curve the CSS-driven nudges do. */
+export const EASE_LAND: [number, number, number, number] = [0.33, 1, 0.68, 1];
+
 export interface MotionVocabulary {
   tap: Transition;
   enter: Transition;

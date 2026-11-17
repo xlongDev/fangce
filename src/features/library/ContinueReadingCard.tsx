@@ -58,14 +58,27 @@ export function ContinueReadingCard({
       }}
       whileTap={m.reduce ? undefined : { scale: 0.995 }}
       transition={m.tap}
-      className="glass focus-visible:focus-ring group mb-6 flex w-full items-center gap-4 rounded-2xl p-4 text-left"
+      className="glass focus-visible:focus-ring group relative mb-6 flex w-full items-center gap-4 rounded-2xl p-4 text-left transition-[box-shadow] duration-[260ms] ease-[var(--ease-land)] hover:shadow-[var(--shadow-card-lift)] motion-reduce:transition-none"
     >
+      {/* The shelf's one-pass gloss, clipped to the card's own radius by a
+          wrapper so the card can keep `overflow: visible` for the cover's
+          lift shadow. It sits under the content (raised with `relative z-10`
+          below), so no band of light ever washes the title. */}
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 overflow-hidden rounded-2xl"
+      >
+        <span
+          data-continue-sheen
+          className="absolute inset-0 -translate-x-full bg-[linear-gradient(90deg,transparent,var(--card-sheen),transparent)] transition-[translate] duration-1000 ease-[cubic-bezier(0.33,1,0.68,1)] group-hover:translate-x-full group-hover:delay-200 motion-reduce:hidden"
+        />
+      </span>
       {/* Cornered to the tile's ratio (18px on a 138px cover), like the reader
           header's thumbnail: this cover is the other origin of a flight, so a
           rounder corner here is a cover that changes shape on the way in. */}
       <span
         ref={coverRef}
-        className="relative block h-16 w-12 shrink-0 overflow-hidden rounded-[6px]"
+        className="relative z-10 block h-16 w-12 shrink-0 overflow-hidden rounded-[6px] transition-[translate,box-shadow] duration-350 ease-[cubic-bezier(0.33,1,0.68,1)] group-hover:-translate-y-1 group-hover:shadow-[var(--shadow-cover-lift)] motion-reduce:transition-none motion-reduce:group-hover:translate-y-0"
       >
         {book.coverUrl ? (
           <img
@@ -80,7 +93,7 @@ export function ContinueReadingCard({
           </span>
         )}
       </span>
-      <span className="min-w-0 flex-1">
+      <span className="relative z-10 min-w-0 flex-1">
         <span className="text-text-3 flex items-center gap-1.5 text-[11.5px]">
           <Sun size={12} weight="duotone" /> 继续阅读
         </span>
@@ -100,10 +113,13 @@ export function ContinueReadingCard({
           <span className="text-text-3 shrink-0 text-[11.5px] tabular-nums">已读 {percent}%</span>
         </span>
       </span>
-      <CaretRight
-        size={14}
-        className="text-text-3 group-hover:text-text-1 shrink-0 transition-colors"
-      />
+      <span
+        data-continue-caret
+        aria-hidden="true"
+        className="text-text-3 group-hover:text-text-1 relative z-10 shrink-0 transition-[translate,color] duration-300 ease-[var(--ease-land)] group-hover:translate-x-1 motion-reduce:group-hover:translate-x-0"
+      >
+        <CaretRight size={14} />
+      </span>
     </motion.button>
   );
 }
