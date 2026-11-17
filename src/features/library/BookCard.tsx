@@ -363,12 +363,10 @@ export function BookCard({
           >
             <PencilSimple size={13} />
           </GlassIconButton>
-          {/* One slot, two exports. The `grid` bar is a five-column grid, so a
-              sixth button would either wrap or shrink every chip; and the two
-              are the same gesture anyway — "let me have this book" — answered
-              by whichever build can answer it. The desktop's dialog then asks
-              *which* file (the book itself, or a pack that also carries the
-              progress and the highlights), so its label stays open. */}
+          {/* One slot, one export button. The desktop dialog holds all four
+              shapes — original file, pack, encrypted pack and catalogue CSV —
+              so the card does not need a menu in front of another panel. The
+              browser can only download the book's own file, hence no dialog. */}
           {isDesktopRuntime ? (
             <GlassIconButton
               label="导出"

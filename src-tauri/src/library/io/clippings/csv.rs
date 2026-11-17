@@ -67,13 +67,15 @@ fn non_empty(value: &str) -> Option<String> {
 /// that may then hold the delimiter, a line break, or a doubled `""` for one
 /// literal quote. Written out rather than pulled in — it is forty lines with two
 /// callers — one in `detect`, one here — and the alternative is a
-/// dependency for one import path.
+/// dependency for one import path. Three callers now (this reader, the
+/// clippings detector and the shelf catalogue's restore) share the same
+/// quoting rules, which is the reason it lives here rather than in either.
 ///
 /// This has to be exact rather than lenient. `export::csv_field` quotes a
 /// passage exactly when it holds one of those three characters, and a reader
 /// that split on commas anyway would silently turn one highlight into two
 /// fragments of itself.
-pub(super) fn csv_rows(source: &str) -> Vec<Vec<String>> {
+pub(crate) fn csv_rows(source: &str) -> Vec<Vec<String>> {
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut row: Vec<String> = Vec::new();
     let mut field = String::new();

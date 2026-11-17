@@ -16,7 +16,9 @@ import type { BookSummary } from "@/types/ipc";
  * `original` is the book as it was imported — the only one another reader can
  * open. The two packs also carry the reading progress, the favourite flag and
  * every highlight; the second is the same archive under a password, for when it
- * travels through somewhere it should not be readable.
+ * travels through somewhere it should not be readable. `catalog` is not a book
+ * at all but one row of the shelf CSV: the enriched metadata, labels, progress
+ * and favourite that live in the library, recoverable from Settings.
  */
 const KINDS = [
   {
@@ -26,6 +28,11 @@ const KINDS = [
   },
   { key: "pack", label: "书档", hint: "带上阅读进度、收藏和全部标注，只有本应用认得" },
   { key: "encrypted", label: "加密书档", hint: "同上，再加一个密码" },
+  {
+    key: "catalog",
+    label: "书目 CSV",
+    hint: "书单里的一行：补全后的书名、作者、标签、进度与收藏；不含正文，可在设置页导入恢复。",
+  },
 ] as const;
 
 export type ExportKind = (typeof KINDS)[number]["key"];
@@ -45,7 +52,7 @@ interface ExportDialogProps {
 }
 
 /**
- * Export one book: as its own file, or as a book pack.
+ * Export one book: as its own file, as a pack, or as one row of the shelf CSV.
  *
  * The shape is picked here rather than by the save dialog's filter — switching
  * a native panel's format dropdown is not something a reader should have to
@@ -57,15 +64,18 @@ export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: Exp
   const { choose: choosePath, error: panelError } = useSavePath();
 
   if (!book) return null;
+  const catalog = kind === "catalog";
   const encrypted = kind === "encrypted";
   const extension =
-    kind === "original"
-      ? book.format === "markdown"
-        ? "md"
-        : book.format
-      : encrypted
-        ? "ctzx"
-        : "ctz";
+    kind === "catalog"
+      ? "csv"
+      : kind === "original"
+        ? book.format === "markdown"
+          ? "md"
+          : book.format
+        : encrypted
+          ? "ctzx"
+          : "ctz";
   const chosen = KINDS.find((entry) => entry.key === kind)!;
   const ready = !encrypted || password.length > 0;
 
@@ -74,8 +84,8 @@ export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: Exp
 
   const choose = async () => {
     const path = await choosePath({
-      title: kind === "original" ? "导出书籍文件" : "导出书档",
-      defaultPath: filename(book.title, chosen.label) + `.${extension}`,
+      title: catalog ? "导出书目 CSV" : kind === "original" ? "导出书籍文件" : "导出书档",
+      defaultPath: `${filename(book.title, catalog ? "书目" : chosen.label)}.${extension}`,
       filters: [{ name: chosen.label, extensions: [extension] }],
     });
     if (path === null) return;

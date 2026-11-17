@@ -92,6 +92,12 @@ export function GlassMenu({
         <div
           role="menu"
           aria-label={label}
+          // A menu opened over a clickable surface (a book card, a row) is
+          // still part of that surface in the DOM. Stop the click here so
+          // picking a row acts on the row, not on whatever was underneath.
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+          tabIndex={-1}
           className={cn(
             "shadow-glass absolute z-50 rounded-[14px] border p-1.5",
             panelClassName,

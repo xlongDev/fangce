@@ -683,6 +683,20 @@ export const commands = {
   libraryExportCatalog: (path: string, options?: InvokeOptions) =>
     __TAURI_INVOKE<number>("library_export_catalog", { path }, options),
   /**
+   *  `library.export_book_catalog` — one book as one row of the same shelf CSV.
+   *  The card opens a save panel; this command only writes where it was told.
+   */
+  libraryExportBookCatalog: (id: string, path: string, options?: InvokeOptions) =>
+    __TAURI_INVOKE<null>("library_export_book_catalog", { id, path }, options),
+  /**
+   *  `library.import_catalog` — restores the books named in a catalogue CSV.
+   *
+   *  Spawned like the export: a sheet can carry the whole shelf, and the write
+   *  touches metadata, labels and reading marks in one transaction.
+   */
+  libraryImportCatalog: (path: string, options?: InvokeOptions) =>
+    __TAURI_INVOKE<CatalogImport>("library_import_catalog", { path }, options),
+  /**
    *  `card.save` — writes a rendered share card (PNG bytes) where the reader
    *  pointed.
    *
@@ -2170,6 +2184,16 @@ export type Candidate_Serialize = {
    *  sign invites a trust it has not earned.
    */
   matchScore: number | null;
+};
+
+/**
+ *  What one import call actually changed. Missing ids are reported rather
+ *  than failing the call: a CSV kept across a reinstall can name books that
+ *  are no longer on this shelf, and the rest are still worth restoring.
+ */
+export type CatalogImport = {
+  restored: number;
+  missing: string[];
 };
 
 /**

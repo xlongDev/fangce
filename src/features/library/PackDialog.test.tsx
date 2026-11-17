@@ -63,6 +63,7 @@ describe("the export dialog", () => {
     renderDialog();
     expect(chip("原文件")).toHaveAttribute("aria-pressed", "true");
     expect(chip("书档")).toHaveAttribute("aria-pressed", "false");
+    expect(chip("书目 CSV")).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByLabelText("书档密码")).not.toBeInTheDocument();
   });
 
@@ -82,6 +83,15 @@ describe("the export dialog", () => {
     await user.type(screen.getByLabelText("书档密码"), "pw");
     await user.click(screen.getByRole("button", { name: "选择保存位置" }));
     expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ defaultPath: "测试书.ctzx" }));
+
+    await user.click(chip("书目 CSV"));
+    expect(screen.queryByLabelText("书档密码")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "选择保存位置" }));
+    expect(save).toHaveBeenLastCalledWith({
+      title: "导出书目 CSV",
+      defaultPath: "测试书.csv",
+      filters: [{ name: "书目 CSV", extensions: ["csv"] }],
+    });
   });
 
   it("says the right thing about each shape, since only one of them travels", async () => {
@@ -91,6 +101,10 @@ describe("the export dialog", () => {
 
     await user.click(chip("书档"));
     expect(screen.getByText(/只有本应用认得/)).toBeInTheDocument();
+
+    await user.click(chip("书目 CSV"));
+    expect(screen.getByText(/书单里的一行/)).toBeInTheDocument();
+    expect(screen.getByText(/可在设置页导入恢复/)).toBeInTheDocument();
   });
 
   it("keeps the extension honest for a format whose own name is not its extension", async () => {
@@ -139,6 +153,22 @@ describe("the export dialog", () => {
       book: expect.objectContaining({ id: "test-1" }),
       path: "/tmp/书.epub",
       kind: "original",
+      password: undefined,
+    });
+  });
+
+  it("hands the caller a catalogue row without inventing a password", async () => {
+    const user = userEvent.setup();
+    save.mockResolvedValueOnce("/tmp/测试书.csv");
+    const { onConfirm } = renderDialog();
+
+    await user.click(chip("书目 CSV"));
+    await user.click(screen.getByRole("button", { name: "选择保存位置" }));
+
+    expect(onConfirm).toHaveBeenCalledWith({
+      book: expect.objectContaining({ id: "test-1" }),
+      path: "/tmp/测试书.csv",
+      kind: "catalog",
       password: undefined,
     });
   });

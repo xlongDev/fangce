@@ -1,11 +1,12 @@
-//! Commands that get things out of the app as a file: `notes.*` for
-//! highlights, `library.export_catalog` for the shelf's inventory.
+//! Commands that get things out of the app as a file — and the catalogue CSV
+//! back in: `notes.*`, `library.export_catalog` and `library.import_catalog`.
 
 use std::path::PathBuf;
 
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
+use crate::library::catalog::CatalogImport;
 use crate::state::AppState;
 
 /// `notes.export` — writes one book's highlights and notes to a readable file.
@@ -88,6 +89,41 @@ pub async fn library_export_catalog(state: State<'_, AppState>, path: String) ->
     })
     .await
     .map_err(|err| AppError::Message(format!("导出任务被中断：{err}")))?
+}
+
+/// `library.export_book_catalog` — one book as one row of the same shelf CSV.
+/// The card opens a save panel; this command only writes where it was told.
+#[tauri::command]
+#[specta::specta]
+pub async fn library_export_book_catalog(
+    state: State<'_, AppState>,
+    id: String,
+    path: String,
+) -> AppResult<()> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::library::catalog::export_book(&library, &id, PathBuf::from(&path).as_path())
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("导出任务被中断：{err}")))?
+}
+
+/// `library.import_catalog` — restores the books named in a catalogue CSV.
+///
+/// Spawned like the export: a sheet can carry the whole shelf, and the write
+/// touches metadata, labels and reading marks in one transaction.
+#[tauri::command]
+#[specta::specta]
+pub async fn library_import_catalog(
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<CatalogImport> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::library::catalog::import(&library, PathBuf::from(&path).as_path())
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("导入任务被中断：{err}")))?
 }
 
 /// `card.save` — writes a rendered share card (PNG bytes) where the reader

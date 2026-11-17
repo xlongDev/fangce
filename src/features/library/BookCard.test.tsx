@@ -1,6 +1,11 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { BookSummary } from "@/types/ipc";
+
+// The unified export dialog is the desktop face of the card; the browser only
+// gets a direct download. Keeping the desktop branch real pins which one renders.
+vi.mock("@/lib/ipc", () => ({ isDesktopRuntime: true }));
 
 // `useBookHandoff` is module-scoped state the component reads but the tests
 // never trigger. The empty stub keeps the import real without opening a
@@ -46,14 +51,17 @@ const baseBook: BookSummary = {
   tags: [],
 };
 
-function renderCard(book: Partial<BookSummary> = {}) {
+function renderCard(
+  book: Partial<BookSummary> = {},
+  onAskExport: (book: BookSummary) => void = () => {},
+) {
   return render(
     <BookCard
       book={{ ...baseBook, ...book } as BookSummary}
       onOpen={() => {}}
       onToggleFavorite={() => {}}
       onAskDelete={() => {}}
-      onAskExport={() => {}}
+      onAskExport={onAskExport}
       onExportFile={() => {}}
       onEditTags={() => {}}
       onEditMeta={() => {}}
@@ -126,5 +134,17 @@ describe("BookCard — format / file size row (T2/T3)", () => {
     expect(slot.className).toContain("min-w-0");
     // And the block it holds right is still the last thing on the line.
     expect(row!.lastElementChild!.textContent).toMatch(/4\.3 MB/);
+  });
+
+  it("opens the one export dialog from the card's single export button", async () => {
+    const onAskExport = vi.fn();
+    renderCard({}, onAskExport);
+
+    await userEvent.click(screen.getByRole("button", { name: "导出" }));
+
+    // No hover menu in front of another panel: the dialog itself offers the
+    // original file, both packs and the catalogue CSV as peer choices.
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(onAskExport).toHaveBeenCalledWith(expect.objectContaining({ id: "test-1" }));
   });
 });

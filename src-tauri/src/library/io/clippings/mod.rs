@@ -49,7 +49,7 @@
 //! and writes nothing when it is one.
 
 mod anchor;
-mod csv;
+pub(crate) mod csv;
 mod import;
 mod kindle;
 mod markdown;

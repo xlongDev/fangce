@@ -76,6 +76,77 @@ pub struct Before {
     pub cover_previous: Option<String>,
 }
 
+/// A CSV restore changes more than a fill does: the title, the labels and the
+/// reading marks travel in the file too. Its before-image is deliberately a
+/// separate shape — adding those keys to the ordinary [`Before`] would make a
+/// metadata undo put back the progress a reader made *after* the edit.
+///
+/// Exactly the columns [`crate::library::catalog::import`] writes, plus the
+/// fields that write deliberately carries through. The carried fields are in
+/// the snapshot too: undo's shared restore path would otherwise read their
+/// absence as 「it had no value」 and clear a description or a cover the CSV
+/// never touched.
+pub struct CatalogBefore {
+    pub book_id: String,
+    pub title: String,
+    pub authors: Vec<String>,
+    pub subtitle: Option<String>,
+    pub publisher: Option<String>,
+    pub language: Option<String>,
+    pub isbn: Option<String>,
+    pub published_year: Option<i32>,
+    pub description: Option<String>,
+    pub rating: Option<f64>,
+    pub rating_count: Option<i32>,
+    pub rating_source: Option<String>,
+    pub douban_url: Option<String>,
+    pub cover_path: Option<String>,
+    pub tags: Vec<String>,
+    pub progress: f64,
+    pub favorite: bool,
+}
+
+/// The action name of a CSV restore, so the settings page can tell it apart
+/// from an ordinary metadata fill in the log.
+pub const CATALOG_RESTORE_ACTION: &str = "restore_catalog";
+
+/// One log line per restored book, all sharing the call id `record_details`
+/// gives them: one import, one undo button.
+pub fn record_catalog_restore(
+    conn: &Connection,
+    befores: &[CatalogBefore],
+    summary: &str,
+) -> AppResult<()> {
+    let rows: Vec<(String, Value)> = befores
+        .iter()
+        .map(|before| {
+            let detail = json!({
+                "v": 4,
+                "before": {
+                    "title": before.title,
+                    "authors": before.authors,
+                    "subtitle": before.subtitle,
+                    "publisher": before.publisher,
+                    "language": before.language,
+                    "isbn": before.isbn,
+                    "published_year": before.published_year,
+                    "description": before.description,
+                    "rating": before.rating,
+                    "rating_count": before.rating_count,
+                    "rating_source": before.rating_source,
+                    "douban_url": before.douban_url,
+                    "cover_path": before.cover_path,
+                    "tags": before.tags,
+                    "progress": before.progress,
+                    "favorite": before.favorite,
+                }
+            });
+            (before.book_id.clone(), detail)
+        })
+        .collect();
+    record_details(conn, Source::Ui, CATALOG_RESTORE_ACTION, summary, &rows)
+}
+
 /// Reads what a book looks like right now, for a write that is about to change
 /// it.
 pub fn snapshot(
@@ -477,12 +548,14 @@ fn restore(
         // Those writes never changed it, so keeping the current one is honest.
         .unwrap_or_else(|| book.authors.clone());
 
+    // A CSV restore *does* change the title; an ordinary fill does not and
+    // leaves no `title` key, so that path still carries it through untouched.
+    let title = text("title").unwrap_or_else(|| book.title.clone());
+
     // A whole record: `update_metadata` writes every column, and `None` here
     // means 「it had no value」, which is exactly what the log recorded.
     let patch = crate::library::repository::BookMetadataPatch {
-        // The title is not something a fill writes, so it is carried through
-        // untouched rather than restored.
-        title: book.title,
+        title,
         authors,
         subtitle: text("subtitle"),
         publisher: text("publisher"),
@@ -496,6 +569,34 @@ fn restore(
         douban_url: text("douban_url"),
     };
     crate::library::repository::update_metadata(tx, id, &patch)?;
+
+    // Keys a v4 CSV snapshot adds. Old rows have none, so an ordinary undo
+    // still leaves labels and reading marks alone.
+    if let Some(wanted) = fields.get("tags").and_then(Value::as_array) {
+        let wanted =
+            wanted.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>();
+        let add = wanted
+            .iter()
+            .filter(|name| !book.tags.iter().any(|old| old.eq_ignore_ascii_case(name)))
+            .cloned()
+            .collect::<Vec<_>>();
+        let remove = book
+            .tags
+            .iter()
+            .filter(|old| !wanted.iter().any(|name| name.eq_ignore_ascii_case(old)))
+            .cloned()
+            .collect::<Vec<_>>();
+        let ids = [id.to_string()];
+        crate::library::tags::assign(tx, &ids, &add, &remove)?;
+    }
+    if fields.contains_key("progress") || fields.contains_key("favorite") {
+        let progress = fields.get("progress").and_then(Value::as_f64).unwrap_or(book.progress);
+        let favorite = fields.get("favorite").and_then(Value::as_bool).unwrap_or(book.favorite);
+        tx.execute(
+            "UPDATE books SET progress = ?1, favorite = ?2, updated_at = ?3 WHERE id = ?4",
+            params![progress.clamp(0.0, 1.0), favorite, crate::library::now_seconds(), id],
+        )?;
+    }
 
     // The picture this call wrote. Once undo points the row back at the older
     // cover, nothing references this file — left on disk it still eats space
@@ -563,10 +664,11 @@ fn discard_downloaded_cover(current: Option<&Path>, restored: &str, covers_dir: 
 fn before_fields(detail: Option<&str>) -> Option<serde_json::Map<String, Value>> {
     let detail: Value = serde_json::from_str(detail?).ok()?;
     // Rows written before this format have a `before` with two keys. Reading
-    // those as 「the other nine were null」 would wipe nine fields. v3 only adds
-    // a key, so a v2 row is still complete enough to put back.
+    // those as 「the other nine were null」 would wipe nine fields. v3 adds a
+    // key, and v4 adds the marks a CSV restore writes, so all three are still
+    // complete enough to put back.
     match detail.get("v").and_then(Value::as_u64) {
-        Some(2) | Some(3) => {}
+        Some(2) | Some(3) | Some(4) => {}
         _ => return None,
     }
     detail.get("before")?.as_object().cloned()

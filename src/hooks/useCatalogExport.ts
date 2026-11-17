@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { ipc } from "@/lib/ipc";
 
@@ -12,6 +12,37 @@ import { ipc } from "@/lib/ipc";
 export function useCatalogExport() {
   return useMutation({
     mutationFn: (path: string) => ipc.libraryExportCatalog(path),
+    meta: { silent: true },
+  });
+}
+
+/**
+ * One book as one row of the same table. The card's export menu opens the
+ * save panel; this hook only owns the write and its failure reporting.
+ */
+export function useBookCatalogExport() {
+  return useMutation({
+    mutationFn: ({ id, path }: { id: string; path: string }) =>
+      ipc.libraryExportBookCatalog(id, path),
+    meta: { silent: true },
+  });
+}
+
+/**
+ * Restores the books named in a catalogue CSV. A restore writes metadata,
+ * labels and reading marks, so the shelf, the tag index and the undo list all
+ * have to be asked again.
+ */
+export function useCatalogImport() {
+  const query = useQueryClient();
+  return useMutation({
+    mutationFn: (path: string) => ipc.libraryImportCatalog(path),
+    onSuccess: () => {
+      void query.invalidateQueries({ queryKey: ["books"] });
+      void query.invalidateQueries({ queryKey: ["tags"] });
+      void query.invalidateQueries({ queryKey: ["operations"] });
+      void query.invalidateQueries({ queryKey: ["reading"] });
+    },
     meta: { silent: true },
   });
 }

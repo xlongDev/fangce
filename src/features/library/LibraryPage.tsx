@@ -39,6 +39,7 @@ import {
 } from "@/features/library/shelfQuery";
 import { useShelfSelection } from "@/features/library/useShelfSelection";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
+import { useBookCatalogExport } from "@/hooks/useCatalogExport";
 import { useShelfWindow } from "@/hooks/useShelfWindow";
 import { useAssignTags, useTags } from "@/hooks/useTags";
 import {
@@ -301,6 +302,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const migrateEdition = useMigrateEdition();
   const exportPack = useExportPack();
   const exportFile = useExportBookFile();
+  const exportCsv = useBookCatalogExport();
   const deleteBook = useDeleteBook();
   const setFavorite = useSetFavorite();
   const setFavorites = useSetFavorites();
@@ -780,26 +782,42 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         <Suspense fallback={null}>
           <ExportPackDialog
             book={exportTarget}
-            busy={exportPack.isPending || exportFile.isPending}
+            busy={exportPack.isPending || exportFile.isPending || exportCsv.isPending}
             error={
-              exportPack.error
-                ? String(exportPack.error)
-                : exportFile.error
-                  ? String(exportFile.error)
-                  : null
+              exportCsv.error
+                ? String(exportCsv.error)
+                : exportPack.error
+                  ? String(exportPack.error)
+                  : exportFile.error
+                    ? String(exportFile.error)
+                    : null
             }
             onCancel={() => {
               setExportTarget(null);
               exportPack.reset();
               exportFile.reset();
+              exportCsv.reset();
             }}
-            // Both go through the same dialog and the same save panel; only the
-            // command behind them differs — the book's own bytes, or a pack
-            // that also carries what was read and marked in it.
+            // All four shapes go through this one dialog and its save panel;
+            // only the command behind them differs — the book's own bytes, a
+            // pack that also carries what was read, or one row of shelf CSV.
             onConfirm={({ book, path, kind, password }) => {
               const done = { onSuccess: () => setExportTarget(null) };
-              if (kind === "original") exportFile.mutate({ id: book.id, path }, done);
-              else exportPack.mutate({ id: book.id, path, password }, done);
+              if (kind === "catalog") {
+                exportCsv.mutate(
+                  { id: book.id, path },
+                  {
+                    onSuccess: () => {
+                      setExportTarget(null);
+                      showToast("success", "已导出这本书的书目 CSV。");
+                    },
+                  },
+                );
+              } else if (kind === "original") {
+                exportFile.mutate({ id: book.id, path }, done);
+              } else {
+                exportPack.mutate({ id: book.id, path, password }, done);
+              }
             }}
           />
         </Suspense>
