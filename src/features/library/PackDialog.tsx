@@ -48,6 +48,7 @@ interface ExportDialogProps {
     path: string;
     kind: ExportKind;
     password?: string;
+    includeAi: boolean;
   }) => void;
 }
 
@@ -61,11 +62,20 @@ interface ExportDialogProps {
 export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: ExportDialogProps) {
   const [kind, setKind] = useState<ExportKind>("original");
   const [password, setPassword] = useState("");
+  // A plaintext pack is readable by anyone who gets the file, so carrying
+  // private questions has to be an explicit choice. An encrypted pack is the
+  // migration path and starts with the records included.
+  const [includeAi, setIncludeAi] = useState(false);
   const { choose: choosePath, error: panelError } = useSavePath();
 
   if (!book) return null;
+  const pickKind = (next: ExportKind) => {
+    setKind(next);
+    setIncludeAi(next === "encrypted");
+  };
   const catalog = kind === "catalog";
   const encrypted = kind === "encrypted";
+  const packsAi = kind === "pack" || encrypted;
   const extension =
     kind === "catalog"
       ? "csv"
@@ -89,7 +99,13 @@ export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: Exp
       filters: [{ name: chosen.label, extensions: [extension] }],
     });
     if (path === null) return;
-    onConfirm({ book, path, kind, password: encrypted ? password : undefined });
+    onConfirm({
+      book,
+      path,
+      kind,
+      password: encrypted ? password : undefined,
+      includeAi: packsAi && includeAi,
+    });
   };
 
   return (
@@ -117,7 +133,7 @@ export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: Exp
               key={key}
               type="button"
               aria-pressed={kind === key}
-              onClick={() => setKind(key)}
+              onClick={() => pickKind(key)}
               className={cn(
                 "border-hairline text-text-2 hover:text-text-1 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
                 kind === key && "border-accent text-accent",
@@ -143,6 +159,25 @@ export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: Exp
               密码不会存进书库，忘了就无法恢复书档里的原文件。
             </p>
           </Reveal>
+        )}
+
+        {packsAi && (
+          <label className="flex w-full cursor-pointer items-start gap-2 text-left">
+            <input
+              type="checkbox"
+              checked={includeAi}
+              onChange={(event) => setIncludeAi(event.target.checked)}
+              className="border-hairline accent-accent focus-visible:focus-ring mt-0.5 h-4 w-4 shrink-0 rounded"
+            />
+            <span className="text-text-2 text-xs leading-relaxed">
+              包含 AI 导读与对话
+              <span className="text-text-3 block">
+                {encrypted
+                  ? "和书档一起加密。导入后落在新书上，生成时间与脑图等工具产物一并保留。"
+                  : "明文书档会带上对话原文（可能含私人提问）；默认不带，只在迁移记录时勾选。"}
+              </span>
+            </span>
+          </label>
         )}
 
         {message && <p className="text-danger text-xs">{message}</p>}

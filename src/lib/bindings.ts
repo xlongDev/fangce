@@ -395,10 +395,17 @@ export const commands = {
    *  `pack.export` — writes one book to a `.ctz` or `.ctzx` file.
    *
    *  The destination extension picks the format: `.ctzx` requires `password` and
-   *  encrypts the archive with AES-256-GCM under an Argon2id key.
+   *  encrypts the archive with AES-256-GCM under an Argon2id key. `include_ai`
+   *  carries the book's generated guides and conversations when the caller has
+   *  asked for them; a plaintext pack should only do so explicitly.
    */
-  packExport: (id: string, path: string, password: string | null, options?: InvokeOptions) =>
-    __TAURI_INVOKE<null>("pack_export", { id, path, password }, options),
+  packExport: (
+    id: string,
+    path: string,
+    password: string | null,
+    includeAi: boolean,
+    options?: InvokeOptions,
+  ) => __TAURI_INVOKE<null>("pack_export", { id, path, password, includeAi }, options),
   /**  `book.delete` */
   bookDelete: (id: string, options?: InvokeOptions) =>
     __TAURI_INVOKE<null>("book_delete", { id }, options),

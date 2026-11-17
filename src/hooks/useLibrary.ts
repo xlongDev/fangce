@@ -314,8 +314,17 @@ export function useExportBookFile() {
  */
 export function useExportPack() {
   return useMutation({
-    mutationFn: ({ id, path, password }: { id: string; path: string; password?: string }) =>
-      ipc.packExport(id, path, password ?? null),
+    mutationFn: ({
+      id,
+      path,
+      password,
+      includeAi,
+    }: {
+      id: string;
+      path: string;
+      password?: string;
+      includeAi: boolean;
+    }) => ipc.packExport(id, path, password ?? null, includeAi),
   });
 }
 

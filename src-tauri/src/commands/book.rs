@@ -352,7 +352,9 @@ fn backfill_deferred_chapters(library: Library) {
 /// `pack.export` — writes one book to a `.ctz` or `.ctzx` file.
 ///
 /// The destination extension picks the format: `.ctzx` requires `password` and
-/// encrypts the archive with AES-256-GCM under an Argon2id key.
+/// encrypts the archive with AES-256-GCM under an Argon2id key. `include_ai`
+/// carries the book's generated guides and conversations when the caller has
+/// asked for them; a plaintext pack should only do so explicitly.
 #[tauri::command]
 #[specta::specta]
 pub async fn pack_export(
@@ -360,6 +362,7 @@ pub async fn pack_export(
     id: String,
     path: String,
     password: Option<String>,
+    include_ai: bool,
 ) -> AppResult<()> {
     let library = state.library.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -368,6 +371,7 @@ pub async fn pack_export(
             &id,
             PathBuf::from(&path).as_path(),
             password.as_deref(),
+            include_ai,
         )
     })
     .await

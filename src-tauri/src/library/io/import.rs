@@ -213,6 +213,9 @@ fn import_pack(
     if let Some(reading) = &unpacked.reading {
         library.with_tx(|tx| pack::apply_reading(tx, imported.id(), reading))?;
     }
+    if let Some(ai) = &unpacked.ai {
+        library.with_tx(|tx| pack::apply_ai(tx, imported.id(), ai))?;
+    }
     Ok(imported)
 }
 
@@ -858,7 +861,7 @@ mod tests {
         let id = harness.shelve()[0].id.clone();
 
         let locked = harness.dir.join("locked.ctzx");
-        pack::export(&harness.library, &id, &locked, Some("pw")).expect("export");
+        pack::export(&harness.library, &id, &locked, Some("pw"), false).expect("export");
 
         let outcomes = harness.import(&[locked]);
         let ImportOutcome::Failed { message, .. } = &outcomes[0] else {

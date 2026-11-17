@@ -190,6 +190,33 @@ pub fn store(
     Ok(())
 }
 
+/// Writes a summary with the timestamp it had when it was generated.
+///
+/// `store` stamps "now" because a freshly generated guide is new work; a pack
+/// carrying an old guide must not claim it was made during the import, or the
+/// panel's stale check would compare the wrong chapter length against a new
+/// clock. Upsert keeps re-import idempotent.
+pub fn restore(
+    conn: &Connection,
+    book_id: &str,
+    idx: usize,
+    summary: &str,
+    chars: usize,
+    model: &str,
+    created_at: i64,
+) -> AppResult<()> {
+    conn.execute(
+        "INSERT INTO chapter_summaries (book_id, idx, summary, chars, model, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+         ON CONFLICT (book_id, idx) DO UPDATE SET summary = excluded.summary, \
+                                                  chars = excluded.chars, \
+                                                  model = excluded.model, \
+                                                  created_at = excluded.created_at",
+        params![book_id, idx as i64, summary, chars as i64, model, created_at],
+    )?;
+    Ok(())
+}
+
 /// What a build would do to the chapters up to `upto`.
 ///
 /// Split in two because they are different states for the reader: a chapter

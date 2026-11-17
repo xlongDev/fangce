@@ -801,7 +801,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
             // All four shapes go through this one dialog and its save panel;
             // only the command behind them differs — the book's own bytes, a
             // pack that also carries what was read, or one row of shelf CSV.
-            onConfirm={({ book, path, kind, password }) => {
+            onConfirm={({ book, path, kind, password, includeAi }) => {
               const done = { onSuccess: () => setExportTarget(null) };
               if (kind === "catalog") {
                 exportCsv.mutate(
@@ -816,7 +816,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
               } else if (kind === "original") {
                 exportFile.mutate({ id: book.id, path }, done);
               } else {
-                exportPack.mutate({ id: book.id, path, password }, done);
+                exportPack.mutate({ id: book.id, path, password, includeAi }, done);
               }
             }}
           />

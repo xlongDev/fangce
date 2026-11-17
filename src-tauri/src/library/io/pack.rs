@@ -1,9 +1,12 @@
 //! Book Pack: one book in a single portable file.
 //!
 //! `.ctz` is a ZIP holding the untouched source file plus the reading state
-//! (progress, favourite, highlights). Chapters and the cover are deliberately
-//! *not* stored: the ordinary import pipeline extracts both from the source, so
-//! a second copy inside the pack could only drift out of sync.
+//! (progress, favourite, highlights). Optionally it also holds the book's AI
+//! summaries and conversations in `ai.json` — derived data, but expensive to
+//! regenerate and impossible to reproduce once a provider or prompt changes.
+//! Chapters and the cover are deliberately *not* stored: the ordinary import
+//! pipeline extracts both from the source, so a second copy inside the pack
+//! could only drift out of sync.
 //!
 //! `.ctzx` is the same archive encrypted with AES-256-GCM under a key derived
 //! from a password with Argon2id. Every primitive comes from a RustCrypto
@@ -16,7 +19,7 @@ use aes_gcm::Aes256Gcm;
 use aes_gcm::Nonce;
 use aes_gcm::aead::{Aead, Generate, KeyInit, Payload};
 use argon2::{Algorithm, Argon2, Params, Version};
-use rusqlite::{Connection, Transaction};
+use rusqlite::{Connection, Transaction, params};
 use serde::{Deserialize, Serialize};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -34,12 +37,14 @@ pub const PACK_EXTENSIONS: [&str; 2] = ["ctz", "ctzx"];
 /// this file is what identifies an archive as a book pack.
 const MANIFEST_ENTRY: &str = "pack.json";
 const MANIFEST_FORMAT: &str = "fangce-book-pack";
-const MANIFEST_VERSION: u32 = 1;
+const MANIFEST_VERSION: u32 = 2;
 
 /// Entry holding the original file; the extension names the source format.
 const SOURCE_PREFIX: &str = "source.";
 /// Entry holding progress, favourite flag and highlights.
 const READING_ENTRY: &str = "reading.json";
+/// Optional entry holding AI summaries and conversations.
+const AI_ENTRY: &str = "ai.json";
 
 const ENCRYPTED_EXT: &str = "ctzx";
 const ENCRYPTED_FORMAT: &str = "fangce-book-pack-enc";
@@ -90,6 +95,55 @@ pub struct PackedAnnotation {
     pub note: Option<String>,
 }
 
+/// The optional AI payload. Raw JSON columns are carried as strings, exactly
+/// as the database holds them: a provider may add a field this build has never
+/// seen, and the panel already drops what it cannot read.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackedAi {
+    #[serde(default)]
+    pub summaries: Vec<PackedSummary>,
+    #[serde(default)]
+    pub conversations: Vec<PackedConversation>,
+}
+
+/// One chapter's guide. `chars` and `model` travel with the text so the panel
+/// can still say a summary is stale after a re-extracted chapter changed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackedSummary {
+    pub idx: usize,
+    pub summary: String,
+    pub chars: usize,
+    pub model: String,
+    pub created_at: i64,
+}
+
+/// One conversation, with the original id kept only for re-import dedupe. A
+/// landing library gives it a fresh id when that id is already spoken for.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackedConversation {
+    pub source_id: String,
+    pub title: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    #[serde(default)]
+    pub messages: Vec<PackedMessage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackedMessage {
+    pub role: String,
+    pub content: String,
+    pub reasoning: Option<String>,
+    pub citations: Option<String>,
+    pub usage: Option<String>,
+    pub tools: Option<String>,
+    pub created_at: i64,
+}
+
 /// A pack's contents, pulled out of the archive.
 #[derive(Debug)]
 pub struct Unpacked {
@@ -98,6 +152,8 @@ pub struct Unpacked {
     /// Extension of the original file, without the dot.
     pub source_ext: String,
     pub reading: Option<Reading>,
+    /// Present only when the exporter was asked to carry AI records.
+    pub ai: Option<PackedAi>,
 }
 
 /// `true` when `path` names a book pack rather than a raw book.
@@ -108,12 +164,15 @@ pub fn is_pack(path: &Path) -> bool {
 /// Writes one book to `dest`.
 ///
 /// The format follows the extension: `.ctzx` requires a password and encrypts,
-/// anything else writes the plain archive.
+/// anything else writes the plain archive. `include_ai` opts into carrying the
+/// book's generated guides and conversations; the caller decides the privacy
+/// default, not the format layer.
 pub fn export(
     library: &Library,
     book_id: &str,
     dest: &Path,
     password: Option<&str>,
+    include_ai: bool,
 ) -> AppResult<()> {
     let encrypted = crate::library::has_extension(dest, &[ENCRYPTED_EXT]);
     if encrypted && password.is_none() {
@@ -149,13 +208,62 @@ pub fn export(
         })
     })?;
 
-    let archive = build(&source, book.format.extension(), &reading)?;
+    let ai = if include_ai { Some(library.with(|conn| collect_ai(conn, book_id))?) } else { None };
+
+    let archive = build(&source, book.format.extension(), &reading, ai.as_ref())?;
     let bytes = match password {
         Some(password) if encrypted => encrypt(&archive, password)?,
         _ => archive,
     };
     std::fs::write(dest, bytes)?;
     Ok(())
+}
+
+/// Reads the book's AI records whole. Conversations are read through the same
+/// query the drawer uses, so what travels is what the reader could actually see.
+fn collect_ai(conn: &Connection, book_id: &str) -> AppResult<PackedAi> {
+    let mut stmt = conn.prepare(
+        "SELECT idx, summary, chars, model, created_at \
+           FROM chapter_summaries WHERE book_id = ?1 ORDER BY idx",
+    )?;
+    let summaries = stmt
+        .query_map(params![book_id], |row| {
+            Ok(PackedSummary {
+                idx: row.get::<_, i64>(0)? as usize,
+                summary: row.get(1)?,
+                chars: row.get::<_, i64>(2)? as usize,
+                model: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut conversations = Vec::new();
+    for item in crate::library::assist::conversation::list(conn, Some(book_id))? {
+        let full = crate::library::assist::conversation::get(conn, &item.id)?;
+        let messages = full
+            .messages
+            .into_iter()
+            .map(|message| PackedMessage {
+                role: message.role,
+                content: message.content,
+                reasoning: message.reasoning,
+                citations: serde_json::to_string(&message.citations).ok(),
+                usage: message.usage.and_then(|value| serde_json::to_string(&value).ok()),
+                tools: serde_json::to_string(&message.tools).ok(),
+                created_at: message.created_at,
+            })
+            .collect();
+        conversations.push(PackedConversation {
+            source_id: item.id,
+            title: item.title,
+            created_at: item.created_at,
+            updated_at: item.updated_at,
+            messages,
+        });
+    }
+
+    Ok(PackedAi { summaries, conversations })
 }
 
 /// Reads a pack, decrypting it first when the extension says it is encrypted.
@@ -213,9 +321,94 @@ pub fn apply_reading(tx: &Transaction<'_>, book_id: &str, reading: &Reading) -> 
     Ok(())
 }
 
+/// Attaches a pack's AI records to the book that just landed.
+///
+/// Summaries are keyed by chapter index, so they are upserted. Conversations
+/// are deduped by their original id when it is still free, and by title plus
+/// creation time when the id collided with a local conversation — re-importing
+/// the same pack must not multiply the transcript.
+pub fn apply_ai(tx: &Transaction<'_>, book_id: &str, ai: &PackedAi) -> AppResult<()> {
+    for summary in &ai.summaries {
+        crate::library::assist::summary::restore(
+            tx,
+            book_id,
+            summary.idx,
+            &summary.summary,
+            summary.chars,
+            &summary.model,
+            summary.created_at,
+        )?;
+    }
+
+    for conversation in &ai.conversations {
+        let seen: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM ai_conversations \
+              WHERE book_id = ?1 AND title = ?2 AND created_at = ?3",
+            rusqlite::params![book_id, conversation.title, conversation.created_at],
+            |row| row.get(0),
+        )?;
+        if seen > 0 {
+            continue;
+        }
+
+        let id = if conversation_id_free(tx, &conversation.source_id)? {
+            conversation.source_id.clone()
+        } else {
+            uuid::Uuid::new_v4().to_string()
+        };
+        tx.execute(
+            "INSERT INTO ai_conversations (id, book_id, title, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                id,
+                book_id,
+                conversation.title,
+                conversation.created_at,
+                conversation.updated_at
+            ],
+        )?;
+
+        for message in &conversation.messages {
+            if message.role != "user" && message.role != "assistant" {
+                return Err(AppError::Parse("书档里的对话角色非法".into()));
+            }
+            tx.execute(
+                "INSERT INTO ai_messages \
+                   (conversation_id, role, content, reasoning, citations, usage, created_at, tools) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                rusqlite::params![
+                    id,
+                    message.role,
+                    message.content,
+                    message.reasoning,
+                    message.citations,
+                    message.usage,
+                    message.created_at,
+                    message.tools,
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn conversation_id_free(conn: &Connection, id: &str) -> AppResult<bool> {
+    let used: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM ai_conversations WHERE id = ?1",
+        rusqlite::params![id],
+        |row| row.get(0),
+    )?;
+    Ok(used == 0)
+}
+
 /// Builds the plain archive in memory. A pack is one book, and the result is
 /// written to disk in a single pass either way.
-fn build(source: &[u8], source_ext: &str, reading: &Reading) -> AppResult<Vec<u8>> {
+fn build(
+    source: &[u8],
+    source_ext: &str,
+    reading: &Reading,
+    ai: Option<&PackedAi>,
+) -> AppResult<Vec<u8>> {
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
@@ -230,6 +423,11 @@ fn build(source: &[u8], source_ext: &str, reading: &Reading) -> AppResult<Vec<u8
 
     writer.start_file(READING_ENTRY, options)?;
     serde_json::to_writer(&mut writer, reading)?;
+
+    if let Some(ai) = ai {
+        writer.start_file(AI_ENTRY, options)?;
+        serde_json::to_writer(&mut writer, ai)?;
+    }
 
     Ok(writer.finish()?.into_inner())
 }
@@ -268,8 +466,13 @@ fn read(archive: &[u8]) -> AppResult<Unpacked> {
         true => Some(serde_json::from_reader(zip.by_name(READING_ENTRY)?)?),
         false => None,
     };
+    // A v1 pack has no AI entry; absence means "not carried", never "empty".
+    let ai = match names.iter().any(|name| name == AI_ENTRY) {
+        true => Some(serde_json::from_reader(zip.by_name(AI_ENTRY)?)?),
+        false => None,
+    };
 
-    Ok(Unpacked { source, source_ext, reading })
+    Ok(Unpacked { source, source_ext, reading, ai })
 }
 
 /// Whether this highlight is already on the shelf, so a re-import is a no-op.
@@ -421,8 +624,11 @@ fn split_header(bytes: &[u8]) -> AppResult<(&[u8], &[u8])> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::tools::ToolCallView;
+    use crate::ai::usage::TokenUsage;
     use crate::db::Layout;
     use crate::document::fixture;
+    use crate::library::assist::{conversation, summary};
     use crate::library::import::ImportOutcome;
     use crate::library::repository::{BookQuery, BookSummary};
     use std::path::PathBuf;
@@ -491,9 +697,58 @@ mod tests {
         id
     }
 
+    /// One generated guide and one conversation carrying a mind map. These are
+    /// the two records a read-only book file could never bring back.
+    fn seed_ai(harness: &Harness, id: &str) {
+        harness
+            .library
+            .with(|conn| {
+                summary::restore(conn, id, 0, "一段导读", 120, "test-model", 12_345)?;
+                let chat = conversation::create(conn, Some(id))?;
+                let mindmap = ToolCallView {
+                    name: "mindmap".into(),
+                    label: "画脑图".into(),
+                    detail: "完成".into(),
+                    ok: true,
+                    sources: vec![],
+                    mindmap: Some("# 导图".into()),
+                    wordcloud: None,
+                };
+                conversation::append(
+                    conn,
+                    &chat.id,
+                    "user",
+                    "这本书讲什么？",
+                    None,
+                    &[],
+                    None,
+                    &[],
+                )?;
+                conversation::append(
+                    conn,
+                    &chat.id,
+                    "assistant",
+                    "讲的是三体。",
+                    None,
+                    &[],
+                    Some(TokenUsage { input: 3, cached: 1, output: 9 }),
+                    &[mindmap],
+                )?;
+                Ok(())
+            })
+            .expect("seed ai");
+    }
+
     fn export_to(harness: &Harness, id: &str, name: &str, password: Option<&str>) -> PathBuf {
         let dest = harness.dir.join(name);
-        export(&harness.library, id, &dest, password).expect("export");
+        export(&harness.library, id, &dest, password, false).expect("export");
+        dest
+    }
+
+    /// Same archive, but opting into the optional AI payload.
+    fn export_ai_to(harness: &Harness, id: &str, name: &str, password: Option<&str>) -> PathBuf {
+        let dest = harness.dir.join(name);
+        export(&harness.library, id, &dest, password, true).expect("export ai");
         dest
     }
 
@@ -583,10 +838,12 @@ mod tests {
     fn an_encrypted_pack_round_trips_with_its_password() {
         let harness = Harness::new("pack-enc");
         let id = seed_book(&harness);
-        let pack = export_to(&harness, &id, "book.ctzx", Some("correct horse"));
+        seed_ai(&harness, &id);
+        let pack = export_ai_to(&harness, &id, "book.ctzx", Some("correct horse"));
 
         let unpacked = unpack(&pack, Some("correct horse")).expect("decrypt");
         assert_eq!(unpacked.reading.expect("reading").progress, 0.25);
+        assert!(unpacked.ai.expect("ai travels encrypted").summaries.len() == 1);
         assert!(unpack(&pack, Some("wrong horse")).is_err(), "错误密码必须被 GCM 拒绝");
     }
 
@@ -622,7 +879,101 @@ mod tests {
     fn export_rejects_an_encrypted_destination_without_a_password() {
         let harness = Harness::new("pack-no-password");
         let id = seed_book(&harness);
-        assert!(export(&harness.library, &id, &harness.dir.join("x.ctzx"), None).is_err());
+        assert!(export(&harness.library, &id, &harness.dir.join("x.ctzx"), None, false).is_err());
+    }
+
+    #[test]
+    fn a_plaintext_pack_carries_ai_only_when_asked() {
+        let harness = Harness::new("pack-ai-opt-in");
+        let id = seed_book(&harness);
+        seed_ai(&harness, &id);
+
+        let plain = unpack(&export_to(&harness, &id, "plain.ctz", None), None).expect("unpack");
+        assert!(plain.ai.is_none(), "明文书档默认不得带上对话");
+
+        let carried =
+            unpack(&export_ai_to(&harness, &id, "with-ai.ctz", None), None).expect("unpack");
+        let ai = carried.ai.expect("opt-in must carry ai");
+        assert_eq!(ai.summaries.len(), 1);
+        assert_eq!(ai.summaries[0].summary, "一段导读");
+        assert_eq!(ai.summaries[0].created_at, 12_345);
+        assert_eq!(ai.conversations.len(), 1);
+        assert_eq!(ai.conversations[0].messages.len(), 2);
+        assert!(
+            ai.conversations[0].messages[1]
+                .tools
+                .as_deref()
+                .is_some_and(|json| json.contains("导图")),
+            "工具产物只在消息的 tools 里，必须一起带走"
+        );
+    }
+
+    #[test]
+    fn ai_records_rebind_to_the_imported_book_and_survive_reimport() {
+        let source = Harness::new("pack-ai-source");
+        let id = seed_book(&source);
+        seed_ai(&source, &id);
+        let pack = export_ai_to(&source, &id, "book.ctz", None);
+
+        let target = Harness::new("pack-ai-target");
+        target.import(std::slice::from_ref(&pack));
+        let target_id = target.shelf()[0].id.clone();
+
+        target
+            .library
+            .with(|conn| {
+                let (text, chars, model, at): (String, i64, String, i64) = conn.query_row(
+                    "SELECT summary, chars, model, created_at \
+                       FROM chapter_summaries WHERE book_id = ?1 AND idx = 0",
+                    params![target_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )?;
+                assert_eq!(text, "一段导读");
+                assert_eq!(chars, 120);
+                assert_eq!(model, "test-model");
+                assert_eq!(at, 12_345, "导入不能把导读的生成时间改成现在");
+
+                let chats = conversation::list(conn, Some(&target_id))?;
+                assert_eq!(chats.len(), 1);
+                let full = conversation::get(conn, &chats[0].id)?;
+                assert_eq!(full.messages.len(), 2);
+                assert_eq!(full.messages[1].content, "讲的是三体。");
+                assert_eq!(full.messages[1].tools[0].mindmap.as_deref(), Some("# 导图"));
+                assert_eq!(chats[0].created_at, full.summary.created_at);
+                Ok(())
+            })
+            .expect("verify imported ai");
+
+        // The same file twice must not grow a second transcript.
+        target.import(&[pack]);
+        target
+            .library
+            .with(|conn| {
+                assert_eq!(conversation::list(conn, Some(&target_id))?.len(), 1);
+                Ok(())
+            })
+            .expect("verify idempotency");
+    }
+
+    #[test]
+    fn an_old_pack_without_an_ai_entry_still_imports() {
+        let harness = Harness::new("pack-v1");
+        let epub =
+            fixture::write_epub(&harness.dir, "old.epub", &fixture::full_opf("旧书", "佚名"), &[]);
+        let archive = archive_with(&[
+            (
+                MANIFEST_ENTRY,
+                serde_json::to_vec(&Manifest { format: MANIFEST_FORMAT.to_string(), version: 1 })
+                    .expect("manifest"),
+            ),
+            ("source.epub", std::fs::read(&epub).expect("read source")),
+        ]);
+        let path = harness.dir.join("old.ctz");
+        std::fs::write(&path, archive).expect("write old pack");
+
+        assert!(unpack(&path, None).expect("unpack").ai.is_none());
+        harness.import(&[path]);
+        assert_eq!(harness.shelf().len(), 1, "v1 书档仍要能导入");
     }
 
     #[test]

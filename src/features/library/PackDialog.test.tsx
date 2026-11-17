@@ -139,6 +139,7 @@ describe("the export dialog", () => {
       path: "/tmp/书.ctzx",
       kind: "encrypted",
       password: "pw",
+      includeAi: true,
     });
   });
 
@@ -154,7 +155,55 @@ describe("the export dialog", () => {
       path: "/tmp/书.epub",
       kind: "original",
       password: undefined,
+      includeAi: false,
     });
+  });
+
+  it("keeps private conversations out of a plaintext pack until asked", async () => {
+    const user = userEvent.setup();
+    save.mockResolvedValueOnce("/tmp/书.ctz");
+    const { onConfirm } = renderDialog();
+
+    await user.click(chip("书档"));
+    const toggle = screen.getByRole("checkbox", { name: /包含 AI 导读与对话/ });
+    expect(toggle).not.toBeChecked();
+
+    await user.click(toggle);
+    await user.click(screen.getByRole("button", { name: "选择保存位置" }));
+
+    expect(onConfirm).toHaveBeenCalledWith({
+      book: expect.objectContaining({ id: "test-1" }),
+      path: "/tmp/书.ctz",
+      kind: "pack",
+      password: undefined,
+      includeAi: true,
+    });
+  });
+
+  it("starts an encrypted pack with AI included but lets it be turned off", async () => {
+    const user = userEvent.setup();
+    save.mockResolvedValueOnce("/tmp/书.ctzx");
+    const { onConfirm } = renderDialog();
+
+    await user.click(chip("加密书档"));
+    const toggle = screen.getByRole("checkbox", { name: /包含 AI 导读与对话/ });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    await user.type(screen.getByLabelText("书档密码"), "pw");
+    await user.click(screen.getByRole("button", { name: "选择保存位置" }));
+
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "encrypted", includeAi: false }),
+    );
+  });
+
+  it("does not offer an AI toggle to shapes that cannot carry it", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+
+    await user.click(chip("书目 CSV"));
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
 
   it("hands the caller a catalogue row without inventing a password", async () => {
@@ -170,6 +219,7 @@ describe("the export dialog", () => {
       path: "/tmp/测试书.csv",
       kind: "catalog",
       password: undefined,
+      includeAi: false,
     });
   });
 
