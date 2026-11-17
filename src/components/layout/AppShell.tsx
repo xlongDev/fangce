@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion, type Variants } from "motion
 import { SidebarGlyph, TitleBar } from "@/components/layout/TitleBar";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { cn } from "@/lib/cn";
+import { SHELF_VIEWS } from "@/lib/routes";
 import { NavList } from "@/components/layout/NavList";
 import { UpdateBanner } from "@/components/layout/UpdateBanner";
 import { Toaster } from "@/components/common/Toaster";
@@ -120,8 +121,6 @@ function sidebarBody(collapsed: boolean) {
  * screen for the length of every swap — 168 covers for an 84-book library, on
  * the switches a reader makes most.
  */
-const SHELF_VIEWS = new Set(["/", "/recent", "/favorites", "/tags"]);
-
 /**
  * How far a page travels while being swapped for a sibling, in px.
  *

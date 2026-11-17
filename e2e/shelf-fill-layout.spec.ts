@@ -25,7 +25,7 @@ test("the fill sheet fits the window and its list scrolls", async ({ page }) => 
 
   const sheet = page.getByRole("dialog");
   await expect(sheet).toBeVisible();
-  await expect(sheet).toContainText("只填空着的字段");
+  await expect(sheet).toContainText("仅填充空白字段，不覆盖已有内容。");
 
   const box = await sheet.boundingBox();
   expect(box, "dialog has a box").not.toBeNull();

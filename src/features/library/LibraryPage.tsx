@@ -522,13 +522,6 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
     takenSeq.current = importSeq;
     if (useImportRequest.getState().take()) startImportRef.current();
   }, [importSeq]);
-  // Separate from the request effect: registering on every seq change would
-  // briefly unregister the shelf and make a concurrent command navigate away.
-  useEffect(() => {
-    const store = useImportRequest.getState();
-    store.shelfMounted();
-    return () => useImportRequest.getState().shelfUnmounted();
-  }, []);
 
   /** The shelf's own column: toolbar, grid. It is one node because the tag
    *  shelf puts it beside the index, and every other view keeps it alone. */

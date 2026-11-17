@@ -1,5 +1,5 @@
-import { useEffect, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useLayoutEffect, type ReactNode } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   BookOpen,
   Books,
@@ -18,6 +18,7 @@ import {
 } from "@phosphor-icons/react";
 
 import type { Command, Shortcut } from "@/lib/commands";
+import { SHELF_VIEWS } from "@/lib/routes";
 import { useCommandStore } from "@/stores/commands";
 import { useImportRequest } from "@/stores/import-request";
 import { useSettings, type ThemeMode } from "@/stores/settings";
@@ -148,10 +149,11 @@ function importBooksCommand(): Command {
     shortcut: [IMPORT],
     run: () => {
       useImportRequest.getState().request();
-      // Only leave the current page when there is no shelf to receive the
-      // request. Otherwise navigating would drop the reader's filter and could
-      // open the picker from an instance the page swap is about to unmount.
-      if (useImportRequest.getState().shelves === 0) navigateTo("/");
+      // Only stay put when the route on screen is a shelf. A shelf still
+      // mounted for the length of a page swap is not one the reader can see:
+      // ⌘O from 设置 used to be taken by that departing instance, opening a
+      // picker behind a settings page with no shelf to show the result.
+      if (!SHELF_VIEWS.has(useImportRequest.getState().route)) navigateTo("/");
     },
   };
 }
@@ -261,6 +263,13 @@ export function navigateTo(to: string): void {
 /** Bridge between the command registry and React Router. Mount once near the root. */
 export function useNavigationBridge(): void {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  // Layout effect, not `useEffect`: a command can run as soon as the new page
+  // is visible, and a passive effect would still be pending at that point on
+  // a slow runner. Updating before paint closes that window.
+  useLayoutEffect(() => {
+    useImportRequest.getState().setRoute(pathname);
+  }, [pathname]);
   useEffect(() => {
     function onNav(event: Event) {
       const target = event as CustomEvent<string>;
