@@ -958,7 +958,7 @@ NeoDB 是 dalibre 用的那个联邦书目库，中文覆盖真实存在，而�
 
 1. **Phase 6 余项（按需）** —— 6.1 标签建议走通「建议 → 预览 → 应用 → 记账」并沉淀成 `tagging.rs` 的形状；**6.2 AI 补笔记（2026-11-15）** 照同一形状给「划了线但没笔记」的标注补草稿，只填空值、可撤销，见 §0。再加新动作仍照这个形状，不新造机制。**没有真实需求前不主动加**（6.2 是用户点名启动 Phase 6 后做的第一个切片）。
 2. **Phase 4 余项（按需，不主动做）** —— 脚本层运行时、`MetadataProvider` trait、独立插件页。三条都缺真实需求：配置型书源已能表达搜索/详情/章节/正文，两个元数据来源用 `enum + CHAIN` 就够。
-3. **（可选补充，不阻塞）** 桌面版设置页点一次「导出书单 CSV」（Rust 落盘与组件行为都有测试，按钮本身没在真机上点过）；真 Calibre 库并发打开时扫一次；评估 `document/pdf.rs::read_metadata` 对解析失败静默降级、让损坏 PDF 也能进书架这一既有行为。真机往返已用示例库走通，EPUB 导入已实测。
+3. **（可选补充，不阻塞）** 桌面版设置页「导出书单 CSV」**真机已销账**（2026-11-17：2386 本 / 512 KB，落盘 Downloads；Rust 落盘与组件行为均有测试）；真 Calibre 库并发打开时扫一次；评估 `document/pdf.rs::read_metadata` 对解析失败静默降级、让损坏 PDF 也能进书架这一既有行为。真机往返已用示例库走通，EPUB 导入已实测。
 
 **5.5 校验记录（2026-11-14）**：`cargo fmt --all --check` / `cargo clippy --all-targets -- -D warnings` / `cargo test --lib` **793 passed（14 ignored）**；`prettier --check .` / `tsc --noEmit` / `oxlint .`（464 文件 0 warning）/ `vite build --no-emptyOutDir`；全量 `vitest run --maxWorkers=2` **127 个测试文件、退出码 0**（最终统计行随会话切换没留存；vitest 有失败会非 0，所以「全过」有据，具体条数不虚报）；e2e `settings-rail` + `backup` + `smoke` 双引擎 **18 passed**。
 
