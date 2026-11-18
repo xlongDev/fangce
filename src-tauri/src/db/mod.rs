@@ -1,15 +1,17 @@
-//! SQLite access: connection setup, PRAGMAs and the shared handle.
+//! SQLite access: connection setup, PRAGMAs and the shared handles.
 //!
-//! There is exactly one connection, guarded by a mutex. That serializes
-//! everything — reads included — which is the right trade for a single-user
-//! library: it removes `SQLITE_BUSY` between our own commands entirely, and
-//! every query here is a statement-sized read or one batched write.
+//! There is one writer connection guarded by a mutex, plus one separate
+//! connection for the few long reads (shelf list, facets, stats, full-library
+//! search). The writer serializes everything else, which removes `SQLITE_BUSY`
+//! between our own commands; the reader exists so a full-table scan cannot
+//! hold that mutex and queue a page turn behind it.
 //!
-//! WAL is on for crash recovery and cheaper commits, not for concurrency: a
-//! single connection cannot read while its own write transaction is open.
-//! The invariant to keep is therefore about duration, not parallelism —
-//! nothing slow belongs inside a [`Library::with`] closure. Parse, hash and
-//! network first, then take the lock for the writes.
+//! WAL is on for crash recovery and cheaper commits, and it is what lets the
+//! reader see committed writes without joining the writer's lock. The reader
+//! holds no snapshot between statements: each query finishes before the next,
+//! so the next one sees the writer's latest commit. The invariant to keep is
+//! still about duration — nothing slow belongs inside a [`Library::with`]
+//! closure; long reads go through [`Library::with_read`].
 
 pub mod migrations;
 
@@ -76,7 +78,12 @@ impl Layout {
 /// hand one to a blocking task without borrowing application state.
 #[derive(Clone)]
 pub struct Library {
+    /// The one writer. Every `with`/`with_tx` and most short reads use it.
     conn: Arc<Mutex<Connection>>,
+    /// A second connection for the few long reads (shelf list, facets, stats,
+    /// full-library search). Under WAL these read concurrently with writes, so
+    /// a full-table scan cannot queue a page turn behind it. See `with_read`.
+    read_conn: Arc<Mutex<Connection>>,
 }
 
 impl Library {
@@ -112,7 +119,10 @@ impl Library {
             tracing::warn!(error = %err, "回收空闲页失败，数据库照常使用");
         }
 
-        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+            read_conn: Arc::new(Mutex::new(open_reader(&path)?)),
+        })
     }
 
     /// Opens an existing database for a second process, without migrating it.
@@ -150,7 +160,22 @@ impl Library {
         if !writable {
             conn.execute_batch("PRAGMA query_only = ON;")?;
         }
-        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
+        let reader = open_reader(&path)?;
+        if !writable {
+            // The reader is unused by the tool server today, but it must not
+            // become a way around the same grant if a future tool uses it.
+            reader.execute_batch("PRAGMA query_only = ON;")?;
+        }
+        Ok(Self { conn: Arc::new(Mutex::new(conn)), read_conn: Arc::new(Mutex::new(reader)) })
+    }
+
+    /// A second handle on the same file for long reads. WAL lets it read while
+    /// the writer commits; a statement that finishes releases its snapshot, so
+    /// the next read sees the writer's latest commit. Only the four slow
+    /// commands use this — the rest keep the short-read path unchanged.
+    pub fn with_read<T>(&self, f: impl FnOnce(&Connection) -> AppResult<T>) -> AppResult<T> {
+        let guard = self.read_conn.lock().map_err(|_| AppError::poisoned("library reader"))?;
+        f(&guard)
     }
 
     /// Runs `f` with the shared connection.
@@ -172,6 +197,19 @@ impl Library {
     fn lock(&self) -> AppResult<MutexGuard<'_, Connection>> {
         self.conn.lock().map_err(|_| AppError::poisoned("library"))
     }
+}
+
+/// Opens the long-read handle on an already-initialized WAL database.
+/// `journal_mode` is deliberately not set: WAL is a file property, and setting
+/// it here would be a write from a connection that is meant to be read-only.
+fn open_reader(path: &Path) -> AppResult<Connection> {
+    let conn = Connection::open(path)?;
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON;
+         PRAGMA busy_timeout = 5000;
+         PRAGMA temp_store = MEMORY;",
+    )?;
+    Ok(conn)
 }
 
 /// Where the app keeps its data, resolved without a running Tauri app.
@@ -259,6 +297,41 @@ mod tests {
         fn drop(&mut self) {
             std::fs::remove_dir_all(&self.dir).ok();
         }
+    }
+
+    /// The reader must see a commit made through the writer without taking
+    /// the writer's lock. Without WAL this would show the pre-commit value,
+    /// and a shelf refresh after a page turn would look like a rollback.
+    #[test]
+    fn long_reads_see_the_writers_commits() {
+        let harness = Harness::new("db-reader-sees-writes");
+        harness
+            .library
+            .with(|conn| {
+                Ok(conn.execute(
+                    "INSERT INTO settings (key, value, updated_at) VALUES ('k', 'v1', 1)",
+                    [],
+                )?)
+            })
+            .expect("seed");
+
+        let read = || -> String {
+            harness
+                .library
+                .with_read(|conn| {
+                    Ok(conn.query_row("SELECT value FROM settings WHERE key = 'k'", [], |row| {
+                        row.get(0)
+                    })?)
+                })
+                .expect("read")
+        };
+        assert_eq!(read(), "v1");
+
+        harness
+            .library
+            .with(|conn| Ok(conn.execute("UPDATE settings SET value = 'v2' WHERE key = 'k'", [])?))
+            .expect("write");
+        assert_eq!(read(), "v2", "读连接必须看到写连接刚提交的值");
     }
 
     /// The contract every `with_tx` caller leans on — sync's apply pass most of

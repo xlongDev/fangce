@@ -27,7 +27,9 @@ pub async fn search_query(
     tauri::async_runtime::spawn_blocking(move || {
         index_missing(&library, book_id.as_deref())?;
         let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-        library.with(|conn| search::query(conn, &needle, book_id.as_deref(), limit))
+        // The scan is the one query that can run for seconds. It uses the
+        // reader connection so a page turn can still write while it runs.
+        library.with_read(|conn| search::query(conn, &needle, book_id.as_deref(), limit))
     })
     .await
     .map_err(|err| crate::error::AppError::Message(format!("检索被中断：{err}")))?

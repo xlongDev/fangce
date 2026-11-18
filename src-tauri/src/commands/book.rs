@@ -1,8 +1,9 @@
 //! `book.*` commands: shelf queries, import and mutations.
 //!
-//! Read-only queries stay synchronous: they touch an indexed table and return
-//! in microseconds. Anything that hashes or unlinks files moves to a blocking
-//! task so the UI thread never waits on the disk.
+//! Shelf-scale reads (list, stats, facets) use the library's separate reader
+//! connection on a blocking task, so a big shelf cannot stall the UI thread or
+//! queue a page turn behind it. Point reads and mutations stay on the writer.
+//! Anything that hashes or unlinks files moves to a blocking task as well.
 
 use std::path::PathBuf;
 
@@ -29,8 +30,16 @@ pub const DELETE_PROGRESS_EVENT: &str = "book://delete-progress";
 /// `book.list`
 #[tauri::command]
 #[specta::specta]
-pub fn book_list(state: State<'_, AppState>, query: BookQuery) -> AppResult<Vec<BookSummary>> {
-    state.library.with(|conn| crate::library::repository::list(conn, &query))
+pub async fn book_list(
+    state: State<'_, AppState>,
+    query: BookQuery,
+) -> AppResult<Vec<BookSummary>> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        library.with_read(|conn| crate::library::repository::list(conn, &query))
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("书架查询被中断：{err}")))?
 }
 
 /// `book.get`
@@ -43,8 +52,13 @@ pub fn book_get(state: State<'_, AppState>, id: String) -> AppResult<Option<Book
 /// `book.stats`
 #[tauri::command]
 #[specta::specta]
-pub fn book_stats(state: State<'_, AppState>) -> AppResult<LibraryStats> {
-    state.library.with(crate::library::repository::stats)
+pub async fn book_stats(state: State<'_, AppState>) -> AppResult<LibraryStats> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        library.with_read(crate::library::repository::stats)
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("统计查询被中断：{err}")))?
 }
 
 /// `book.info` — per-book facts for the info sheet: file size, chapter/word
@@ -142,8 +156,13 @@ pub async fn book_storage(state: State<'_, AppState>) -> AppResult<StorageSummar
 /// honest next to the filters it is counted against.
 #[tauri::command]
 #[specta::specta]
-pub fn book_facets(state: State<'_, AppState>, query: BookQuery) -> AppResult<LibraryFacets> {
-    state.library.with(|conn| crate::library::repository::facets(conn, &query))
+pub async fn book_facets(state: State<'_, AppState>, query: BookQuery) -> AppResult<LibraryFacets> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        library.with_read(|conn| crate::library::repository::facets(conn, &query))
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("筛选查询被中断：{err}")))?
 }
 
 /// `book.images` — every image in the book, in reading order, with the
