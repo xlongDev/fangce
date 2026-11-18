@@ -174,8 +174,29 @@ pub fn export(
     password: Option<&str>,
     include_ai: bool,
 ) -> AppResult<()> {
+    // The destination decides the shape, as it always has: a `.ctzx` path is
+    // encrypted, every other extension is a plain `.ctz` archive. The bytes are
+    // built in memory so a batch can put the same pack inside an outer ZIP
+    // without writing a temporary file per book.
     let encrypted = crate::library::has_extension(dest, &[ENCRYPTED_EXT]);
-    if encrypted && password.is_none() {
+    let bytes = archive(library, book_id, encrypted, password, include_ai)?;
+    std::fs::write(dest, bytes)?;
+    Ok(())
+}
+
+/// Builds one pack's bytes without writing them to disk.
+///
+/// `encrypted` is explicit rather than guessed from a path because the caller
+/// here may be an outer archive: a batch of encrypted packs lands in one ZIP,
+/// so there is no per-pack `.ctzx` destination to inspect.
+pub fn archive(
+    library: &Library,
+    book_id: &str,
+    encrypted: bool,
+    password: Option<&str>,
+    include_ai: bool,
+) -> AppResult<Vec<u8>> {
+    if encrypted && password.is_none_or(|value| value.is_empty()) {
         return Err(AppError::InvalidArgument("加密书档需要设置密码".into()));
     }
 
@@ -211,12 +232,10 @@ pub fn export(
     let ai = if include_ai { Some(library.with(|conn| collect_ai(conn, book_id))?) } else { None };
 
     let archive = build(&source, book.format.extension(), &reading, ai.as_ref())?;
-    let bytes = match password {
+    Ok(match password {
         Some(password) if encrypted => encrypt(&archive, password)?,
         _ => archive,
-    };
-    std::fs::write(dest, bytes)?;
-    Ok(())
+    })
 }
 
 /// Reads the book's AI records whole. Conversations are read through the same

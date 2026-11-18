@@ -97,7 +97,7 @@ describe("the export dialog", () => {
   it("says the right thing about each shape, since only one of them travels", async () => {
     const user = userEvent.setup();
     renderDialog();
-    expect(screen.getByText(/别的阅读器也能打开/)).toBeInTheDocument();
+    expect(screen.getByText(/兼容其他阅读器/)).toBeInTheDocument();
 
     await user.click(chip("书档"));
     expect(screen.getByText(/只有本应用认得/)).toBeInTheDocument();

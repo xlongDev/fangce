@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { ipc } from "@/lib/ipc";
+import type { BatchExportKind } from "@/lib/bindings";
 
 /**
  * The shelf's inventory as a CSV at a path the save panel chose.
@@ -24,6 +25,30 @@ export function useBookCatalogExport() {
   return useMutation({
     mutationFn: ({ id, path }: { id: string; path: string }) =>
       ipc.libraryExportBookCatalog(id, path),
+    meta: { silent: true },
+  });
+}
+
+/**
+ * The batch bar's selection as one file: the same four shapes the single-book
+ * dialog offers, with the three file shapes wrapped in one ZIP. One
+ * destination, one write.
+ */
+export function useBatchExport() {
+  return useMutation({
+    mutationFn: ({
+      ids,
+      path,
+      kind,
+      password,
+      includeAi,
+    }: {
+      ids: string[];
+      path: string;
+      kind: BatchExportKind;
+      password?: string;
+      includeAi: boolean;
+    }) => ipc.libraryExportBatch(ids, path, kind, password ?? null, includeAi),
     meta: { silent: true },
   });
 }

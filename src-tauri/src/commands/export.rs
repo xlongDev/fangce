@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
+use crate::library::batch::{BatchExportKind, BatchExportSummary};
 use crate::library::catalog::CatalogImport;
 use crate::state::AppState;
 
@@ -103,6 +104,37 @@ pub async fn library_export_book_catalog(
     let library = state.library.clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::library::catalog::export_book(&library, &id, PathBuf::from(&path).as_path())
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("导出任务被中断：{err}")))?
+}
+
+/// `library.export_batch` — the shelf's current selection as one file.
+///
+/// The batch bar already holds the ids in shelf order; this command only needs
+/// the destination, the shape, and — for encrypted packs — the password. Every
+/// shape is one write, so a skipped book is reported in the summary instead of
+/// failing the whole selection.
+#[tauri::command]
+#[specta::specta]
+pub async fn library_export_batch(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+    path: String,
+    kind: BatchExportKind,
+    password: Option<String>,
+    include_ai: bool,
+) -> AppResult<BatchExportSummary> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::library::batch::export(
+            &library,
+            &ids,
+            PathBuf::from(&path).as_path(),
+            kind,
+            password.as_deref(),
+            include_ai,
+        )
     })
     .await
     .map_err(|err| AppError::Message(format!("导出任务被中断：{err}")))?

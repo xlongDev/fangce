@@ -696,6 +696,27 @@ export const commands = {
   libraryExportBookCatalog: (id: string, path: string, options?: InvokeOptions) =>
     __TAURI_INVOKE<null>("library_export_book_catalog", { id, path }, options),
   /**
+   *  `library.export_batch` — the shelf's current selection as one file.
+   *
+   *  The batch bar already holds the ids in shelf order; this command only needs
+   *  the destination, the shape, and — for encrypted packs — the password. Every
+   *  shape is one write, so a skipped book is reported in the summary instead of
+   *  failing the whole selection.
+   */
+  libraryExportBatch: (
+    ids: string[],
+    path: string,
+    kind: BatchExportKind,
+    password: string | null,
+    includeAi: boolean,
+    options?: InvokeOptions,
+  ) =>
+    __TAURI_INVOKE<BatchExportSummary>(
+      "library_export_batch",
+      { ids, path, kind, password, includeAi },
+      options,
+    ),
+  /**
    *  `library.import_catalog` — restores the books named in a catalogue CSV.
    *
    *  Spawned like the export: a sheet can carry the whole shelf, and the write
@@ -1532,6 +1553,15 @@ export type BarFace =
   | "voice"
   /**  定时关闭. */
   | "timer";
+
+/**  What the one destination file should contain. */
+export type BatchExportKind = "originals" | "packs" | "encrypted" | "catalog";
+
+/**  What actually made it into the file. */
+export type BatchExportSummary = {
+  exported: number;
+  skipped: number;
+};
 
 /**
  *  Formats the library can hold today.

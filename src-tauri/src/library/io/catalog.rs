@@ -319,7 +319,7 @@ pub fn import(library: &Library, path: &Path) -> AppResult<CatalogImport> {
 }
 
 /// The whole file. Pure, so the tests pin the columns without a database.
-fn render(books: &[BookSummary]) -> String {
+pub(super) fn render(books: &[BookSummary]) -> String {
     let mut out = String::from(CSV_BOM);
     out.push_str(HEADER);
     for book in books {

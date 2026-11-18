@@ -1,10 +1,24 @@
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowCounterClockwise, Sparkle, Star, Tag, MagicWand } from "@phosphor-icons/react";
+import {
+  ArrowCounterClockwise,
+  Export,
+  Sparkle,
+  Star,
+  Tag,
+  MagicWand,
+} from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 
-import { GlassButton } from "@/components/glass/button";
+import { GlassButton, GlassIconButton } from "@/components/glass/button";
+import { GlassInput } from "@/components/glass/input";
 import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
+import { Reveal } from "@/components/motion/Reveal";
+import { cn } from "@/lib/cn";
+import { useSavePath } from "@/hooks/useSavePath";
+import { useBatchExport } from "@/hooks/useCatalogExport";
+import { showToast } from "@/stores/toasts";
+import type { BatchExportKind } from "@/lib/bindings";
 import { SPRING, useMotion } from "@/lib/motion";
 import { AiErrorCard } from "@/components/common/AiErrorCard";
 import { useAiConfig } from "@/hooks/useAi";
@@ -15,6 +29,36 @@ import { useGuideBatch } from "@/stores/guideBatch";
 import { BatchFillDialog } from "@/features/library/BatchFillDialog";
 import { AiTagDialog } from "@/features/library/AiTagDialog";
 import type { ShelfSelection } from "@/features/library/useShelfSelection";
+
+/** What a batch of books can become — the same four choices as one book,
+ *  except the three file shapes are wrapped in one ZIP so a batch still has a
+ *  single destination. */
+const BATCH_EXPORTS: ReadonlyArray<{
+  key: BatchExportKind;
+  label: string;
+  hint: string;
+}> = [
+  {
+    key: "originals",
+    label: "原文件",
+    hint: "按书架顺序导出原始文件并打包为 ZIP；保留原格式，兼容其他阅读器。",
+  },
+  {
+    key: "packs",
+    label: "书档",
+    hint: "每本书一个 .ctz，装在一个 ZIP 里：阅读进度、收藏和全部标注，只有本应用认得。",
+  },
+  {
+    key: "encrypted",
+    label: "加密书档",
+    hint: "每本书一个 .ctzx，共用同一个密码，装在一个 ZIP 里。",
+  },
+  {
+    key: "catalog",
+    label: "书目 CSV",
+    hint: "选中行的书单 CSV：补全后的书名、作者、标签、进度与收藏，可在设置页导入恢复。",
+  },
+];
 
 /**
  * The batch bar, and the confirmation it asks for.
@@ -50,6 +94,15 @@ export function ShelfBatchBar({
    *  batch it proposes for is fixed when it opens — a reader who ticks another
    *  book behind the dialog is not asking for a new lookup. */
   const [fillIds, setFillIds] = useState<string[] | null>(null);
+  /** The batch export's ids freeze when the dialog opens, like fill and tags. */
+  const [exportIds, setExportIds] = useState<string[] | null>(null);
+  const [exportKind, setExportKind] = useState<BatchExportKind>("originals");
+  const [exportPassword, setExportPassword] = useState("");
+  // Plain packs expose conversations to anyone who gets the ZIP, so carrying
+  // them is opt-in. Encrypted packs start with them included.
+  const [exportIncludeAi, setExportIncludeAi] = useState(false);
+  const exportBatch = useBatchExport();
+  const { choose: chooseExportPath, error: exportPathError } = useSavePath();
   /** 整架补全的进度。名字避开下面导读批处理那个 `run`。 */
   const fillRun = useFillRun();
 
@@ -118,6 +171,52 @@ export function ShelfBatchBar({
     void cached.refetch();
     setGuideConfirm(true);
   };
+
+  const pickExportKind = (next: BatchExportKind) => {
+    setExportKind(next);
+    setExportIncludeAi(next === "encrypted");
+  };
+
+  const confirmExport = async () => {
+    if (!exportIds) return;
+    const catalog = exportKind === "catalog";
+    const encrypted = exportKind === "encrypted";
+    const packsAi = exportKind === "packs" || encrypted;
+    const chosen = BATCH_EXPORTS.find((entry) => entry.key === exportKind)!;
+    const path = await chooseExportPath({
+      title: catalog ? "批量导出书目" : `批量导出${chosen.label}`,
+      defaultPath: `方册-${chosen.label}.${catalog ? "csv" : "zip"}`,
+      filters: [
+        {
+          name: chosen.label,
+          extensions: [catalog ? "csv" : "zip"],
+        },
+      ],
+    });
+    if (path === null) return;
+    exportBatch.mutate(
+      {
+        ids: exportIds,
+        path,
+        kind: exportKind,
+        password: encrypted ? exportPassword : undefined,
+        includeAi: packsAi && exportIncludeAi,
+      },
+      {
+        onSuccess: ({ exported, skipped }) => {
+          setExportIds(null);
+          showToast(
+            "success",
+            skipped > 0 ? `已导出 ${exported} 本，跳过 ${skipped} 本。` : `已导出 ${exported} 本。`,
+          );
+        },
+      },
+    );
+  };
+
+  const encryptedExport = exportKind === "encrypted";
+  const packsAiExport = exportKind === "packs" || encryptedExport;
+  const exportReady = !encryptedExport || exportPassword.length > 0;
 
   return (
     <>
@@ -262,6 +361,23 @@ export function ShelfBatchBar({
                       {/* Same mark as the reader's AI 导读 button. */}
                       <Sparkle size={13} /> 生成导读
                     </GlassButton>
+                    {isDesktopRuntime && (
+                      <GlassIconButton
+                        size="sm"
+                        variant="subtle"
+                        label="导出"
+                        title="批量导出"
+                        disabled={selection.count === 0}
+                        onClick={() => {
+                          setExportKind("originals");
+                          setExportPassword("");
+                          setExportIncludeAi(false);
+                          setExportIds(selection.selectedBooks.map((book) => book.id));
+                        }}
+                      >
+                        <Export size={13} />
+                      </GlassIconButton>
+                    )}
                     <GlassButton
                       size="sm"
                       variant="ghost"
@@ -361,6 +477,96 @@ export function ShelfBatchBar({
               开始生成
             </GlassButton>
           </div>
+        </div>
+      </GlassDialog>
+
+      <GlassDialog
+        open={exportIds !== null}
+        onOpenChange={(next) => {
+          if (!next && !exportBatch.isPending) setExportIds(null);
+        }}
+        title="批量导出"
+        description={`选中的 ${exportIds?.length ?? 0} 本会写进一个文件。`}
+        widthClass="w-[min(92vw,440px)]"
+      >
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-1.5">
+            {BATCH_EXPORTS.map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                aria-pressed={exportKind === key}
+                disabled={exportBatch.isPending}
+                onClick={() => pickExportKind(key)}
+                className={cn(
+                  "border-hairline text-text-2 hover:text-text-1 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
+                  exportKind === key && "border-accent text-accent",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="text-text-3 text-xs">
+            {BATCH_EXPORTS.find((entry) => entry.key === exportKind)!.hint}
+          </p>
+
+          {encryptedExport && (
+            <Reveal>
+              <GlassInput
+                type="password"
+                value={exportPassword}
+                onChange={(event) => setExportPassword(event.target.value)}
+                placeholder="设置一个打开书档的密码"
+                aria-label="书档密码"
+                disabled={exportBatch.isPending}
+              />
+              <p className="text-text-3 mt-1.5 text-xs">
+                这批书档共用一个密码；密码不会存进书库，忘了就无法恢复。
+              </p>
+            </Reveal>
+          )}
+
+          {packsAiExport && (
+            <label className="flex w-full cursor-pointer items-start gap-2 text-left">
+              <input
+                type="checkbox"
+                checked={exportIncludeAi}
+                onChange={(event) => setExportIncludeAi(event.target.checked)}
+                disabled={exportBatch.isPending}
+                className="border-hairline accent-accent focus-visible:focus-ring mt-0.5 h-4 w-4 shrink-0 rounded"
+              />
+              <span className="text-text-2 text-xs leading-relaxed">
+                包含 AI 导读与对话
+                <span className="text-text-3 block">
+                  {encryptedExport
+                    ? "和每个书档一起加密；导入后落在新书上，生成时间一并保留。"
+                    : "明文书档会带上对话原文（可能含私人提问）；默认不带，只在迁移记录时勾选。"}
+                </span>
+              </span>
+            </label>
+          )}
+
+          {(exportPathError || exportBatch.error) && (
+            <p className="text-danger text-xs">{exportPathError ?? String(exportBatch.error)}</p>
+          )}
+        </div>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <GlassButton
+            variant="subtle"
+            disabled={exportBatch.isPending}
+            onClick={() => setExportIds(null)}
+          >
+            取消
+          </GlassButton>
+          <GlassButton
+            variant="primary"
+            disabled={exportBatch.isPending || !exportReady}
+            onClick={() => void confirmExport()}
+          >
+            {exportBatch.isPending ? "正在导出…" : "选择保存位置"}
+          </GlassButton>
         </div>
       </GlassDialog>
     </>

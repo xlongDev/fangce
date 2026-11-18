@@ -24,7 +24,7 @@ const KINDS = [
   {
     key: "original",
     label: "原文件",
-    hint: "就是导入时的那本书本身，别的阅读器也能打开",
+    hint: "导出导入时的原始文件，保留原格式，兼容其他阅读器。",
   },
   { key: "pack", label: "书档", hint: "带上阅读进度、收藏和全部标注，只有本应用认得" },
   { key: "encrypted", label: "加密书档", hint: "同上，再加一个密码" },
