@@ -8,7 +8,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::error::{AppError, AppResult};
-use crate::library::source::{self, SourceBook, SourceChapter, SourceDef, SourceEntry};
+use crate::library::source::{self, SourceBook, SourceDef, SourceEntry};
 use crate::state::AppState;
 
 /// Progress of one book download.
@@ -62,30 +62,6 @@ pub async fn source_search(
     }
     let (def, hosts, client) = prepare(&state, &source_id)?;
     source::search(&client, &def, &hosts, &keyword).await
-}
-
-/// `source.book` — book detail for a URL from the search results.
-#[tauri::command]
-#[specta::specta]
-pub async fn source_book(
-    state: State<'_, AppState>,
-    source_id: String,
-    book_url: String,
-) -> AppResult<SourceBook> {
-    let (def, hosts, client) = prepare(&state, &source_id)?;
-    source::book_detail(&client, &def, &hosts, &book_url).await
-}
-
-/// `source.chapters`
-#[tauri::command]
-#[specta::specta]
-pub async fn source_chapters(
-    state: State<'_, AppState>,
-    source_id: String,
-    book_url: String,
-) -> AppResult<Vec<SourceChapter>> {
-    let (def, hosts, client) = prepare(&state, &source_id)?;
-    source::chapters(&client, &def, &hosts, &book_url).await
 }
 
 /// `source.download` — walks the whole book into the library and reports

@@ -974,12 +974,6 @@ export const commands = {
   /**  `source.search` */
   sourceSearch: (sourceId: string, keyword: string, options?: InvokeOptions) =>
     __TAURI_INVOKE<SourceBook[]>("source_search", { sourceId, keyword }, options),
-  /**  `source.book` — book detail for a URL from the search results. */
-  sourceBook: (sourceId: string, bookUrl: string, options?: InvokeOptions) =>
-    __TAURI_INVOKE<SourceBook>("source_book", { sourceId, bookUrl }, options),
-  /**  `source.chapters` */
-  sourceChapters: (sourceId: string, bookUrl: string, options?: InvokeOptions) =>
-    __TAURI_INVOKE<SourceChapter[]>("source_chapters", { sourceId, bookUrl }, options),
   /**
    *  `source.download` — walks the whole book into the library and reports
    *  progress per chapter. The command resolves only when the book is on the
@@ -3642,13 +3636,6 @@ export type SourceBook = {
   intro: string;
   cover: string;
   /**  Book-detail URL, absolute or relative to the source's base URL. */
-  url: string;
-};
-
-/**  One chapter of a book's table of contents. */
-export type SourceChapter = {
-  title: string;
-  /**  Absolute URL; resolved when the list is fetched. */
   url: string;
 };
 
