@@ -59,9 +59,11 @@ pub fn ai_conversation_delete(state: State<'_, AppState>, id: String) -> AppResu
 
 /// `ai.conversationAppend` — stores one finished turn.
 ///
-/// Called by the renderer twice per exchange: once for the question as it is
-/// sent, once for the answer when the stream completes. A stream that failed
-/// half way through therefore leaves nothing behind.
+/// Called by the renderer twice per exchange, once for the question and once
+/// for the answer, after the stream completed. The renderer writes neither on
+/// a failed stream, so an exchange never leaves a question without a reply.
+/// Each call is one row; pairing is the caller's job because only it knows the
+/// stream finished.
 #[tauri::command]
 #[specta::specta]
 #[allow(clippy::too_many_arguments)]

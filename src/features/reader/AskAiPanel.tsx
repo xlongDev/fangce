@@ -230,10 +230,11 @@ export function AskAiPanel({
       }
     }
 
-    await appendMessage
-      .mutateAsync({ id, role: "user", content: trimmed })
-      .catch((error: unknown) => showToast("error", String(error)));
-
+    // A failed stream must leave nothing behind. The question used to be
+    // stored here, before the answer existed, so a stop or a network failure
+    // left a row with a question and no reply. Both are now written together
+    // only once the stream is known to have completed — the same rule the
+    // renderer already follows for what it keeps on screen.
     const answer = await chat.ask(trimmed, {
       turns: turnsToKeep,
       // The chapter is packed around the first question only: after that the
@@ -254,10 +255,13 @@ export function AskAiPanel({
     });
 
     // A failed stream is already on screen; storing half an answer would make it
-    // look like the model said something it did not.
+    // look like the model said something it did not. Storing just the question
+    // was the same mistake from the other side — hence both go in together, or
+    // neither does.
     if (answer) {
-      await appendMessage
-        .mutateAsync({
+      try {
+        await appendMessage.mutateAsync({ id, role: "user", content: trimmed });
+        await appendMessage.mutateAsync({
           id,
           role: "assistant",
           content: answer.content,
@@ -265,8 +269,13 @@ export function AskAiPanel({
           citations: answer.citations,
           usage: answer.usage,
           tools: answer.tools,
-        })
-        .catch((error: unknown) => showToast("error", String(error)));
+        });
+      } catch (error) {
+        // A half-written pair is exactly what this avoids: if the question
+        // failed, do not store an orphan answer; if the answer failed, the
+        // question is already on screen but can be retried by asking again.
+        showToast("error", String(error));
+      }
     }
   };
 
