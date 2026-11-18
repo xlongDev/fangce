@@ -274,14 +274,25 @@ pub fn local_books(conn: &rusqlite::Connection) -> AppResult<Vec<LocalBook>> {
 }
 
 /// Applies one downloaded position; `false` when the book is not imported here.
+///
+/// `location` is the engine's own anchor (a CFI for foliate). The state file
+/// carries only a fraction, so a downloaded position cannot supply one: the
+/// old anchor must be cleared or reopening the book would resume from it and
+/// immediately write that stale position back over the cloud's.
+///
+/// The `progress` guard keeps an Unchanged or Uploaded row untouched. Both
+/// already hold the winning value locally; rewriting either would stamp
+/// `last_read_at` with a cloud clock that is not this device's read time.
+/// `1e-9` is the same tolerance `merge` uses to call two positions equal,
+/// loose enough to survive a JSON round trip, far below any real turn.
 pub fn apply_downloaded(
     conn: &rusqlite::Connection,
     hash: &str,
     book: &RemoteBook,
 ) -> AppResult<bool> {
     let changed = conn.execute(
-        "UPDATE books SET progress = ?1, last_read_at = ?2, updated_at = ?3
-          WHERE content_hash = ?4",
+        "UPDATE books SET progress = ?1, last_read_at = ?2, updated_at = ?3, location = NULL
+          WHERE content_hash = ?4 AND ABS(progress - ?1) > 1e-9",
         rusqlite::params![
             book.progress.clamp(0.0, 1.0),
             book.updated_at,
@@ -582,19 +593,18 @@ pub async fn run(library: &Library, config: &SyncConfig) -> AppResult<SyncReport
     let device = device_id(library)?;
     let remote = dav.pull().await?;
 
-    let (state, report) = {
-        // One lock, four reads. The merge picks a winner per row by timestamp,
-        // so those rows have to come from one snapshot: reading them in
-        // separate turns lets a concurrent local edit land between two of them
-        // and get merged against a half-updated picture.
-        let (local, hashes, local_annotations, local_bookmarks) = library.with(|conn| {
-            Ok((
-                local_books(conn)?,
-                local_hashes(conn)?,
-                annotations::for_sync(conn)?,
-                bookmarks::for_sync(conn)?,
-            ))
-        })?;
+    // One transaction: read the snapshot, merge, and write the winners back.
+    // Two separate locks (a read, then a write) let a page turn land between
+    // them and get overwritten by a merge decided against the stale snapshot.
+    // `dav.pull`/`dav.push` stay outside — network IO must not hold the lock,
+    // and the whole point is that the state file is read before we start.
+    let (state, report) = library.with_tx(|tx| {
+        let (local, hashes, local_annotations, local_bookmarks) = (
+            local_books(tx)?,
+            local_hashes(tx)?,
+            annotations::for_sync(tx)?,
+            bookmarks::for_sync(tx)?,
+        );
 
         let (mut state, books) = merge(&local, remote, &device, crate::library::now_seconds());
 
@@ -606,31 +616,26 @@ pub async fn run(library: &Library, config: &SyncConfig) -> AppResult<SyncReport
             merge_bookmarks(local_bookmarks, std::mem::take(&mut state.bookmarks), &hashes);
         state.bookmarks = bookmarks_state;
 
-        // Books, highlights and bookmarks are one logical state. Applied
-        // statement by statement, a failure on any single row would commit the
-        // rows before it and drop the rest — and the next pull would then
-        // re-apply that winning half on top of local rows that never lost.
-        library.with_tx(|tx| {
-            for (hash, book) in &state.books {
-                apply_downloaded(tx, hash, book)?;
-            }
-            for entry in &annotation_upserts {
-                annotations::apply_remote(tx, entry)?;
-            }
-            for id in &annotation_deletes {
-                annotations::remove(tx, id)?;
-            }
-            for entry in &bookmark_upserts {
-                bookmarks::apply_remote(tx, entry)?;
-            }
-            for id in &bookmark_deletes {
-                bookmarks::remove(tx, id)?;
-            }
-            Ok(())
-        })?;
-
-        (state, SyncReport { books, annotations: annotation_tally, bookmarks: bookmark_tally })
-    };
+        // Books, highlights and bookmarks are one logical state. All writes
+        // are in this one transaction, so a failure on any row drops them all
+        // and the next pull sees the untouched local picture.
+        for (hash, book) in &state.books {
+            apply_downloaded(tx, hash, book)?;
+        }
+        for entry in &annotation_upserts {
+            annotations::apply_remote(tx, entry)?;
+        }
+        for id in &annotation_deletes {
+            annotations::remove(tx, id)?;
+        }
+        for entry in &bookmark_upserts {
+            bookmarks::apply_remote(tx, entry)?;
+        }
+        for id in &bookmark_deletes {
+            bookmarks::remove(tx, id)?;
+        }
+        Ok((state, SyncReport { books, annotations: annotation_tally, bookmarks: bookmark_tally }))
+    })?;
     dav.push(&state).await?;
     Ok(report)
 }
@@ -1018,5 +1023,85 @@ mod tests {
         let config = config(&harness.library).expect("config");
         assert_eq!(config.username, "reader@example.com");
         assert_eq!(config.password, "app-password");
+    }
+
+    fn remote(progress: f64, at: i64) -> RemoteBook {
+        RemoteBook { progress, updated_at: at, device_id: "other".into(), title: "三体".into() }
+    }
+
+    #[test]
+    fn a_downloaded_position_clears_the_stale_anchor() {
+        let harness = Harness::new("sync-download-clears-location");
+        harness
+            .library
+            .with(|conn| {
+                conn.execute(
+                    "INSERT INTO books (id, title, sort_title, format, content_hash, file_path, \
+                     file_size, added_at, updated_at, progress, location, last_read_at) \
+                     VALUES ('b', 'T', 't', 'txt', 'h', 'p', 1, 1, 1, 0.2, 'epubcfi(/6/4)', 100)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .expect("seed book");
+
+        let applied = harness
+            .library
+            .with(|conn| apply_downloaded(conn, "h", &remote(0.8, 400)))
+            .expect("apply");
+        assert!(applied, "书已导入，必须应用");
+
+        let (progress, location, last_read): (f64, Option<String>, Option<i64>) = harness
+            .library
+            .with(|conn| {
+                Ok(conn.query_row(
+                    "SELECT progress, location, last_read_at FROM books WHERE content_hash = 'h'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?)
+            })
+            .expect("read back");
+        assert!((progress - 0.8).abs() < f64::EPSILON, "云端进度未写入");
+        assert_eq!(location, None, "旧 CFI 会抢占重开位置，必须清空");
+        assert_eq!(last_read, Some(400), "最近在读时间取云端写入时刻");
+    }
+
+    #[test]
+    fn an_unchanged_position_is_not_rewritten() {
+        let harness = Harness::new("sync-unchanged-keeps-clock");
+        harness
+            .library
+            .with(|conn| {
+                conn.execute(
+                    "INSERT INTO books (id, title, sort_title, format, content_hash, file_path, \
+                     file_size, added_at, updated_at, progress, location, last_read_at) \
+                     VALUES ('b', 'T', 't', 'txt', 'h', 'p', 1, 1, 1, 0.5, 'epubcfi(/6/4)', 100)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .expect("seed book");
+
+        // Only the clock differs: merge calls this Unchanged and keeps the
+        // cloud entry. apply_downloaded must leave the row alone, or every sync
+        // rolls "recently read" back to the other device's timestamp.
+        let applied = harness
+            .library
+            .with(|conn| apply_downloaded(conn, "h", &remote(0.5, 400)))
+            .expect("apply");
+        assert!(!applied, "进度相同不应写回");
+
+        let (location, last_read): (Option<String>, Option<i64>) = harness
+            .library
+            .with(|conn| {
+                Ok(conn.query_row(
+                    "SELECT location, last_read_at FROM books WHERE content_hash = 'h'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?)
+            })
+            .expect("read back");
+        assert_eq!(location.as_deref(), Some("epubcfi(/6/4)"), "本机锚点不能被清");
+        assert_eq!(last_read, Some(100), "本机阅读时刻不能被云端时钟覆盖");
     }
 }
