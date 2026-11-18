@@ -11,14 +11,22 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
  * the real one calls, because reaching `fail` through the real one would mean
  * reaching the service.
  */
-const { failRef } = vi.hoisted(() => ({
+const { failRef, boundaryRef } = vi.hoisted(() => ({
   failRef: { current: null as ((message: string) => void) | null },
+  boundaryRef: {
+    current: null as
+      ((spot: { unit: number; charIndex: number; charLength: number } | null) => void) | null,
+  },
 }));
 
 vi.mock("./edge", () => ({
   useEdgeVoices: () => ({ voices: [], error: null }),
-  createEdgeEngine: (events: { fail: (message: string) => void }) => {
+  createEdgeEngine: (events: {
+    fail: (message: string) => void;
+    boundary: (spot: { unit: number; charIndex: number; charLength: number } | null) => void;
+  }) => {
     failRef.current = events.fail;
+    boundaryRef.current = events.boundary;
     return {
       play: vi.fn(),
       stop: vi.fn(),
@@ -52,7 +60,24 @@ beforeAll(() => {
   });
 });
 
-describe("useTts stop", () => {
+describe("useTts", () => {
+  it("announces every word to a watcher, even without the word-level wash", () => {
+    const { result } = renderHook(() => useTts());
+    const watch = vi.fn();
+    act(() => {
+      result.current.onBoundary(watch);
+      result.current.setVoice(EDGE_VOICE);
+      result.current.play(["第一句。", "第二句。"], 0);
+    });
+
+    act(() => boundaryRef.current?.({ unit: 0, charIndex: 2, charLength: 1 }));
+
+    // The page follower needs words at sentence-level granularity too; only
+    // React state is gated by the wash.
+    expect(watch).toHaveBeenCalledWith({ unit: 0, charIndex: 2, charLength: 1 });
+    expect(result.current.boundary).toBeNull();
+  });
+
   it("clears the failure the player is showing", () => {
     const { result } = renderHook(() => useTts());
 

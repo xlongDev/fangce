@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { FoliateHandle } from "@/features/reader/FoliateBookView";
-import type { SpeechUnit } from "@/features/reader/speech";
+import type { SpeechBoundary, SpeechUnit } from "@/features/reader/speech";
 import type { Tts } from "@/features/reader/tts";
 import { useReadAloud, type ReadAloudOptions } from "@/hooks/useReadAloud";
 import { useSpeechSession } from "@/stores/speech";
@@ -37,6 +37,7 @@ function fakeTts(overrides: Partial<Tts> = {}): Tts {
     setRate: vi.fn(),
     setVoice: vi.fn(),
     boundaryAt: vi.fn(() => null),
+    onBoundary: vi.fn(() => () => {}),
     ...overrides,
   };
 }
@@ -55,6 +56,7 @@ function fakeHandle(overrides: Partial<Record<string, unknown>> = {}): FoliateHa
     clearTts: vi.fn(),
     focusUnit: vi.fn(),
     paintSpan: vi.fn(),
+    followUnit: vi.fn(),
     ...overrides,
   } as unknown as FoliateHandle;
 }
@@ -445,6 +447,32 @@ describe("useReadAloud", () => {
     expect(onFinish).not.toBe(options.onChapterEnd);
     expect(tts.play).toHaveBeenCalledWith(["A", "B"], 0, onFinish);
     expect(result.current.units).toEqual(units);
+  });
+
+  it("follows a word that crosses onto the next page mid-sentence", async () => {
+    const units: SpeechUnit[] = [{ text: "第一句跨页的后面。", source: 0, start: 0, end: 9 }];
+    const listener: { current: ((spot: SpeechBoundary | null) => void) | null } = { current: null };
+    const onBoundary = vi.fn((watch: (spot: SpeechBoundary | null) => void) => {
+      listener.current = watch;
+      return () => {
+        listener.current = null;
+      };
+    });
+    const followUnit = vi.fn();
+    const readFrom = vi.fn(() => Promise.resolve(units));
+    const { result } = setup({
+      useFoliate: true,
+      foliateRef: { current: fakeHandle({ readFrom, followUnit }) },
+      tts: fakeTts({ onBoundary }),
+    });
+    await act(async () => result.current.toggle());
+
+    // The sentence is one utterance: `unit` never changes while these words
+    // land, so only the boundary can turn the page in time.
+    act(() => listener.current?.({ unit: 0, charIndex: 3, charLength: 2 }));
+
+    expect(listener.current).not.toBeNull();
+    expect(followUnit).toHaveBeenCalledWith(units[0], { start: 3, end: 5 });
   });
 
   it("stops the voice when the section it asked for came back empty", async () => {

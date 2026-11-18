@@ -166,6 +166,11 @@ declare module "foliate-js/view.js" {
     getContents(): { index: number; doc: Document; overlayer?: FoliateOverlayer }[];
     /** Continuous-scroll surface reads for the auto-scroll loop. */
     readonly scrolled: boolean;
+    /** Width of one page column on the scroll axis, in CSS pixels. */
+    readonly size: number;
+    /** Which box axis pages advance along: `width` horizontal, `height` for
+     *  vertical writing. */
+    readonly sideProp: "width" | "height";
     /** Scroll offset of the paginator's scrollport (get/set). */
     containerPosition: number;
     /** Sub-pixel scroll remainder, carried as a composited transform so slow

@@ -367,6 +367,28 @@ export function useReadAloud({
   ]);
 
   /**
+   * Follow a word that crosses onto the next page *inside* one sentence.
+   *
+   * `unit` only moves at an utterance boundary, so anchoring on it alone leaves
+   * the old page up while the voice finishes a sentence on the next one. The
+   * engine reports each word here without a React state update — a word at a
+   * time is far too often to re-render the reader, and all this needs to know
+   * is whether the current word is still on the page being shown.
+   */
+  useEffect(() => {
+    if (aiReading || !useFoliate) return;
+    return tts.onBoundary((spot) => {
+      if (spot === null) return;
+      const at = foliateUnits[spot.unit];
+      const handle = foliateRef.current;
+      if (!at || !handle) return;
+      const head = speechTrim?.unit === spot.unit ? speechTrim.trim : 0;
+      const word = washSpan(spot.unit, at, spot, "word", head);
+      if (word) handle.followUnit(at, word);
+    });
+  }, [tts, aiReading, useFoliate, foliateUnits, speechTrim, foliateRef]);
+
+  /**
    * Read-aloud for foliate books: one section at a time. foliate owns the
    * scrollport and the block list, so a finished section hands the voice to
    * the next one — there is no continuous chapter to walk like in prose.

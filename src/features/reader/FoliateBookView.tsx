@@ -12,7 +12,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ipc, isDesktopRuntime } from "../../lib/ipc";
 import { demoBookBytes, demoEnabled } from "../../lib/demo";
 import { Overlayer } from "foliate-js/overlayer.js";
-import type { FoliateRelocate, View, makeBook } from "foliate-js/view.js";
+import type { FoliateRelocate, FoliateRenderer, View, makeBook } from "foliate-js/view.js";
 import type { Annotation } from "@/types/ipc";
 import { pickFoliateHit } from "@/features/search/snippet";
 import { OverlayPortal } from "@/components/glass/overlay";
@@ -222,6 +222,10 @@ export type FoliateHandle = {
    *  painting: at word granularity nothing is washed until the voice says
    *  where it is, so the sentence never flashes first. */
   focusUnit: (unit: SpeechUnit, span: Span | null | "block") => void;
+  /** Follows a word inside a unit once the voice crosses into the next page.
+   *  Only scrolls when the word is off the page already on screen, so a word
+   *  inside the current sentence never yanks the spread around. */
+  followUnit: (unit: SpeechUnit, span: Span) => void;
   /** Re-washes a narrower run of the unit already in view, without scrolling
    *  — the word-level update that lands several times inside one sentence. */
   paintSpan: (unit: SpeechUnit, span: Span) => void;
@@ -836,6 +840,37 @@ const rangeInHostView = (host: HTMLElement, range: Range): boolean => {
     left + box.width > hostBox.left + 2 &&
     left < hostBox.right - 2
   );
+};
+
+/**
+ * Whether a run is on the page the paginator is already showing — not merely
+ * inside the two-page spread. Read-aloud follows a word at a time; anchoring
+ * every word would re-anchor and report a relocation on each one, so only a
+ * word that has moved off the current page is worth a scroll.
+ */
+const rangeOnPage = (range: Range, renderer: FoliateRenderer, host: HTMLElement): boolean => {
+  if (renderer.scrolled) return rangeInHostView(host, range);
+  // `size` is the scrollport's width: a whole two-page spread in a double
+  // layout, not one column. Its bounding box is the spread actually on screen;
+  // the host's own box includes the side margins foliates keeps outside it.
+  const page = (
+    renderer.shadowRoot?.getElementById("container") ?? renderer
+  ).getBoundingClientRect();
+  const size = renderer.size;
+  if (size <= 0) return true;
+  const rect = range.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return true;
+  const frame =
+    range.startContainer.ownerDocument?.defaultView?.frameElement?.getBoundingClientRect();
+  const left = rect.left + (frame?.left ?? 0);
+  const top = rect.top + (frame?.top ?? 0);
+  if (renderer.sideProp === "height") {
+    return top < page.top + size && top + rect.height > page.top;
+  }
+  if (renderer.getAttribute("dir") === "rtl") {
+    return left + rect.width > page.right - size && left < page.right;
+  }
+  return left < page.left + size && left + rect.width > page.left;
 };
 
 /** A node of the book's nested TOC (structurally foliate's own shape). */
@@ -2099,6 +2134,15 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         if (!block) return;
         const range = rangeIn(block, span.start, span.end);
         if (range) paintTts(range);
+      },
+      followUnit: (unit, span) => {
+        const renderer = viewRef.current?.renderer;
+        const block = blocksRef.current[unit.source];
+        const host = hostRef.current;
+        if (!renderer || !block || !host) return;
+        const range = rangeIn(block, span.start, span.end);
+        if (!range || rangeOnPage(range, renderer, host)) return;
+        void renderer.scrollToAnchor(range);
       },
       clearTts,
     }),

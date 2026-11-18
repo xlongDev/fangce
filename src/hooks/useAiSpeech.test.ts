@@ -20,6 +20,7 @@ function fakeTts(overrides: Partial<Tts> = {}): Tts {
     setRate: vi.fn(),
     setVoice: vi.fn(),
     boundaryAt: vi.fn(() => null),
+    onBoundary: vi.fn(() => () => {}),
     ...overrides,
   };
 }
