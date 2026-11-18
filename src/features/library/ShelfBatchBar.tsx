@@ -17,6 +17,7 @@ import { Reveal } from "@/components/motion/Reveal";
 import { cn } from "@/lib/cn";
 import { useSavePath } from "@/hooks/useSavePath";
 import { useBatchExport } from "@/hooks/useCatalogExport";
+import { navigateTo } from "@/features/command/registerCoreCommands";
 import { showToast } from "@/stores/toasts";
 import type { BatchExportKind } from "@/lib/bindings";
 import { SPRING, useMotion } from "@/lib/motion";
@@ -550,6 +551,22 @@ export function ShelfBatchBar({
           {(exportPathError || exportBatch.error) && (
             <p className="text-danger text-xs">{exportPathError ?? String(exportBatch.error)}</p>
           )}
+
+          <p className="text-text-3 text-xs">
+            整库迁移请用{" "}
+            <button
+              type="button"
+              disabled={exportBatch.isPending}
+              onClick={() => {
+                setExportIds(null);
+                navigateTo("/settings#backup");
+              }}
+              className="text-accent focus-visible:focus-ring rounded hover:underline"
+            >
+              设置 › 书库备份
+            </button>
+            。
+          </p>
         </div>
 
         <div className="mt-5 flex justify-end gap-2">

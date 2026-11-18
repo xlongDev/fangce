@@ -8,6 +8,7 @@ import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
 import { Reveal } from "@/components/motion/Reveal";
 import { useSavePath } from "@/hooks/useSavePath";
+import { navigateTo } from "@/features/command/registerCoreCommands";
 import { filename } from "@/lib/filename";
 import type { BookSummary } from "@/types/ipc";
 
@@ -181,6 +182,21 @@ export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: Exp
         )}
 
         {message && <p className="text-danger text-xs">{message}</p>}
+
+        <p className="text-text-3 text-xs">
+          整库迁移请用{" "}
+          <button
+            type="button"
+            onClick={() => {
+              onCancel();
+              navigateTo("/settings#backup");
+            }}
+            className="text-accent focus-visible:focus-ring rounded hover:underline"
+          >
+            设置 › 书库备份
+          </button>
+          。
+        </p>
       </div>
 
       <div className="mt-5 flex justify-end gap-2">

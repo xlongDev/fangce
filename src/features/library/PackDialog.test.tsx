@@ -107,6 +107,21 @@ describe("the export dialog", () => {
     expect(screen.getByText(/可在设置页导入恢复/)).toBeInTheDocument();
   });
 
+  it("offers the backup section for a whole-library move", async () => {
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    window.addEventListener("fangce:navigate", onNavigate);
+    try {
+      renderDialog();
+      await user.click(screen.getByRole("button", { name: "设置 › 书库备份" }));
+      expect(onNavigate).toHaveBeenCalledOnce();
+      const event = onNavigate.mock.calls[0]?.[0] as CustomEvent<string> | undefined;
+      expect(event?.detail).toBe("/settings#backup");
+    } finally {
+      window.removeEventListener("fangce:navigate", onNavigate);
+    }
+  });
+
   it("keeps the extension honest for a format whose own name is not its extension", async () => {
     const user = userEvent.setup();
     renderDialog({ format: "markdown" });

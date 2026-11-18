@@ -3,6 +3,7 @@
 //! One failure never aborts the batch. Each file reports its own outcome so the
 //! UI can say "3 imported, 1 duplicate, 1 failed" instead of losing the run.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use zip::ZipArchive;
 
 use crate::db::{Layout, Library};
 use crate::document::{self, BookFormat, detect_format};
@@ -75,10 +77,19 @@ pub fn import_files(
     password: Option<&str>,
     on_progress: &(dyn Fn(usize, usize, &str) + Sync),
 ) -> Vec<ImportOutcome> {
-    let total = paths.len();
+    // A batch-pack export is one ZIP holding many `.ctz` / `.ctzx` files.
+    // Expand it into real files first so each inner pack keeps its own outcome
+    // and the progress counter reports books, not archive containers.
+    let work = expand_import_paths(layout, paths);
+    let total = work.len();
     if total == 0 {
         return Vec::new();
     }
+    let staged_dirs: HashSet<PathBuf> = work
+        .iter()
+        .filter(|(_, staged)| *staged)
+        .filter_map(|(path, _)| path.parent().map(Path::to_path_buf))
+        .collect();
     let next = AtomicUsize::new(0);
     let done = AtomicUsize::new(0);
     let finished: Mutex<Vec<(usize, ImportOutcome)>> = Mutex::new(Vec::with_capacity(total));
@@ -88,7 +99,7 @@ pub fn import_files(
             scope.spawn(|| {
                 loop {
                     let index = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(path) = paths.get(index) else { break };
+                    let Some((path, _)) = work.get(index) else { break };
                     let outcome = match guarded(|| import_one(library, layout, path, password)) {
                         Ok(result) => result,
                         Err(err) => {
@@ -115,9 +126,77 @@ pub fn import_files(
         }
     });
 
+    // The staged packs are ours, unlike anything the reader handed us. Drop
+    // the directories after the last worker is done, whichever packs failed.
+    for dir in staged_dirs {
+        if let Err(err) = fs::remove_dir_all(&dir) {
+            tracing::warn!(path = %dir.display(), error = %err, "清理批量书档临时目录失败");
+        }
+    }
+
     let mut finished = finished.into_inner().unwrap_or_else(|err| err.into_inner());
     finished.sort_by_key(|(index, _)| *index);
     finished.into_iter().map(|(_, outcome)| outcome).collect()
+}
+
+/// Turns a batch-pack archive into staged pack files the ordinary pipeline can
+/// import. Anything else stays untouched: a normal `.zip` is still an
+/// unsupported book, and the existing per-file failure says so.
+fn expand_import_paths(layout: &Layout, paths: &[PathBuf]) -> Vec<(PathBuf, bool)> {
+    paths
+        .iter()
+        .flat_map(|path| match batch_pack_members(layout, path) {
+            Ok(members) if !members.is_empty() => {
+                members.into_iter().map(|member| (member, true)).collect()
+            }
+            _ => vec![(path.clone(), false)],
+        })
+        .collect()
+}
+
+/// `Some` paths only for an archive whose every entry is a top-level pack.
+/// No manifest is needed: the shape is the signature, and it keeps archives
+/// exported before this recognition existed importable too.
+fn batch_pack_members(layout: &Layout, path: &Path) -> AppResult<Vec<PathBuf>> {
+    if !crate::library::has_extension(path, &["zip"]) {
+        return Ok(Vec::new());
+    }
+    let mut archive = ZipArchive::new(fs::File::open(path)?)?;
+    let mut names = Vec::with_capacity(archive.len());
+    for index in 0..archive.len() {
+        let name = archive.by_index(index)?.name()?.to_string();
+        // Both separators have to be rejected before the name becomes a file
+        // path: `\` is an ordinary character on Unix but a separator on Windows.
+        if name.contains('/') || name.contains('\\') {
+            return Ok(Vec::new());
+        }
+        if !name.ends_with(".ctz") && !name.ends_with(".ctzx") {
+            return Ok(Vec::new());
+        }
+        names.push(name);
+    }
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let dir = layout.books_dir.join(format!("batch-import-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&dir)?;
+    let staged = (|| -> AppResult<Vec<PathBuf>> {
+        let mut staged = Vec::with_capacity(names.len());
+        for (index, name) in names.iter().enumerate() {
+            let mut entry = archive.by_index(index)?;
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes)?;
+            let dest = dir.join(name);
+            fs::write(&dest, bytes)?;
+            staged.push(dest);
+        }
+        Ok(staged)
+    })();
+    if staged.is_err() {
+        fs::remove_dir_all(&dir).ok();
+    }
+    staged
 }
 
 /// Runs one file's pipeline with a panic turned into that file's failure.
@@ -868,6 +947,42 @@ mod tests {
             panic!("缺少密码必须报失败，实际 {:?}", outcomes[0]);
         };
         assert!(message.contains("密码"), "{message}");
+    }
+
+    #[test]
+    fn a_batch_pack_archive_imports_every_pack_inside() {
+        use crate::library::batch::{BatchExportKind, export};
+
+        let harness = Harness::new("import-batch-packs");
+        let a = epub(&harness.dir, "a.epub", "甲");
+        let b = epub(&harness.dir, "b.epub", "乙");
+        harness.import(&[a, b]);
+        let ids = harness.shelve().into_iter().map(|book| book.id).collect::<Vec<_>>();
+
+        let plain = harness.dir.join("plain.zip");
+        export(&harness.library, &ids, &plain, BatchExportKind::Packs, None, false)
+            .expect("plain batch");
+        let outcomes = harness.import(&[plain]);
+        assert_eq!(outcomes.len(), 2, "{outcomes:?}");
+        assert!(outcomes.iter().all(|outcome| outcome.is_success()), "{outcomes:?}");
+
+        let locked = harness.dir.join("locked.zip");
+        export(&harness.library, &ids, &locked, BatchExportKind::Encrypted, Some("pw"), false)
+            .expect("encrypted batch");
+        let outcomes =
+            import_files(&harness.library, &harness.layout, &[locked], Some("pw"), &|_, _, _| {});
+        assert_eq!(outcomes.len(), 2, "{outcomes:?}");
+        assert!(outcomes.iter().all(|outcome| outcome.is_success()), "{outcomes:?}");
+    }
+
+    #[test]
+    fn an_ordinary_zip_is_not_mistaken_for_a_batch_of_packs() {
+        let harness = Harness::new("import-ordinary-zip");
+        let path = fixture::write_zip(&harness.dir, "notes.zip", &[("a.txt", b"hello" as &[u8])]);
+
+        let outcomes = harness.import(&[path]);
+        assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+        assert!(matches!(&outcomes[0], ImportOutcome::Failed { .. }), "{outcomes:?}");
     }
 
     #[test]
