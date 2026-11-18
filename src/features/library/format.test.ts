@@ -3,6 +3,7 @@ import type { BookSummary } from "@/types/ipc";
 
 import {
   authorLine,
+  formatBytes,
   formatFileSize,
   isFoliateFormat,
   pickContinueReading,
@@ -44,13 +45,26 @@ describe("formatFileSize", () => {
     expect(formatFileSize(512)).toBe("512 B");
   });
 
-  it("uses kilobytes and megabytes", () => {
+  it("uses kilobytes, megabytes and gigabytes", () => {
     expect(formatFileSize(1024)).toBe("1.0 KB");
     expect(formatFileSize(1536 * 1024)).toBe("1.5 MB");
+    expect(formatFileSize(2 * 1024 * 1024 * 1024)).toBe("2.00 GB");
   });
 
   it("survives unknown sizes", () => {
     expect(formatFileSize(-1)).toBe("");
+  });
+});
+
+describe("formatBytes", () => {
+  it("shows zero as a real size, not a blank", () => {
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(-1)).toBe("0 B");
+  });
+
+  it("covers gigabytes for whole-library totals", () => {
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(2 * 1024 * 1024 * 1024)).toBe("2.00 GB");
   });
 });
 

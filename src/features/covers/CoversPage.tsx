@@ -30,6 +30,7 @@ import {
   useUndoOperation,
 } from "@/hooks/useLibrary";
 import { cn } from "@/lib/cn";
+import { formatBytes } from "@/features/library/format";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { EASE_OUT, SPRING } from "@/lib/motion";
 import { showToast } from "@/stores/toasts";
@@ -61,13 +62,6 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "history", label: "历史" },
   { key: "maintenance", label: "维护" },
 ];
-
-function formatBytes(bytes: number): string {
-  if (bytes <= 0) return "0 B";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 function clock(at: number): string {
   if (!at) return "";

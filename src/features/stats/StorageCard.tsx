@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { GlassPanel } from "@/components/glass/panel";
 import { QueryError } from "@/components/common/QueryError";
+import { formatBytes } from "@/features/library/format";
 import { useStorage } from "@/hooks/useLibrary";
 import { displayTitle } from "@/lib/title";
 import type { StorageFormat, StorageSummary, StorageTopBook } from "@/types/ipc";
@@ -18,16 +19,6 @@ import type { StorageFormat, StorageSummary, StorageTopBook } from "@/types/ipc"
  * The database is one file for the *whole* library; it is never apportioned to
  * individual books, which is why it only appears in this library-wide view.
  */
-
-/** Bytes to a human size, with GB once it earns one. The shelf's own
- *  `formatFileSize` stops at MB, which is right for one book, not a library. */
-function formatBytes(bytes: number): string {
-  if (bytes <= 0) return "0 B";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
 
 const FORMAT_LABELS: Record<string, string> = {
   epub: "EPUB",

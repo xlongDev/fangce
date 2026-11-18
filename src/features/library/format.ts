@@ -43,7 +43,15 @@ export function formatFileSize(bytes: number): string {
   if (bytes <= 0) return "";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+/** Sizes that may be zero or large: covers and whole-library totals. Unlike
+ *  one book's `formatFileSize`, a zero here is a real reading ("0 B"), and a
+ *  library's bytes can cross a gigabyte. */
+export function formatBytes(bytes: number): string {
+  return formatFileSize(bytes) || "0 B";
 }
 
 /**
