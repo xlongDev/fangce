@@ -123,7 +123,7 @@ export function useShelfSelection({
     toggle,
     allSelected,
     toggleAll,
-    /** Labels the whole selection: the sheet only ever adds in this mode. */
+    /** Labels the whole selection: add to all, untick to remove from all. */
     requestTags: () => onRequestTags(list.filter((book) => selected.has(book.id))),
     /** The selection as book rows, for surfaces that need titles (the tag
      *  sheet, the batch guide). */

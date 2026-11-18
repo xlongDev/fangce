@@ -258,7 +258,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const [duplicatesOpen, setDuplicatesOpen] = useState(false);
   const [calibreOpen, setCalibreOpen] = useState(false);
   /** True when the import button was clicked in the browser, which has no backend. */
-  /** Books the label sheet is open for; one book = edit, several = add. */
+  /** Books the label sheet is open for; one book = edit, several = batch. */
   const [tagTarget, setTagTarget] = useState<BookSummary[] | null>(null);
   /** The book whose metadata sheet is open; one book at a time, since a title
    *  is not something a multi-selection could share. */

@@ -10,10 +10,12 @@ import type { BookSummary, TagSummary } from "@/types/ipc";
 /**
  * The label sheet.
  *
- * One book opens it as an editor: the chips start on what the book carries and
- * saving applies the difference. Several books open it as an adder — there is
- * no single "current" set to show, and clearing a label the reader never saw
- * would be a surprise, so a multi-selection can only attach.
+ * One book opens it as an editor and several as a manager, but both start from
+ * the labels the reader can see and save only the difference against them. For
+ * a multi-selection the starting set is the *union* of the books' tags — every
+ * label on any selected book shows up ticked, so unticking one is an explicit
+ * "remove this from the selection". A book that never carried it is a no-op on
+ * the backend. Nothing is cleared that the sheet did not show.
  *
  * Typing creates a tag; the chip appears in the same list, dashed, so "will be
  * created" and "already exists" are distinguishable before saving.
@@ -40,27 +42,40 @@ const includes = (names: string[], name: string) => names.some((other) => same(o
 export function TagDialog({ books, allTags, busy, onCancel, onSave }: TagDialogProps) {
   const single: BookSummary | null = books?.length === 1 ? (books[0] ?? null) : null;
 
+  // Several books: open with the union of their tags, so every label present
+  // on any selected book is ticked and can be unticked to remove it from the
+  // whole selection. Books that never carried it are a no-op on the backend —
+  // removing a tag from all is safe even when only one book had it. One book
+  // keeps its whole set.
+  const startTags = single
+    ? single.tags
+    : (books ?? []).reduce<string[]>((all, book) => {
+        for (const name of book.tags) if (!includes(all, name)) all.push(name);
+        return all;
+      }, []);
+
   return (
     <GlassDialog
       open={books !== null && books.length > 0}
       onOpenChange={(open) => {
         if (!open) onCancel();
       }}
-      title={single ? "标签" : "添加标签"}
+      title={single ? "标签" : "批量标签"}
       description={
         single
           ? `《${single.title}》的标签，可以随时改。`
-          : `为选中的 ${books?.length ?? 0} 本书添加标签，它们原有的标签不受影响。`
+          : `选中的 ${books?.length ?? 0} 本书已带标签默认勾选：取消勾选即从这些书中移除，新增勾选则加给全部。`
       }
       widthClass="w-[min(92vw,460px)]"
     >
-      {/* Keyed by the book: each one carries its own starting set, and a
-          remount resets the selection to it without an effect — the same trick
-          the command palette uses with `key={session}`. Without this, opening
-          book B right after book A opened with A's tags still ticked. */}
+      {/* Keyed by the book(s): each carries its own starting set, and a remount
+          resets the selection to it without an effect — the same trick the
+          command palette uses with `key={session}`. Without this, opening book
+          B right after book A opened with A's tags still ticked. */}
       <TagDialogBody
-        key={single?.id ?? "multi"}
+        key={single?.id ?? (books ?? []).map((book) => book.id).join(",")}
         single={single}
+        startTags={startTags}
         allTags={allTags}
         busy={busy}
         onCancel={onCancel}
@@ -72,20 +87,22 @@ export function TagDialog({ books, allTags, busy, onCancel, onSave }: TagDialogP
 
 interface TagDialogBodyProps {
   single: BookSummary | null;
+  /** Tags the dialog opens ticked, and the only ones it may remove. */
+  startTags: string[];
   allTags: TagSummary[];
   busy?: boolean;
   onCancel: () => void;
   onSave: (change: Change) => void;
 }
 
-function TagDialogBody({ single, allTags, busy, onCancel, onSave }: TagDialogBodyProps) {
+function TagDialogBody({ single, startTags, allTags, busy, onCancel, onSave }: TagDialogBodyProps) {
   const known = allTags.map((tag) => tag.name);
-  const [selected, setSelected] = useState<string[]>(() => (single ? [...single.tags] : []));
+  const [selected, setSelected] = useState<string[]>(() => [...startTags]);
   const [draft, setDraft] = useState("");
 
-  const current = single?.tags ?? [];
+  const current = startTags;
   const add = selected.filter((name) => !includes(current, name));
-  const remove = single ? current.filter((name) => !includes(selected, name)) : [];
+  const remove = current.filter((name) => !includes(selected, name));
   const changed = add.length > 0 || remove.length > 0;
 
   const toggle = (name: string) =>
@@ -209,7 +226,7 @@ function TagDialogBody({ single, allTags, busy, onCancel, onSave }: TagDialogBod
           onClick={() => onSave({ add, remove })}
           disabled={busy || !changed}
         >
-          {single ? "保存" : "添加"}
+          {single ? "保存" : "应用"}
         </GlassButton>
       </div>
     </>

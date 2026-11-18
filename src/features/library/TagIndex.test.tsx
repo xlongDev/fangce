@@ -197,4 +197,63 @@ describe("标签索引", () => {
     await user.click(screen.getByLabelText("删除标签 常用0"));
     expect(screen.getByText(/30 本书会失去这个标签/)).toBeTruthy();
   });
+
+  describe("整理模式", () => {
+    /** 默认还是浏览：整理控件不占着读者点标签的路。 */
+    it("进入整理模式才露出批量控件，退出后收起", async () => {
+      const { user } = open(shelf());
+      expect(screen.queryByText("全部删除")).toBeNull();
+
+      await user.click(screen.getByLabelText("整理标签"));
+      expect(screen.getByText("全选")).toBeTruthy();
+      expect(screen.getByText("全部删除")).toBeTruthy();
+
+      await user.click(screen.getByLabelText("退出标签管理"));
+      expect(screen.getByLabelText("整理标签")).toBeTruthy();
+      expect(screen.queryByText("全部删除")).toBeNull();
+    });
+
+    /** 管理模式里点一行是勾选，不是筛选——筛选会翻书，勾选不会。 */
+    it("点行勾选，点全选选中全部", async () => {
+      const { user, onSelect } = open(shelf());
+      await user.click(screen.getByLabelText("整理标签"));
+
+      await user.click(row("常用0") ?? screen.getByText("常用0"));
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(screen.getByText("删除所选 (1)")).toBeTruthy();
+
+      await user.click(screen.getByText("全选"));
+      expect(screen.getByText("取消全选")).toBeTruthy();
+      expect(screen.getByText("删除所选 (35)")).toBeTruthy();
+      await user.click(screen.getByText("取消全选"));
+      expect(screen.getByText("删除所选")).toBeTruthy();
+    });
+
+    it("批量删除和全部删除各有确认文案", async () => {
+      const { user } = open(shelf());
+      await user.click(screen.getByLabelText("整理标签"));
+      await user.click(row("常用0") ?? screen.getByText("常用0"));
+      await user.click(screen.getByText("删除所选 (1)"));
+      expect(screen.getByText("删除选中的 1 个标签？")).toBeTruthy();
+      expect(screen.getByText(/无法撤销/)).toBeTruthy();
+      await user.click(screen.getByRole("button", { name: "取消" }));
+
+      await user.click(screen.getByText("全部删除"));
+      expect(screen.getByText("删除全部标签？")).toBeTruthy();
+    });
+
+    it("重命名弹窗预填当前名字，空名字不给保存", async () => {
+      const { user } = open(shelf());
+      await user.click(screen.getByLabelText("重命名标签 常用0"));
+
+      const field = screen.getByLabelText("新标签名");
+      expect((field as HTMLInputElement).value).toBe("常用0");
+      const save = screen.getByRole("button", { name: "保存" });
+      expect((save as HTMLButtonElement).disabled).toBe(true);
+
+      await user.clear(field);
+      await user.type(field, "长篇");
+      expect((save as HTMLButtonElement).disabled).toBe(false);
+    });
+  });
 });

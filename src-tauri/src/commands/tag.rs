@@ -23,12 +23,31 @@ pub fn tag_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state.library.with(|conn| tags::delete(conn, &id))
 }
 
+/// `tag.deleteMany` — removes several tags in one transaction.
+///
+/// Backs both the checked-selection delete and 「clear all」 (the sheet passes
+/// every id). Unknown ids are skipped, so a list stale after a delete in
+/// another window still succeeds.
+#[tauri::command]
+#[specta::specta]
+pub fn tag_delete_many(state: State<'_, AppState>, ids: Vec<String>) -> AppResult<()> {
+    state.library.with_tx(|tx| tags::delete_many(tx, &ids))
+}
+
+/// `tag.rename` — gives a tag a new name, keeping every book's link.
+#[tauri::command]
+#[specta::specta]
+pub fn tag_rename(state: State<'_, AppState>, id: String, name: String) -> AppResult<()> {
+    state.library.with(|conn| tags::rename(conn, &id, &name))
+}
+
 /// `book.setTags` — applies a set difference to one or more books.
 ///
-/// The per-book sheet computes `add`/`remove` against what it was shown; the
-/// batch bar passes only `add`, so selecting ten books cannot clear a label
-/// the bar never knew about. One command instead of two, because the operation
-/// really is one: a difference applied to a set of books.
+/// Each sheet computes `add`/`remove` against what it showed. The batch sheet
+/// opens with the union of the books' tags, so unticking one removes it from
+/// the whole selection — books that never carried it are a no-op. One command
+/// instead of two, because the operation really is one: a difference applied
+/// to a set of books.
 #[tauri::command]
 #[specta::specta]
 pub fn book_set_tags(

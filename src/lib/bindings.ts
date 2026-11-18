@@ -1024,12 +1024,25 @@ export const commands = {
   tagDelete: (id: string, options?: InvokeOptions) =>
     __TAURI_INVOKE<null>("tag_delete", { id }, options),
   /**
+   *  `tag.deleteMany` — removes several tags in one transaction.
+   *
+   *  Backs both the checked-selection delete and 「clear all」 (the sheet passes
+   *  every id). Unknown ids are skipped, so a list stale after a delete in
+   *  another window still succeeds.
+   */
+  tagDeleteMany: (ids: string[], options?: InvokeOptions) =>
+    __TAURI_INVOKE<null>("tag_delete_many", { ids }, options),
+  /**  `tag.rename` — gives a tag a new name, keeping every book's link. */
+  tagRename: (id: string, name: string, options?: InvokeOptions) =>
+    __TAURI_INVOKE<null>("tag_rename", { id, name }, options),
+  /**
    *  `book.setTags` — applies a set difference to one or more books.
    *
-   *  The per-book sheet computes `add`/`remove` against what it was shown; the
-   *  batch bar passes only `add`, so selecting ten books cannot clear a label
-   *  the bar never knew about. One command instead of two, because the operation
-   *  really is one: a difference applied to a set of books.
+   *  Each sheet computes `add`/`remove` against what it showed. The batch sheet
+   *  opens with the union of the books' tags, so unticking one removes it from
+   *  the whole selection — books that never carried it are a no-op. One command
+   *  instead of two, because the operation really is one: a difference applied
+   *  to a set of books.
    */
   bookSetTags: (ids: string[], add: string[], remove: string[], options?: InvokeOptions) =>
     __TAURI_INVOKE<null>("book_set_tags", { ids, add, remove }, options),

@@ -199,3 +199,32 @@ test("the keyboard walks the rail, and Enter is what picks", async ({ page }) =>
   );
   await expect(page.locator("[data-book-cover]").first()).toBeVisible();
 });
+
+/**
+ * Tag management lives in the same rail: a mode that turns the browse list
+ * into a checklist with rename/delete controls. Demo mode has no backend, so
+ * this asserts the UI the reader reaches before any write — entering the mode,
+ * ticking rows and the confirmation sheets — not the mutation itself.
+ */
+test("the rail turns into a checklist with bulk and rename controls", async ({ page }) => {
+  await openTags(page);
+
+  await expect(rail(page).getByText("全部删除")).toHaveCount(0);
+  await rail(page).getByLabel("整理标签").click();
+  await expect(rail(page).getByText("全选")).toBeVisible();
+  await expect(rail(page).getByText("全部删除")).toBeVisible();
+
+  // Ticking a row is a selection, not a filter: the books stay on the shelf.
+  // In manage mode the row's accessible name changes from 「name, N 本」 to
+  // 「选择标签 name」, so the browse helper no longer matches it.
+  await rail(page).getByLabel("选择标签 社会学").click();
+  await expect(rail(page).getByText("删除所选 (1)")).toBeVisible();
+
+  await rail(page).getByText("全选").click();
+  await expect(rail(page).getByText("删除所选 (20)")).toBeVisible();
+
+  // Both destructive sheets open with an explicit, non-undoable warning.
+  await rail(page).getByText("全部删除").click();
+  await expect(page.getByText("删除全部标签？")).toBeVisible();
+  await expect(page.getByText(/无法撤销/)).toBeVisible();
+});

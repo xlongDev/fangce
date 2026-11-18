@@ -50,9 +50,9 @@ pub fn list(conn: &Connection) -> AppResult<Vec<TagSummary>> {
 /// Applies a set difference to the given books, inside the caller's
 /// transaction.
 ///
-/// One entry point covers both editors: the per-book sheet sends its whole
-/// desired set as `add` + `remove`, while the batch bar only ever adds, so
-/// tagging a selection can never wipe labels it did not know about.
+/// One entry point covers both editors: each sheet sends its whole desired
+/// set as `add` + `remove`. The batch sheet opens with the union of the books'
+/// tags, so removing one from all is safe even if only some books carried it.
 ///
 /// Tags left attached to nothing are pruned, so the shelf never offers a label
 /// that leads to an empty grid.
@@ -128,6 +128,40 @@ fn prune(tx: &Transaction<'_>) -> AppResult<()> {
 pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
     // `book_tags` rows go with it through the schema's ON DELETE CASCADE.
     let changed = conn.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
+    if changed == 0 {
+        return Err(AppError::NotFound(id.to_string()));
+    }
+    Ok(())
+}
+
+/// Removes several tags in one transaction. Unknown ids are skipped rather
+/// than failing: a checkbox list can be stale after a delete in another window.
+pub fn delete_many(tx: &Transaction<'_>, ids: &[String]) -> AppResult<()> {
+    for id in ids {
+        tx.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
+    }
+    Ok(())
+}
+
+/// Renames a tag, keeping every `book_tags` link (the id is unchanged).
+///
+/// The column's UNIQUE is case-sensitive but names are matched
+/// case-insensitively everywhere else, so an existing spelling under a
+/// different case must be refused — otherwise two tags read as one.
+pub fn rename(conn: &Connection, id: &str, name: &str) -> AppResult<()> {
+    let cleaned = normalize(std::slice::from_ref(&name.to_string()))?;
+    let name = cleaned.first().ok_or_else(|| AppError::InvalidArgument("标签名不能为空".into()))?;
+    let clash: Option<String> = conn
+        .query_row(
+            "SELECT id FROM tags WHERE name = ?1 COLLATE NOCASE AND id != ?2",
+            params![name, id],
+            |row| row.get(0),
+        )
+        .ok();
+    if clash.is_some() {
+        return Err(AppError::InvalidArgument(format!("已有同名标签「{name}」")));
+    }
+    let changed = conn.execute("UPDATE tags SET name = ?1 WHERE id = ?2", params![name, id])?;
     if changed == 0 {
         return Err(AppError::NotFound(id.to_string()));
     }
@@ -302,5 +336,46 @@ mod tests {
         let names = labels(&conn, "a");
         assert_eq!(names.len(), 2);
         assert_eq!(labels(&conn, "b").len(), 1);
+    }
+
+    #[test]
+    fn deleting_many_skips_unknown_ids() {
+        let mut conn = seed();
+        assign_on(&mut conn, &["a"], &["科幻", "在读"], &[]);
+        let ids: Vec<String> = list(&conn).expect("list").into_iter().map(|t| t.id).collect();
+        let mut with_ghost = ids.clone();
+        with_ghost.push("ghost".into());
+        let tx = conn.transaction().expect("begin");
+        delete_many(&tx, &with_ghost).expect("delete many");
+        tx.commit().expect("commit");
+
+        assert!(list(&conn).expect("list").is_empty());
+        assert!(labels(&conn, "a").is_empty());
+    }
+
+    #[test]
+    fn renaming_keeps_every_book_link() {
+        let mut conn = seed();
+        assign_on(&mut conn, &["a", "b"], &["科幻"], &[]);
+        let id = list(&conn).expect("list")[0].id.clone();
+        rename(&conn, &id, "  #科学幻想 ").expect("rename");
+
+        let listed = list(&conn).expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "科学幻想");
+        assert_eq!(labels(&conn, "a"), vec!["科学幻想".to_string()]);
+        assert_eq!(labels(&conn, "b"), vec!["科学幻想".to_string()]);
+    }
+
+    #[test]
+    fn renaming_to_a_taken_spelling_is_refused() {
+        let mut conn = seed();
+        assign_on(&mut conn, &["a"], &["Novel"], &[]);
+        assign_on(&mut conn, &["b"], &["科幻"], &[]);
+        let all = list(&conn).expect("list");
+        let sci = all.iter().find(|t| t.name == "科幻").unwrap().id.clone();
+
+        // Same letters, different case from the existing "Novel".
+        assert!(matches!(rename(&conn, &sci, "novel"), Err(AppError::InvalidArgument(_))));
     }
 }

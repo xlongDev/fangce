@@ -39,6 +39,13 @@ function open(tags: TagSummary[], saved = vi.fn()) {
   return { saved, user: userEvent.setup(), field: screen.getByLabelText("新建标签") };
 }
 
+function openMany(books: BookSummary[], tags: TagSummary[], saved = vi.fn()) {
+  render(<TagDialog books={books} allTags={tags} onCancel={vi.fn()} onSave={saved} />);
+  return { saved, user: userEvent.setup(), field: screen.getByLabelText("新建标签") };
+}
+
+const withTags = (id: string, tags: string[]): BookSummary => ({ ...book, id, tags });
+
 describe("标签面板", () => {
   /** 273 个标签的库里，翻找不是工作方式，打字才是。 */
   it("输入就过滤，只留下匹配的标签", async () => {
@@ -85,5 +92,40 @@ describe("标签面板", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
 
     expect(saved).toHaveBeenCalledWith({ add: ["心理学"], remove: [] });
+  });
+
+  describe("多本", () => {
+    const books = [withTags("b1", ["科幻", "在读"]), withTags("b2", ["在读", "参考"])];
+
+    /** 任一本书上出现过的标签都默认勾选，取消才能删。 */
+    it("出现过的标签默认都勾选", () => {
+      openMany(books, all("科幻", "在读", "参考"));
+
+      for (const name of ["科幻", "在读", "参考"]) {
+        expect(
+          screen.getByRole("button", { name: new RegExp(name) }).getAttribute("aria-pressed"),
+        ).toBe("true");
+      }
+    });
+
+    /** 只在一本书上的标签也能取消勾选批量移除 —— 这就是删除入口。 */
+    it("取消独有标签也能批量移除", async () => {
+      const { user, saved } = openMany(books, all("科幻", "在读", "参考"));
+
+      await user.click(screen.getByRole("button", { name: /科幻/ }));
+      await user.click(screen.getByRole("button", { name: "应用" }));
+
+      expect(saved).toHaveBeenCalledWith({ add: [], remove: ["科幻"] });
+    });
+
+    /** 书上没有、只是全库已有的标签，勾选是加给全部。 */
+    it("勾选新标签加给全部", async () => {
+      const { user, saved } = openMany(books, all("科幻", "在读", "参考", "心理学"));
+
+      await user.click(screen.getByRole("button", { name: /心理学/ }));
+      await user.click(screen.getByRole("button", { name: "应用" }));
+
+      expect(saved).toHaveBeenCalledWith({ add: ["心理学"], remove: [] });
+    });
   });
 });

@@ -35,9 +35,10 @@ function useInvalidateLabels() {
 /**
  * Attaches and detaches labels on a set of books.
  *
- * `remove` is always explicit: the per-book sheet sends the difference between
- * what it showed and what the reader kept, while the batch bar leaves it empty
- * so selecting books can never clear a label it never saw.
+ * `remove` is always explicit: each sheet sends the difference between what it
+ * showed and what the reader kept. The batch sheet starts from the union of
+ * the books' tags, so any label on any selected book can be unticked to remove
+ * it from the whole selection; books that lacked it are a no-op.
  */
 export function useAssignTags() {
   const invalidate = useInvalidateLabels();
@@ -53,6 +54,24 @@ export function useDeleteTag() {
   const invalidate = useInvalidateLabels();
   return useMutation({
     mutationFn: (id: string) => ipc.tagDelete(id),
+    onSettled: invalidate,
+  });
+}
+
+/** Drops several tags at once — one call for a checked selection or 「clear all」. */
+export function useDeleteTags() {
+  const invalidate = useInvalidateLabels();
+  return useMutation({
+    mutationFn: (ids: string[]) => ipc.tagDeleteMany(ids),
+    onSettled: invalidate,
+  });
+}
+
+/** Renames a tag without touching the books that carry it. */
+export function useRenameTag() {
+  const invalidate = useInvalidateLabels();
+  return useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => ipc.tagRename(id, name),
     onSettled: invalidate,
   });
 }

@@ -1,10 +1,10 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { CaretDown, Trash } from "@phosphor-icons/react";
+import { CaretDown, Check, PencilSimple, Trash } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
-import { useDeleteTag } from "@/hooks/useTags";
+import { useDeleteTag, useDeleteTags, useRenameTag } from "@/hooks/useTags";
 import { searchTags } from "@/features/library/labelSearch";
 import { cn } from "@/lib/cn";
 import type { TagSummary } from "@/types/ipc";
@@ -85,6 +85,49 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
   /** Which bands the reader has opened or closed, by band key. */
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
   const remove = useDeleteTag();
+  const removeMany = useDeleteTags();
+  const rename = useRenameTag();
+
+  // Tag management lives in the index itself: a rail that already lists every
+  // label is the natural place to rename and clear them. Managing is a mode so
+  // the browse-and-filter gestures stay one click and the destructive controls
+  // stay out of the way until asked for.
+  const [managing, setManaging] = useState(false);
+  const [checked, setChecked] = useState<ReadonlySet<string>>(new Set());
+  const [pendingBulk, setPendingBulk] = useState<"selected" | "all" | null>(null);
+  const [renaming, setRenaming] = useState<TagSummary | null>(null);
+  const [renameText, setRenameText] = useState("");
+
+  const enterManaging = () => {
+    setManaging(true);
+    setChecked(new Set());
+    setQuery("");
+    // Managing means acting on the whole vocabulary: a band folded shut for
+    // browsing would hide labels the reader needs to see (and might tick).
+    setOverrides(
+      Object.fromEntries(
+        bands.filter((band) => band.tags.length > 0).map((band) => [band.key, true]),
+      ),
+    );
+  };
+  const exitManaging = () => {
+    setManaging(false);
+    setChecked(new Set());
+  };
+  const toggleChecked = (id: string) =>
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const allChecked = tags.length > 0 && checked.size === tags.length;
+  const toggleAll = () => setChecked(allChecked ? new Set() : new Set(tags.map((tag) => tag.id)));
+
+  const openRename = (tag: TagSummary) => {
+    setRenaming(tag);
+    setRenameText(tag.name);
+  };
 
   const trimmed = query.trim().toLowerCase();
   /** Already in relevance order; empty query hands back the shelf order. */
@@ -251,14 +294,31 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
         >
           <button
             type="button"
-            tabIndex={active ? 0 : -1}
+            tabIndex={active || managing ? 0 : -1}
             data-tag-row={tag.name}
             aria-current={active ? "true" : undefined}
-            aria-label={`${tag.name}，${tag.count} 本`}
+            aria-label={
+              managing
+                ? `${checked.has(tag.id) ? "取消选择" : "选择"}标签 ${tag.name}`
+                : `${tag.name}，${tag.count} 本`
+            }
             onKeyDown={onKeyDown}
-            onClick={() => onSelect(tag.name)}
+            onClick={() => (managing ? toggleChecked(tag.id) : onSelect(tag.name))}
             className="focus-visible:focus-ring flex h-full min-w-0 flex-1 items-center gap-2 rounded-lg pr-1 pl-2.5 text-left"
           >
+            {managing && (
+              <span
+                aria-hidden
+                className={cn(
+                  "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                  checked.has(tag.id)
+                    ? "border-accent bg-accent text-on-accent"
+                    : "border-text-3/50",
+                )}
+              >
+                {checked.has(tag.id) && <Check size={10} weight="bold" />}
+              </span>
+            )}
             <span
               className={cn(
                 "min-w-0 flex-1 truncate text-[13px] transition-colors duration-150",
@@ -276,17 +336,37 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
           {/* Beside the name rather than inside it (a button in a button is not
               a button), and quiet until the row is pointed at: a destructive
               control should not sit in the path of a label the reader is about
-              to click. */}
+              to click. In manage mode both controls stay visible. */}
           <button
             type="button"
-            // Tab reaches this only from the selected row. Otherwise the rail
-            // would be 281 invisible stops, since the trash is `opacity-0`
-            // until the row is pointed at — a focus ring landing on nothing.
-            tabIndex={active ? 0 : -1}
+            tabIndex={managing || active ? 0 : -1}
+            aria-label={`重命名标签 ${tag.name}`}
+            onKeyDown={onKeyDown}
+            onClick={() => openRename(tag)}
+            className={cn(
+              "press focus-visible:focus-ring text-text-3 hover:text-accent mr-0.5 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md",
+              managing
+                ? "opacity-100"
+                : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+            )}
+          >
+            <PencilSimple size={12} />
+          </button>
+          <button
+            type="button"
+            // Tab reaches these only from the selected row outside manage mode.
+            // Otherwise the rail would be 281 invisible stops, since the trash
+            // is `opacity-0` until the row is pointed at.
+            tabIndex={managing || active ? 0 : -1}
             aria-label={`删除标签 ${tag.name}`}
             onKeyDown={onKeyDown}
             onClick={() => setPending(tag)}
-            className="press focus-visible:focus-ring text-text-3 hover:text-danger mr-1 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+            className={cn(
+              "press focus-visible:focus-ring text-text-3 hover:text-danger mr-1 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md",
+              managing
+                ? "opacity-100"
+                : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+            )}
           >
             <Trash size={12} />
           </button>
@@ -311,39 +391,79 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
       // 它摞在书上，不能占满整屏。
       className="flex max-h-[42vh] flex-col @min-[720px]:sticky @min-[720px]:top-0 @min-[720px]:h-[calc(100vh-8.5rem)] @min-[720px]:max-h-none"
     >
-      {/* One row, exactly as tall as the shelf's toolbar beside it (`GlassInput`
-          is h-9) — the two columns read as a single line of controls, and a
-          second line here pushes the whole index down by 15px, which is what
-          made the rail look taller than the bar next to it.
-
-          The count lives inside the field instead, and only while searching: a
-          total is already implied by the bands (常用 15 / 普通 114 / 一次 152),
-          while 「匹配 12」 is the thing the reader cannot get anywhere else. */}
-      <div className="relative shrink-0">
-        <GlassInput
-          className="pr-16"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="搜索标签或拼音"
-          title="拼音首字母或全拼都能找，空格隔开多个词，比如 zg / zhongguo"
-          aria-label="搜索标签或拼音首字母"
-          // ↓ out of the field and into the results: the reader has typed two
-          // letters, and reaching for the mouse to pick one of four matches is
-          // the part that costs.
-          onKeyDown={(event) => {
-            if (event.key !== "ArrowDown") return;
-            const first = listRef.current?.querySelector<HTMLButtonElement>("[data-tag-row]");
-            if (!first) return;
-            event.preventDefault();
-            first.focus();
-          }}
-        />
-        {trimmed && (
-          <span className="text-text-3 pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[11px] tabular-nums">
-            匹配 {matched.length}
-          </span>
-        )}
-      </div>
+      {/* The browse view's field is ONE h-9 row so it lands on the shelf
+          toolbar's line. Manage mode is a temporary state — it may take two
+          rows — and enters through the pencil inside that field. */}
+      {managing ? (
+        <div className="glass flex shrink-0 flex-col gap-1.5 rounded-md p-1.5">
+          <div className="flex items-center gap-1">
+            <GlassButton size="sm" variant="subtle" className="h-7 flex-1 px-2" onClick={toggleAll}>
+              {allChecked ? "取消全选" : "全选"}
+            </GlassButton>
+            <GlassButton
+              size="sm"
+              variant="subtle"
+              className="h-7 flex-1 px-2"
+              disabled={checked.size === 0}
+              onClick={() => setPendingBulk("selected")}
+            >
+              删除所选{checked.size > 0 ? ` (${checked.size})` : ""}
+            </GlassButton>
+            <button
+              type="button"
+              onClick={exitManaging}
+              aria-label="退出标签管理"
+              title="完成整理"
+              className="press focus-visible:focus-ring text-text-3 hover:text-text-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+            >
+              <Check size={14} weight="bold" />
+            </button>
+          </div>
+          <GlassButton
+            size="sm"
+            variant="subtle"
+            className="text-danger h-7 w-full"
+            onClick={() => setPendingBulk("all")}
+          >
+            全部删除
+          </GlassButton>
+        </div>
+      ) : (
+        <div className="relative flex h-9 shrink-0 items-center">
+          <GlassInput
+            className="pr-16"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索标签或拼音"
+            title="拼音首字母或全拼都能找，空格隔开多个词，比如 zg / zhongguo"
+            aria-label="搜索标签或拼音首字母"
+            // ↓ out of the field and into the results: the reader has typed two
+            // letters, and reaching for the mouse to pick one of four matches is
+            // the part that costs.
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowDown") return;
+              const first = listRef.current?.querySelector<HTMLButtonElement>("[data-tag-row]");
+              if (!first) return;
+              event.preventDefault();
+              first.focus();
+            }}
+          />
+          {trimmed && (
+            <span className="text-text-3 pointer-events-none absolute top-1/2 right-9 -translate-y-1/2 text-[11px] tabular-nums">
+              匹配 {matched.length}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={enterManaging}
+            aria-label="整理标签"
+            title="整理标签"
+            className="press focus-visible:focus-ring text-text-3 hover:text-accent absolute top-1/2 right-2.5 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md"
+          >
+            <PencilSimple size={13} />
+          </button>
+        </div>
+      )}
 
       {/* `mb-4` matches the toolbar's own margin, so the first tag row and the
           first book row start on the same line — the two columns are one grid,
@@ -473,6 +593,105 @@ export function TagIndex({ tags, selected, onSelect, total }: TagIndexProps) {
             }}
           >
             删除
+          </GlassButton>
+        </div>
+      </GlassDialog>
+
+      {/* Bulk delete: a single confirmation for the checked set, or for every
+          tag. The description counts tags, not books — a book can carry several,
+          and a sum of counts would overstate what the reader loses. */}
+      <GlassDialog
+        open={pendingBulk !== null}
+        onOpenChange={(next) => {
+          if (!next) setPendingBulk(null);
+        }}
+        title={pendingBulk === "all" ? "删除全部标签？" : `删除选中的 ${checked.size} 个标签？`}
+        description={`这些标签会从所有书上移除，书籍本身不受影响。此操作无法撤销。`}
+        widthClass="w-[min(92vw,400px)]"
+      >
+        {removeMany.isError && (
+          <p className="text-danger text-[13px] leading-relaxed">{removeMany.error.message}</p>
+        )}
+        <div className="mt-4 flex justify-end gap-2">
+          <GlassButton
+            variant="subtle"
+            onClick={() => setPendingBulk(null)}
+            disabled={removeMany.isPending}
+          >
+            取消
+          </GlassButton>
+          <GlassButton
+            variant="ghost"
+            className="text-danger"
+            disabled={removeMany.isPending}
+            onClick={() => {
+              const ids = pendingBulk === "all" ? tags.map((tag) => tag.id) : [...checked];
+              if (ids.length === 0) return;
+              const dropsCurrent =
+                pendingBulk === "all" ||
+                tags.some((tag) => ids.includes(tag.id) && tag.name === selected);
+              removeMany.mutate(ids, {
+                onSuccess: () => {
+                  setPendingBulk(null);
+                  exitManaging();
+                  if (dropsCurrent) onSelect(null);
+                },
+              });
+            }}
+          >
+            删除
+          </GlassButton>
+        </div>
+      </GlassDialog>
+
+      <GlassDialog
+        open={renaming !== null}
+        onOpenChange={(next) => {
+          if (!next) setRenaming(null);
+        }}
+        title="重命名标签"
+        description="所有带这个标签的书会一起更新，标签本身不变。"
+        widthClass="w-[min(92vw,400px)]"
+      >
+        <GlassInput
+          className="mt-3"
+          value={renameText}
+          onChange={(event) => setRenameText(event.target.value)}
+          maxLength={40}
+          aria-label="新标签名"
+          autoComplete="off"
+        />
+        {rename.isError && (
+          <p className="text-danger mt-2 text-[13px] leading-relaxed">{rename.error.message}</p>
+        )}
+        <div className="mt-4 flex justify-end gap-2">
+          <GlassButton
+            variant="subtle"
+            onClick={() => setRenaming(null)}
+            disabled={rename.isPending}
+          >
+            取消
+          </GlassButton>
+          <GlassButton
+            variant="primary"
+            disabled={
+              rename.isPending || renameText.trim() === "" || renameText.trim() === renaming?.name
+            }
+            onClick={() => {
+              if (!renaming) return;
+              const from = renaming.name;
+              rename.mutate(
+                { id: renaming.id, name: renameText },
+                {
+                  onSuccess: () => {
+                    setRenaming(null);
+                    if (from === selected) onSelect(renameText.trim());
+                  },
+                },
+              );
+            }}
+          >
+            保存
           </GlassButton>
         </div>
       </GlassDialog>
