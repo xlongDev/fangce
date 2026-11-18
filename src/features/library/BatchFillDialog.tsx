@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { CaretDown, Check } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
 import { CoverThumb } from "@/features/library/CoverThumb";
+import { FillRunStatus } from "@/features/library/FillRunStatus";
 import { useMetadataApply, useMetadataPropose } from "@/hooks/useMetadata";
 import { CHUNK, useFillRun } from "@/stores/fillRun";
 import { cn } from "@/lib/cn";
@@ -169,7 +169,7 @@ function WholeBody({
       </dl>
       <p className="text-text-3 text-xs leading-relaxed">
         整架补全不提供逐本预览：生成预览需先查询全部书目，会重复请求目录。如需先确认结果，请单次选择不超过{" "}
-        {MAX_BATCH} 本。
+        {MAX_BATCH} 本。开始后可以关闭此窗口，补全会继续运行，进度显示在右下角。
       </p>
       <div className="flex justify-end gap-2">
         <GlassButton variant="subtle" onClick={onClose}>
@@ -183,100 +183,26 @@ function WholeBody({
   );
 }
 
-/** Progress, and the summary it leaves behind. */
+/** The run's status plus the controls that belong to this dialog. The same
+ *  status is drawn by the shell's pill; completion refresh and the toast live
+ *  there, because this dialog is routinely closed while the run is alive. */
 function RunBody({ onClose }: { onClose: () => void }) {
   const run = useFillRun();
-  const queryClient = useQueryClient();
-  const finished = !run.running;
-  const paused = run.stopped?.startsWith("平台限流") ?? false;
-
-  // One refresh at the end rather than one per batch: the shelf is not what the
-  // reader is looking at, and twenty-four refetches of 985 rows to update a
-  // grid nobody is watching is work for its own sake.
-  useEffect(() => {
-    if (finished && run.total > 0) {
-      void queryClient.invalidateQueries({ queryKey: ["books"] });
-    }
-  }, [finished, run.total, queryClient]);
-
-  const percent = run.total > 0 ? Math.round((run.done / run.total) * 100) : 0;
 
   return (
     <div className="space-y-4">
-      <div>
-        <div className="flex items-baseline justify-between text-[13px]">
-          <span className="text-text-1">
-            {finished
-              ? paused
-                ? "已暂停"
-                : run.stopped
-                  ? "已停止"
-                  : "补全完成"
-              : run.cooldownMs > 0
-                ? "限流退避中"
-                : "正在查询并写入…"}
-          </span>
-          <span className="text-text-3 tabular-nums">
-            {run.done} / {run.total}
-          </span>
-        </div>
-        {/* Decorative: the count above it is the accessible version, and a
-            div with a `progressbar` role is exactly what `prefer-tag-over-role`
-            exists to replace. */}
-        <div aria-hidden className="bg-surface-2 mt-2 h-1.5 overflow-hidden rounded-full">
-          <div
-            className="bg-accent h-full rounded-full transition-[width] duration-300 ease-out"
-            style={{ width: `${percent}%` }}
-          />
-        </div>
-      </div>
-
-      <p className="text-text-2 text-[13px]">
-        已补全 {run.written} 本 · 跳过 {run.skipped} 本
-        {run.failed > 0 && ` · 失败 ${run.failed} 本`}
-        {run.deferred > 0 && ` · 待重试 ${run.deferred} 本`}
-        {finished && run.pending.length > 0 && ` · 待补全 ${run.pending.length} 本`}
-      </p>
-      {!finished && run.cooldownMs > 0 && (
-        <p className="text-text-3 text-xs leading-relaxed">
-          正在等待 {Math.ceil(run.cooldownMs / 1000)} 秒后继续（{run.deferred} 本待重试）。
-        </p>
-      )}
-      {/* A count with no names is the complaint this answers. Native details:
-          the list can be long, and folded it never pushes 关闭 off the dialog. */}
-      {run.failures.length > 0 && (
-        <details>
-          <summary className="text-text-3 hover:text-text-2 cursor-pointer text-xs transition-colors select-none">
-            失败明细（{run.failures.length} 本）
-          </summary>
-          <ul className="border-hairline divide-hairline mt-2 max-h-40 divide-y overflow-y-auto rounded-md border px-2.5">
-            {run.failures.map((failure) => (
-              <li key={failure.bookId} className="py-1.5">
-                <span className="text-text-2 block text-[12px] break-words">
-                  {failure.bookTitle}
-                </span>
-                <span className="text-text-3 block text-[11px] leading-relaxed break-all">
-                  {failure.skipped}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-      {run.stopped && (
-        <p className="text-text-3 max-h-24 overflow-y-auto text-xs leading-relaxed break-all">
-          {run.stopped}
-        </p>
-      )}
-      {finished && !run.stopped && run.written > 0 && (
-        <p className="text-text-3 text-xs leading-relaxed">更新已保存到书架。</p>
-      )}
+      <FillRunStatus />
 
       <div className="flex justify-end gap-2">
         {run.running ? (
-          <GlassButton variant="subtle" onClick={run.cancel}>
-            停止
-          </GlassButton>
+          <>
+            <GlassButton variant="subtle" onClick={onClose}>
+              后台运行
+            </GlassButton>
+            <GlassButton variant="subtle" disabled={run.cancelled} onClick={run.cancel}>
+              {run.cancelled ? "停止中" : "停止"}
+            </GlassButton>
+          </>
         ) : (
           <>
             {run.pending.length > 0 && (

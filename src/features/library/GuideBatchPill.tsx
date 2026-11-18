@@ -142,7 +142,7 @@ export function GuideBatchPill() {
                     <p className="text-text-3 min-h-0 overflow-hidden text-[11px] leading-snug">
                       已完成 {run.generated}
                       {run.failed.length > 0 && `，失败 ${run.failed.length}`}
-                      {run.status === "stopping" && "，将在当前这本写完后停止"}
+                      {run.status === "stopping" && "，正在停止"}
                     </p>
                   </div>
                 </div>

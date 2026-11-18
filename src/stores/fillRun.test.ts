@@ -224,6 +224,25 @@ describe("the whole-shelf run", () => {
     expect(retried.written).toBe(1);
   });
 
+  it("reports a stop pressed during the last batch as stopped", async () => {
+    // The loop-head check has already passed when the press lands; without
+    // the finally check this reads as a completed run.
+    const gate: { release?: () => void } = {};
+    propose.mockImplementationOnce(
+      (asked: string[]) =>
+        new Promise<Proposal_Serialize[]>((resolve) => {
+          gate.release = () => resolve(asked.map((id) => proposal(id)));
+        }),
+    );
+    useFillRun.getState().start(ids(3));
+    await settle();
+    useFillRun.getState().cancel();
+    gate.release?.();
+    await vi.waitFor(() => expect(useFillRun.getState().running).toBe(false));
+
+    expect(useFillRun.getState().stopped).toBe("已停止");
+  });
+
   it("refuses to start a second run on top of the first", async () => {
     useFillRun.getState().start(ids(CHUNK * 2));
     useFillRun.getState().start(ids(3));

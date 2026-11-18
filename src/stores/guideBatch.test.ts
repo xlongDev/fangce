@@ -16,6 +16,7 @@ vi.mock("@/lib/ipc", () => ({
   ipc: {
     aiGuideStatus: vi.fn(async () => [] as string[]),
     aiDigest: vi.fn(),
+    aiCancel: vi.fn(async () => undefined),
   },
   onAiStream: vi.fn(async (handler: (delta: AiDelta) => void) => {
     hook.stream = handler;
@@ -32,6 +33,7 @@ import { showToast } from "@/stores/toasts";
 import { describeBatch, useGuideBatch } from "./guideBatch";
 
 const digest = vi.mocked(ipc.aiDigest);
+const cancel = vi.mocked(ipc.aiCancel);
 const toast = vi.mocked(showToast);
 
 const book = (id: string, title: string): BookSummary => ({ id, title }) as unknown as BookSummary;
@@ -46,6 +48,7 @@ const run = () => useGuideBatch.getState().run;
 
 beforeEach(() => {
   digest.mockReset();
+  cancel.mockClear();
   toast.mockClear();
   useGuideBatch.setState({ run: null });
 });
@@ -114,6 +117,32 @@ it("stops between books: the book in flight finishes, the rest never start", asy
   expect(digest.mock.calls.map((call) => call[1])).toEqual(["b1", "b2"]);
   expect(run()).toMatchObject({ generated: 2, failed: [], status: "done" });
   expect(toast).toHaveBeenCalledWith("success", "已停止：新增 2 份导读，已缓存在本机。");
+});
+
+it("stop cancels the stream in flight, not just the next book", async () => {
+  const release: { current: (() => void) | null } = { current: null };
+  digest.mockImplementation(async (requestId) => {
+    await new Promise<void>((resolve) => {
+      release.current = () => {
+        hook.stream?.(done(requestId, "已停止生成"));
+        resolve();
+      };
+    });
+    throw new Error("已停止生成");
+  });
+
+  const finished = useGuideBatch.getState().start([book("b1", "一"), book("b2", "二")]);
+  await vi.waitFor(() => expect(digest).toHaveBeenCalledTimes(1));
+
+  useGuideBatch.getState().stop();
+  // The request id belongs to the book in flight, and no later book is asked.
+  expect(cancel).toHaveBeenCalledWith(digest.mock.calls[0]![0]);
+  release.current?.();
+  await finished;
+
+  expect(digest).toHaveBeenCalledTimes(1);
+  // A reader's stop is not a failed book: it can be generated next time.
+  expect(run()).toMatchObject({ generated: 0, failed: [], status: "done" });
 });
 
 it("refuses a second run while one is live", async () => {

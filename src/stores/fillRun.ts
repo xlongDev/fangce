@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { demoEnabled, demoProposals } from "@/lib/demo";
 import { ipc } from "@/lib/ipc";
 import { hasSomething, toFill } from "@/lib/metadata";
+import { showToast } from "@/stores/toasts";
 import type { Proposal } from "@/types/ipc";
 
 /**
@@ -74,6 +75,15 @@ const PAUSE_MS = 500;
 /// a short cooldown without turning a blocked IP into an infinite loop.
 const MAX_TRIES = 2;
 
+/**
+ * Wakes the between-batch wait when 停止 is pressed.
+ *
+ * A cooldown can be twenty seconds; polling it once a second made the button
+ * look dead for up to a second and kept a timer alive for the whole wait. One
+ * resolver, replaced by each new wait, is both immediate and cheaper.
+ */
+let wakePause: (() => void) | null = null;
+
 const idle = {
   running: false,
   cancelled: false,
@@ -92,18 +102,34 @@ const idle = {
 
 export const useFillRun = create<FillRun>((set, get) => ({
   ...idle,
-  reset: () => set(idle),
-  cancel: () => set({ cancelled: true }),
+  reset: () => {
+    wakePause?.();
+    set(idle);
+  },
+  cancel: () => {
+    set({ cancelled: true });
+    // Shown by every surface reading the store: the press is acknowledged now,
+    // even though the batch in flight has to finish before the loop can exit.
+    wakePause?.();
+  },
   start: (ids, replaceCovers = false) => {
     // One run at a time: two loops would interleave transactions and report
-    // progress that belongs to neither.
-    if (get().running || ids.length === 0) return;
+    // progress that belongs to neither. Say so rather than dropping the click.
+    if (get().running) {
+      showToast("error", "正在补全元信息，等这轮结束再开始。");
+      return;
+    }
+    if (ids.length === 0) return;
     set({ ...idle, running: true, total: ids.length, replaceCovers });
     void loop(ids, replaceCovers, set, get);
   },
   retryPending: () => {
     const { pending, replaceCovers, running } = get();
-    if (running || pending.length === 0) return;
+    if (running) {
+      showToast("error", "正在补全元信息，等这轮结束再重试。");
+      return;
+    }
+    if (pending.length === 0) return;
     set({ ...idle, running: true, total: pending.length, replaceCovers });
     void loop(pending, replaceCovers, set, get);
   },
@@ -221,6 +247,11 @@ async function loop(
     // that would not open. The books already written stay written.
     stopped = err instanceof Error ? err.message : String(err);
   } finally {
+    wakePause = null;
+    // A stop on the last batch reaches here without the loop-head check. Say
+    // so: a run that was cancelled but reads 「补全完成」 is indistinguishable
+    // from one that was not stopped at all.
+    if (stopped === null && get().cancelled) stopped = "已停止";
     // Whatever was not answered — the rest of the first pass and every book
     // held by a cooldown — stays available as one retry, not a reselection.
     const pending = [...new Set([...queue.slice(at), ...heldIds])];
@@ -248,17 +279,16 @@ function isFailure(proposal: Proposal): boolean {
   return !isThrottled(proposal) && (proposal.skipped?.startsWith("查询失败") ?? false);
 }
 
-function pause(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /** A cooldown can be twenty seconds; 「停止」 still has to work during it. */
-async function cancellablePause(ms: number, get: () => FillRun) {
-  let left = ms;
-  while (left > 0 && !get().cancelled) {
-    const step = Math.min(left, 1000);
-    // oxlint-disable-next-line no-await-in-loop -- 每秒醒一次只为看取消标志。
-    await pause(step);
-    left -= step;
-  }
+function cancellablePause(ms: number, get: () => FillRun): Promise<void> {
+  if (get().cancelled || ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      wakePause = null;
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    wakePause = finish;
+  });
 }

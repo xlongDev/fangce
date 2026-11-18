@@ -16,10 +16,11 @@ import type { BookSummary } from "@/types/ipc";
  *
  * Two consequences worth stating outright:
  *
- * - **停止 only takes effect between books, and that is not a shortcut.** A
- *   stream cancelled midway comes back as Ok with the text written so far, so
- *   asking the backend to stop would cache a stump as the guide. The book in
- *   flight finishes and is cached whole; the queue just ends there.
+ * - **停止 stops the book in flight, not just the next one.** The backend has
+ *   a per-request cancel flag that the agent checks on every streamed chunk
+ *   and before every tool round, so `stop` asks it to end now. A cancelled
+ *   guide is deliberately not cached — a stump that looks complete is worse
+ *   than one the reader has to generate again.
  *
  * - **Completion is announced by a toast, raised from here.** Nothing is
  *   mounted when a long run ends, so there is no component left to report it —
@@ -48,7 +49,7 @@ interface GuideBatchState {
   setCollapsed: (collapsed: boolean) => void;
   /** Generates a guide for each book, in order. Ignored while a run is live. */
   start: (books: readonly BookSummary[]) => Promise<void>;
-  /** Asks the run to stop after the book in flight. */
+  /** Asks the run to stop, including the book in flight. */
   stop: () => void;
 }
 
@@ -148,11 +149,13 @@ export const useGuideBatch = create<GuideBatchState>()((set, get) => ({
         state.run ? { run: { ...state.run, index: index + 1, title: book.title } } : {},
       );
       // One stream at a time is the contract: sequential is what makes
-      // stop-between-books and a single request id possible.
+      // stop-now and a single request id possible.
       // oxlint-disable-next-line no-await-in-loop
       const error = await generateOne(book);
       if (error === null) generated += 1;
-      else failed.push(book.title);
+      // A stop ends the in-flight stream with an error. That is the reader's
+      // choice, not a book that failed — it stays available for the next run.
+      else if (!stopRequested) failed.push(book.title);
       set((state) => (state.run ? { run: { ...state.run, generated, failed: [...failed] } } : {}));
     }
 
@@ -175,6 +178,10 @@ export const useGuideBatch = create<GuideBatchState>()((set, get) => ({
 
   stop: () => {
     stopRequested = true;
+    // The pill says 停止：make it stop the stream in flight, not just refuse
+    // the next book. Same fire-and-forget contract as the chat panel: the
+    // backend's own `done` event is what settles `generateOne`.
+    if (active) void ipc.aiCancel(active).catch(() => {});
     set((state) =>
       state.run?.status === "running" ? { run: { ...state.run, status: "stopping" } } : {},
     );

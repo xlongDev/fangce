@@ -47,6 +47,20 @@ impl AiRuns {
         flag
     }
 
+    /// Joins a turn already registered by a caller instead of replacing it.
+    ///
+    /// A command that needs to inspect the flag after the stream ends and the
+    /// stream itself must watch the same flag: a second `begin` would hand the
+    /// agent a fresh one that `ai.cancel` never sets.
+    pub fn begin_or_get(&self, request_id: &str) -> Arc<AtomicBool> {
+        if let Ok(flags) = self.flags.lock()
+            && let Some(flag) = flags.get(request_id)
+        {
+            return flag.clone();
+        }
+        self.begin(request_id)
+    }
+
     /// Asks the turn with this id to stop. Unknown ids are ignored — the reader
     /// may press stop a moment after the answer already arrived.
     pub fn cancel(&self, request_id: &str) {
@@ -86,6 +100,19 @@ mod tests {
         // Cancelling after the turn is gone is not an error; it reaches nothing.
         runs.cancel("r1");
         assert!(!second.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn joining_an_id_keeps_the_flag_a_cancel_will_set() {
+        let runs = AiRuns::default();
+        let command = runs.begin("r1");
+        // The stream joins rather than replacing: both watch one flag.
+        let stream = runs.begin_or_get("r1");
+        assert!(std::sync::Arc::ptr_eq(&command, &stream));
+
+        runs.cancel("r1");
+        assert!(command.load(Ordering::Relaxed));
+        assert!(stream.load(Ordering::Relaxed));
     }
 
     #[test]

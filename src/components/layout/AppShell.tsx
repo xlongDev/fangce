@@ -26,6 +26,7 @@ import { useDeepLink } from "@/hooks/useDeepLink";
 import { useFonts } from "@/hooks/useFonts";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { GuideBatchPill } from "@/features/library/GuideBatchPill";
+import { FillRunPill } from "@/features/library/FillRunPill";
 import { registerCoreCommands, useNavigationBridge } from "@/features/command/registerCoreCommands";
 import { DURATION, EASE_OUT } from "@/lib/motion";
 
@@ -445,6 +446,8 @@ export function AppShell() {
         {/* The batch AI-guide run floats over every page — the loop outlives
             the shelf that started it, so its progress has to as well. */}
         <GuideBatchPill />
+        {/* 整架补全同样会跨页面继续跑：进度和停止跟着 shell，而不是书架。 */}
+        <FillRunPill />
       </div>
     </TtsHost>
   );

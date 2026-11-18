@@ -625,7 +625,10 @@ pub(crate) async fn run_stream(
     let library = &state.library;
     let client = client()?;
     let request_id = args.request_id.to_string();
-    let cancel = state.ai_runs.begin(&request_id);
+    // One flag for both the tool context and the agent loop. A second `begin`
+    // here used to replace the flag in `ai_runs`, so `ai.cancel` set one the
+    // tools never read and a stop during a tool call did nothing.
+    let cancel = state.ai_runs.begin_or_get(&request_id);
     let ctx = crate::ai::tools::ToolContext {
         library,
         client: &client,
@@ -647,7 +650,6 @@ pub(crate) async fn run_stream(
     };
 
     let messages = with_system_extra(args.config, args.messages, args.context);
-    let cancel = state.ai_runs.begin(&request_id);
     let result =
         crate::ai::agent::run(&client, args.config, messages, args.tools, &ctx, &mut sink, &|| {
             cancel.load(std::sync::atomic::Ordering::Relaxed)
@@ -709,6 +711,10 @@ pub async fn ai_digest(
         ChatMessage::new(Role::User, material),
     ];
 
+    // Held past `run_stream`: it removes the registry entry, but this Arc still
+    // reads the flag the agent watched, which is the difference between a stop
+    // and a complete answer.
+    let cancel = state.ai_runs.begin_or_get(&request_id);
     let result = run_stream(
         &app,
         &state,
@@ -727,6 +733,16 @@ pub async fn ai_digest(
 
     match result {
         Ok(outcome) => {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                // The agent returns the text it had so far on a stop. Caching
+                // that as a guide would leave a stump that looks complete on
+                // the next open; tell the stream it is over and write nothing.
+                let mut delta = blank(&request_id);
+                delta.done = true;
+                delta.error = Some("已停止生成".into());
+                emit(&app, delta);
+                return Err(AppError::Message("已停止生成".into()));
+            }
             // Not `guide`: that name is the module this writes through.
             let written = outcome.text.trim();
             if written.is_empty() {
