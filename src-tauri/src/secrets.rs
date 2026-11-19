@@ -12,7 +12,8 @@
 //! deliberately **no Argon2 step here**, unlike `.ctzx`: that one stretches a
 //! human password, and stretching an already-uniform 256-bit key would spend
 //! its 19 MiB of work on every save to buy nothing. The reader never sees a
-//! prompt — the OS is what gates access, per application.
+//! prompt — the OS is what gates access, per application. (Debug builds opt
+//! out entirely with a fixed key; see [`master_key`].)
 //!
 //! Sealing is per field, and the row key plus the field name travel as GCM
 //! additional data. A blob therefore only opens where it was written: swapping
@@ -139,8 +140,23 @@ fn store_reason(err: &keyring::Error) -> String {
 /// Minting is a write, so this is the one function in the module with a side
 /// effect beyond the database — and it only ever runs when a credential is
 /// actually being sealed or opened.
+///
+/// 🔴 Debug builds use a fixed key and never touch the OS credential store.
+/// An ad-hoc-signed macOS binary gets a new code signature on every rebuild,
+/// so the Keychain item's ACL no longer recognises it and the OS re-prompts
+/// for the login password on every launch — even though the entry is still
+/// there. Release builds keep the real store-backed key; there is no way to
+/// swap that password prompt for Touch ID without code signing plus the
+/// `keychain-access-groups` entitlement (data-protection keychain returns
+/// `errSecMissingEntitlement` otherwise). The cost of the fixed dev key is
+/// that a credential sealed by a release build cannot be opened by a debug
+/// build (and vice versa), which is fine while there are no released users.
 #[cfg(not(test))]
 fn master_key() -> AppResult<[u8; KEY_BYTES]> {
+    if cfg!(debug_assertions) {
+        return Ok([0x5a; KEY_BYTES]);
+    }
+
     let mut cache = MASTER_KEY.lock().map_err(|_| AppError::poisoned("secrets"))?;
     if let Some(key) = *cache {
         return Ok(key);
