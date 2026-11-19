@@ -572,8 +572,9 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         managing={selection.managing}
         selected={selection.selected}
         busy={
-          setFavorite.isPending ||
-          setFavorites.isPending ||
+          // Favouriting is local and optimistic; putting it here dimmed every
+          // card on the shelf for the length of one write — a flash nobody
+          // asked for. Only writes that move books need the whole shelf held.
           deleteBook.isPending ||
           deleteBooks.isPending ||
           restoreBooks.isPending ||

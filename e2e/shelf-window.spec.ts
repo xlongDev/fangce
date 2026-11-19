@@ -99,3 +99,48 @@ test("the shelf renders a window of the list, and holds its true height", async 
   // couple of screens' worth rendered.
   expect(await page.locator("[data-book-cover]").count()).toBeLessThan(WINDOW_LIMIT);
 });
+
+/**
+ * Favouriting is a mark on one book, not a state of the shelf. It used to go
+ * through the same `busy` flag as deleting: every card's open button was
+ * disabled — and therefore 50% opaque — for the length of one write, which
+ * read as the whole shelf blinking. Sample every frame of the gesture instead
+ * of looking at the end state, where the flash is already over.
+ */
+test("favouriting a book leaves the rest of the shelf opaque", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/?demo=1");
+  const covers = page.locator("[data-shelf-grid] [data-book-cover]");
+  await covers.nth(1).hover();
+  const star = page.getByRole("button", { name: "收藏", exact: true }).first();
+
+  await page.evaluate(() => {
+    const probe = window as unknown as { palest: number; frames: number; stop: boolean };
+    probe.palest = 1;
+    probe.frames = 0;
+    probe.stop = false;
+    const sample = () => {
+      for (const button of document.querySelectorAll<HTMLElement>(
+        "[data-shelf-grid] > div > button",
+      )) {
+        probe.palest = Math.min(probe.palest, Number.parseFloat(getComputedStyle(button).opacity));
+      }
+      probe.frames += 1;
+      if (!probe.stop) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+
+  await star.click();
+  // A frame count, not a fixed wait: the point is to have watched the whole
+  // mutation, however long the machine takes to run it.
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { frames: number }).frames))
+    .toBeGreaterThan(12);
+  const palest = await page.evaluate(() => {
+    const probe = window as unknown as { palest: number; stop: boolean };
+    probe.stop = true;
+    return probe.palest;
+  });
+  expect(palest, "no card dims while one book is favourited").toBe(1);
+});

@@ -419,12 +419,27 @@ export function useUndoOperation() {
   });
 }
 
+/** Book rows share the `books` prefix with facets, stats and storage — only
+ *  the former are arrays of `BookSummary`. */
+const isBookRows = (rows: unknown): rows is BookSummary[] =>
+  Array.isArray(rows) && rows.every((row) => row && typeof row === "object" && "favorite" in row);
+
 export function useSetFavorite() {
   const invalidate = useInvalidateShelf();
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, favorite }: { id: string; favorite: boolean }) =>
       ipc.bookSetFavorite(id, favorite),
-    // Optimistic-free is fine at this size; the query is refreshed after.
+    // The tap is answered by the cache, not by the IPC round trip: waiting for
+    // the refetch let the star's animation finish on the old state. A failed
+    // write is corrected by the settle refetch below.
+    onMutate: async ({ id, favorite }) => {
+      await queryClient.cancelQueries({ queryKey: ["books"] });
+      queryClient.setQueriesData<BookSummary[]>(
+        { queryKey: ["books"], predicate: (query) => isBookRows(query.state.data) },
+        (rows) => rows?.map((row) => (row.id === id ? { ...row, favorite } : row)),
+      );
+    },
     onSettled: invalidate,
   });
 }

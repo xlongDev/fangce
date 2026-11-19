@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import { motion } from "motion/react";
+import { useRef, useState, type MouseEvent } from "react";
+import { motion, useAnimationControls } from "motion/react";
 import {
   BookOpen,
   Check,
@@ -17,7 +17,7 @@ import { MarqueeText } from "@/components/common/MarqueeText";
 import { authorLine, formatFileSize } from "@/features/library/format";
 import { cn } from "@/lib/cn";
 import { isDesktopRuntime } from "@/lib/ipc";
-import { SPRING, useMotion } from "@/lib/motion";
+import { EASE_LAND, SPRING, useMotion } from "@/lib/motion";
 import { displayTitle } from "@/lib/title";
 import { useLandingBox } from "@/hooks/useLandingBox";
 import { boxOf, useBookHandoff, type CoverBox } from "@/stores/book-handoff";
@@ -96,6 +96,8 @@ export function BookCard({
 }: BookCardProps) {
   const authors = authorLine(book);
   const m = useMotion();
+  const star = useAnimationControls();
+  const halo = useAnimationControls();
   const beginHandoff = useBookHandoff((s) => s.begin);
   const coverRef = useRef<HTMLSpanElement>(null);
   /**
@@ -117,6 +119,36 @@ export function BookCard({
       });
     }
     onOpen(book);
+  };
+
+  /**
+   * The star answers the tap itself: a short press-and-settle, with one soft
+   * bloom when it lights up. Nothing else on the shelf moves — a favourite is
+   * a mark on one book, not a change to the shelf.
+   */
+  const toggleFavorite = (event: MouseEvent) => {
+    event.stopPropagation();
+    if (!m.reduce) {
+      void star.start(
+        book.favorite
+          ? {
+              scale: [1, 0.86, 1],
+              transition: { duration: 0.22, times: [0, 0.45, 1], ease: EASE_LAND },
+            }
+          : {
+              scale: [1, 1.34, 0.94, 1],
+              transition: { duration: 0.38, times: [0, 0.28, 0.62, 1], ease: EASE_LAND },
+            },
+      );
+      if (!book.favorite) {
+        void halo.start({
+          scale: [0.5, 1.5],
+          opacity: [0.4, 0],
+          transition: { duration: 0.42, ease: EASE_LAND },
+        });
+      }
+    }
+    onToggleFavorite(book);
   };
 
   // The other end of the same gesture. When this book's cover is in the air —
@@ -335,13 +367,20 @@ export function BookCard({
               would flip contrast between the themes. */}
           <GlassIconButton
             label={book.favorite ? "取消收藏" : "收藏"}
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggleFavorite(book);
-            }}
+            onClick={toggleFavorite}
             className={coverAction}
           >
-            <Star size={13} weight={book.favorite ? "fill" : "regular"} />
+            <span className="relative flex">
+              <motion.span
+                aria-hidden
+                className="pointer-events-none absolute inset-0 rounded-full bg-white/35 blur-[3px]"
+                initial={{ scale: 0.5, opacity: 0 }}
+                animate={halo}
+              />
+              <motion.span animate={star} className="relative flex">
+                <Star size={13} weight={book.favorite ? "fill" : "regular"} />
+              </motion.span>
+            </span>
           </GlassIconButton>
           <GlassIconButton
             label="标签"
