@@ -86,7 +86,7 @@ it("drops a book whose stream failed and keeps going", async () => {
   expect(toast).toHaveBeenCalledWith("error", "已生成 1 份导读；1 本失败（一），可稍后重试。");
 });
 
-it("stops between books: the book in flight finishes, the rest never start", async () => {
+it("stops at the book in flight: finished books count, the rest never start", async () => {
   /** Resolves the held stream for the call at `index`. */
   const holders: Array<() => void> = [];
   digest.mockImplementation(async (requestId) => {
@@ -110,39 +110,34 @@ it("stops between books: the book in flight finishes, the rest never start", asy
 
   useGuideBatch.getState().stop();
   expect(run()?.status).toBe("stopping");
-
-  holders[1]?.();
+  // 在飞那本由 stop 本地结算，不等后端补发 done。
   await finished;
 
   expect(digest.mock.calls.map((call) => call[1])).toEqual(["b1", "b2"]);
-  expect(run()).toMatchObject({ generated: 2, failed: [], status: "done" });
-  expect(toast).toHaveBeenCalledWith("success", "已停止：新增 2 份导读，已缓存在本机。");
+  expect(run()).toMatchObject({ generated: 1, failed: [], status: "done" });
+  expect(toast).toHaveBeenCalledWith("success", "已停止：新增 1 份导读，已缓存在本机。");
 });
 
-it("stop cancels the stream in flight, not just the next book", async () => {
-  const release: { current: (() => void) | null } = { current: null };
-  digest.mockImplementation(async (requestId) => {
-    await new Promise<void>((resolve) => {
-      release.current = () => {
-        hook.stream?.(done(requestId, "已停止生成"));
-        resolve();
-      };
-    });
-    throw new Error("已停止生成");
+it("stop settles immediately even when the backend never emits done", async () => {
+  digest.mockImplementation(async () => {
+    // 模拟排队 / 取消标志丢失：后端这颗 Promise 永不 settle。
+    await new Promise<void>(() => {});
+    return null;
   });
 
   const finished = useGuideBatch.getState().start([book("b1", "一"), book("b2", "二")]);
   await vi.waitFor(() => expect(digest).toHaveBeenCalledTimes(1));
 
   useGuideBatch.getState().stop();
-  // The request id belongs to the book in flight, and no later book is asked.
+  // 请求 id 属于在飞那本，且后续书不再发起。
   expect(cancel).toHaveBeenCalledWith(digest.mock.calls[0]![0]);
-  release.current?.();
-  await finished;
+  expect(run()?.status).toBe("stopping");
+  await finished; // 不等后端 done：等不到也不会卡住
 
   expect(digest).toHaveBeenCalledTimes(1);
-  // A reader's stop is not a failed book: it can be generated next time.
+  // 读者主动停止不是这本书失败：下次还能生成。
   expect(run()).toMatchObject({ generated: 0, failed: [], status: "done" });
+  expect(toast).toHaveBeenCalledWith("success", "已停止：新增 0 份导读，已缓存在本机。");
 });
 
 it("refuses a second run while one is live", async () => {

@@ -142,46 +142,59 @@ export const useGuideBatch = create<GuideBatchState>()((set, get) => ({
     let generated = 0;
     const failed: string[] = [];
 
-    for (let index = 0; index < books.length; index++) {
-      const book = books[index];
-      if (!book || stopRequested || runToken !== token) break;
-      set((state) =>
-        state.run ? { run: { ...state.run, index: index + 1, title: book.title } } : {},
-      );
-      // One stream at a time is the contract: sequential is what makes
-      // stop-now and a single request id possible.
-      // oxlint-disable-next-line no-await-in-loop
-      const error = await generateOne(book);
-      if (error === null) generated += 1;
-      // A stop ends the in-flight stream with an error. That is the reader's
-      // choice, not a book that failed — it stays available for the next run.
-      else if (!stopRequested) failed.push(book.title);
-      set((state) => (state.run ? { run: { ...state.run, generated, failed: [...failed] } } : {}));
+    try {
+      for (let index = 0; index < books.length; index++) {
+        const book = books[index];
+        if (!book || stopRequested || runToken !== token) break;
+        set((state) =>
+          state.run ? { run: { ...state.run, index: index + 1, title: book.title } } : {},
+        );
+        // One stream at a time is the contract: sequential is what makes
+        // stop-now and a single request id possible.
+        // oxlint-disable-next-line no-await-in-loop
+        const error = await generateOne(book);
+        if (error === null) generated += 1;
+        // A stop ends the in-flight stream with an error. That is the reader's
+        // choice, not a book that failed — it stays available for the next run.
+        else if (!stopRequested) failed.push(book.title);
+        set((state) =>
+          state.run ? { run: { ...state.run, generated, failed: [...failed] } } : {},
+        );
+      }
+    } finally {
+      // 兜底：正常跑完、停止或意外抛出都要结算 UI，否则胶囊永远停在「正在停止」。
+      // 被新一轮接管时把结算权交给它。这里不写 return —— 那会吞掉 try 里的异常。
+      if (runToken === token) {
+        set({
+          run: {
+            total: books.length,
+            index: books.length,
+            title: "",
+            generated,
+            failed,
+            status: "done",
+          },
+        });
+        showToast(
+          failed.length === 0 ? "success" : "error",
+          describeBatch(generated, failed, stopRequested),
+        );
+      }
     }
-
-    if (runToken !== token) return; // overtaken by a newer start
-    set({
-      run: {
-        total: books.length,
-        index: books.length,
-        title: "",
-        generated,
-        failed,
-        status: "done",
-      },
-    });
-    showToast(
-      failed.length === 0 ? "success" : "error",
-      describeBatch(generated, failed, stopRequested),
-    );
   },
 
   stop: () => {
     stopRequested = true;
-    // The pill says 停止：make it stop the stream in flight, not just refuse
-    // the next book. Same fire-and-forget contract as the chat panel: the
-    // backend's own `done` event is what settles `generateOne`.
-    if (active) void ipc.aiCancel(active).catch(() => {});
+    // 立即结算在飞请求：aiCancel 只是协作式标志（排队/连接阶段没人检查，早按
+    // 还可能在后端注册前丢失），done 不一定按时回来。读者点停止就要立刻看到
+    // 结束，不能对着「正在停止」干等——所以先取走 id 发取消，再本地 resolve，
+    // 让 `await generateOne` 当场返回。晚到的 done 因 active 已清空而被丢弃。
+    const requestId = active;
+    const resolve = settle;
+    settle = null;
+    active = null;
+    if (requestId) void ipc.aiCancel(requestId).catch(() => {});
+    resolve?.("已停止生成");
     set((state) =>
       state.run?.status === "running" ? { run: { ...state.run, status: "stopping" } } : {},
     );
