@@ -27,6 +27,7 @@ import { isDesktopRuntime, ipc } from "@/lib/ipc";
 import { demoEnabled } from "@/lib/demo";
 import { useFillRun } from "@/stores/fillRun";
 import { useGuideBatch } from "@/stores/guideBatch";
+import { useTagRun } from "@/stores/tagRun";
 import { BatchFillDialog } from "@/features/library/BatchFillDialog";
 import { AiTagDialog } from "@/features/library/AiTagDialog";
 import type { ShelfSelection } from "@/features/library/useShelfSelection";
@@ -106,6 +107,10 @@ export function ShelfBatchBar({
   const { choose: chooseExportPath, error: exportPathError } = useSavePath();
   /** 整架补全的进度。名字避开下面导读批处理那个 `run`。 */
   const fillRun = useFillRun();
+  /** 后台打标签跑完后，胶囊上的「审阅」把对话框打开。ids 用跑批时冻结的那批。
+   *  打开标志住 store，跨组件又不碰 effect 里的 setState。 */
+  const reviewSheetOpen = useTagRun((s) => s.reviewSheetOpen);
+  const reviewIds = useTagRun((s) => s.review?.ids);
 
   /** Which books already have a cached guide, so the confirm dialog can skip
    *  them out of the queue and out of the token estimate. Refetched on open:
@@ -439,7 +444,14 @@ export function ShelfBatchBar({
         onClose={() => setFillIds(null)}
       />
 
-      <AiTagDialog open={tagIds !== null} ids={tagIds ?? []} onClose={() => setTagIds(null)} />
+      <AiTagDialog
+        open={tagIds !== null || reviewSheetOpen}
+        ids={tagIds ?? reviewIds ?? []}
+        onClose={() => {
+          setTagIds(null);
+          useTagRun.getState().closeReviewSheet();
+        }}
+      />
 
       {/* Batch AI guides: confirm (with the token estimate), then hand the run
           to the global store — progress floats as a shell-level pill, and the

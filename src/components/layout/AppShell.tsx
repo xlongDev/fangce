@@ -27,6 +27,7 @@ import { useFonts } from "@/hooks/useFonts";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { GuideBatchPill } from "@/features/library/GuideBatchPill";
 import { FillRunPill } from "@/features/library/FillRunPill";
+import { TagRunPill } from "@/features/library/TagRunPill";
 import { registerCoreCommands, useNavigationBridge } from "@/features/command/registerCoreCommands";
 import { DURATION, EASE_OUT } from "@/lib/motion";
 
@@ -448,6 +449,8 @@ export function AppShell() {
         <GuideBatchPill />
         {/* 整架补全同样会跨页面继续跑：进度和停止跟着 shell，而不是书架。 */}
         <FillRunPill />
+        {/* 批量打标签照旧：关闭对话框不打断任务，进度和停止留在这里。 */}
+        <TagRunPill />
       </div>
     </TtsHost>
   );
