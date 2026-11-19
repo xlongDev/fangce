@@ -49,6 +49,9 @@ export interface FillRun {
   retryPending: () => void;
   /** Why it stopped before the end, or `null` when it ran to completion. */
   stopped: string | null;
+  /** 胶囊折成小徽章（照 GuideBatchPill）；纯展示态，循环照跑。 */
+  collapsed: boolean;
+  setCollapsed: (collapsed: boolean) => void;
   start: (ids: string[], replaceCovers?: boolean) => void;
   cancel: () => void;
   reset: () => void;
@@ -98,6 +101,7 @@ const idle = {
   pending: [] as string[],
   replaceCovers: false,
   stopped: null as string | null,
+  collapsed: false,
 };
 
 export const useFillRun = create<FillRun>((set, get) => ({
@@ -106,6 +110,7 @@ export const useFillRun = create<FillRun>((set, get) => ({
     wakePause?.();
     set(idle);
   },
+  setCollapsed: (collapsed) => set({ collapsed }),
   cancel: () => {
     set({ cancelled: true });
     // Shown by every surface reading the store: the press is acknowledged now,

@@ -50,7 +50,7 @@ describe("整架补全的常驻胶囊", () => {
     show();
 
     expect(screen.getByText("补全中")).toBeTruthy();
-    expect(screen.getByText("4 / 10")).toBeTruthy();
+    expect(screen.getAllByText("4 / 10").length).toBeGreaterThan(0);
     await userEvent.click(screen.getByRole("button", { name: "停止" }));
     expect(useFillRun.getState().cancelled).toBe(true);
   });
@@ -68,11 +68,12 @@ describe("整架补全的常驻胶囊", () => {
     show();
 
     await userEvent.click(screen.getByRole("button", { name: "停止" }));
-    expect(screen.getByText("正在停止…")).toBeTruthy();
+    // 胶囊和详情面板各有一处「正在停止…」，两处都要立刻跟上。
+    expect(screen.getAllByText("正在停止…").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "停止中" })).toBeTruthy();
   });
 
-  it("展开后能看到失败的书和原因", async () => {
+  it("详情默认可见，折叠成小徽章后计数仍在，点徽章恢复", async () => {
     act(() => {
       useFillRun.setState({
         running: false,
@@ -87,10 +88,18 @@ describe("整架补全的常驻胶囊", () => {
     });
     show();
 
-    await userEvent.click(screen.getByRole("button", { name: "展开补全进度" }));
     expect(await screen.findByText(/失败明细/)).toBeTruthy();
     expect(screen.getByText("书本甲")).toBeTruthy();
     expect(screen.getByText("查询失败：目录没有回应")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "折叠补全进度" }));
+    expect(useFillRun.getState().collapsed).toBe(true);
+    // 折叠后只剩图标 + 计数，计数还在。
+    expect(screen.getAllByText("2 / 2").length).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByRole("button", { name: "展开补全进度" }));
+    expect(useFillRun.getState().collapsed).toBe(false);
+    expect(screen.getByRole("button", { name: "折叠补全进度" })).toBeTruthy();
   });
 
   it("结束时刷新书架并报一次结果", async () => {
