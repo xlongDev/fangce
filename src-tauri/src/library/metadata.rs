@@ -16,15 +16,20 @@
 //! pure function over a captured response, and why a provider that fails says
 //! so instead of pretending the book has no metadata.
 //!
-//! **No trait.** Two providers, and the thing that is shared is [`Candidate`]
-//! plus a small function each. An async trait would have to be rewritten the
-//! moment the two disagree about a field, which they already do: Douban has no
-//! ISBN and no language, NeoDB has both and no blurb for most records.
+//! **A trait, not an enum.** The two built-in catalogues are two implementations
+//! registered in [`PROVIDERS`]; adding a third source means adding one impl and
+//! one entry, not touching a `match` in every caller. What they share stays a
+//! plain string key: it is written to `books.rating_source`, sent to the
+//! renderer, and used as the gate/circuit-breaker bucket. Their fields genuinely
+//! differ (Douban has no ISBN, NeoDB has no blurb), and each parser keeps its
+//! own shape.
 //!
 //! Nothing here writes. A candidate is a suggestion; applying it is the reader's
 //! click, and the write path is the one `book.update` already uses.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -38,7 +43,7 @@ use crate::error::{AppError, AppResult};
 
 /// Where the catalogue lives. A parameter on [`search`] rather than a constant
 /// inside it, so a test can point at a mock without changing the call shape.
-pub const NEODB: &str = "https://neodb.social";
+pub const NEODB_BASE: &str = "https://neodb.social";
 
 /// Douban's autocomplete. It is what the site's own search box calls, it needs
 /// no login, and it answers with subject ids — the only way in, because the
@@ -105,25 +110,26 @@ struct GateState {
 /// function signatures would make it easy for one caller to forget.
 #[derive(Default)]
 pub struct CatalogueGate {
-    state: Mutex<HashMap<Provider, GateState>>,
+    state: Mutex<HashMap<&'static str, GateState>>,
 }
 
 impl CatalogueGate {
     /// Take the next slot for this provider, sleeping until it arrives.
-    pub async fn wait(&self, provider: Provider) {
+    pub async fn wait(&self, provider: &dyn MetadataProvider) {
+        let key = provider.key();
         loop {
             let at = {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 let now = Instant::now();
                 let entry =
-                    state.entry(provider).or_insert(GateState { next: now, cooldown_until: now });
+                    state.entry(key).or_insert(GateState { next: now, cooldown_until: now });
                 let at = entry.next.max(entry.cooldown_until).max(now);
                 entry.next = at + SUGGEST_INTERVAL;
                 at
             };
             sleep_until(tokio::time::Instant::from_std(at)).await;
             // A 403 that arrived while we slept outranks the slot reserved above.
-            if self.cooling_down(provider) {
+            if self.cooling_down(key) {
                 continue;
             }
             return;
@@ -131,19 +137,18 @@ impl CatalogueGate {
     }
 
     /// Push every future slot past the provider's own answer to 「when」.
-    pub fn penalize(&self, provider: Provider, retry_after: Duration) {
+    pub fn penalize(&self, provider: &dyn MetadataProvider, retry_after: Duration) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
-        let entry = state.entry(provider).or_insert(GateState { next: now, cooldown_until: now });
+        let entry =
+            state.entry(provider.key()).or_insert(GateState { next: now, cooldown_until: now });
         entry.cooldown_until = entry.cooldown_until.max(now + retry_after);
     }
 
-    fn cooling_down(&self, provider: Provider) -> bool {
+    fn cooling_down(&self, key: &'static str) -> bool {
         self.state
             .lock()
-            .map(|state| {
-                state.get(&provider).is_some_and(|entry| entry.cooldown_until > Instant::now())
-            })
+            .map(|state| state.get(key).is_some_and(|entry| entry.cooldown_until > Instant::now()))
             .unwrap_or(false)
     }
 }
@@ -177,47 +182,77 @@ fn is_throttle(status: reqwest::StatusCode) -> bool {
     matches!(status.as_u16(), 403 | 418 | 429)
 }
 
-/// Which catalogue to ask.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Provider {
-    /// First, because it is the one that works without a proxy.
-    Douban,
-    /// The fallback: better foreign coverage, and the only source of an ISBN.
-    Neodb,
+/// One catalogue this app can ask.
+///
+/// Object-safe on purpose: the registry holds trait objects, so a new source
+/// is one implementation plus one entry in [`PROVIDERS`]. The boxed future is
+/// the cost of that — no `async_trait` dependency and no `Pin` at every call
+/// site beyond this one signature.
+pub trait MetadataProvider: Send + Sync {
+    /// Stable identity written to the database and sent to the renderer.
+    fn key(&self) -> &'static str;
+    /// What the reader sees next to a rating. Not decoration: a bare number
+    /// would be read as Douban's, and NeoDB's is a different number.
+    fn label(&self) -> &'static str;
+    fn search<'a>(
+        &'a self,
+        client: &'a Client,
+        lookup: &'a Lookup<'_>,
+        depth: usize,
+    ) -> Pin<Box<dyn Future<Output = AppResult<Vec<Candidate>>> + Send + 'a>>;
 }
 
-impl Provider {
-    /// The order is the design. Douban is reachable from where this app is used;
-    /// NeoDB is not, so asking it first would make every lookup wait out a
-    /// twelve-second timeout before the one that works even started.
-    pub const CHAIN: [Provider; 2] = [Provider::Douban, Provider::Neodb];
+pub struct Douban;
+pub struct Neodb;
 
-    /// What goes into the database, and into `Candidate::source`.
-    pub fn key(self) -> &'static str {
-        match self {
-            Provider::Douban => "douban",
-            Provider::Neodb => "neodb",
-        }
+pub const DOUBAN: &dyn MetadataProvider = &Douban;
+pub const NEODB: &dyn MetadataProvider = &Neodb;
+
+/// Douban first: reachable without a proxy, better Chinese coverage, and its
+/// rating is the one readers mean by 「豆瓣评分」. NeoDB only when Douban has
+/// nothing — it covers foreign books and is the only source of an ISBN.
+pub static PROVIDERS: &[&dyn MetadataProvider] = &[DOUBAN, NEODB];
+
+/// Reverse lookup for the command that lets the reader pick a source by key.
+pub fn by_key(key: &str) -> Option<&'static dyn MetadataProvider> {
+    PROVIDERS.iter().copied().find(|provider| provider.key() == key.trim())
+}
+
+impl MetadataProvider for Douban {
+    fn key(&self) -> &'static str {
+        "douban"
     }
 
-    /// The inverse of [`Provider::key`], for the command that lets the reader
-    /// pick a source by name.
-    pub fn parse(key: &str) -> Option<Self> {
-        match key.trim() {
-            "douban" => Some(Provider::Douban),
-            "neodb" => Some(Provider::Neodb),
-            _ => None,
-        }
+    fn label(&self) -> &'static str {
+        "豆瓣"
     }
 
-    /// What the reader sees next to a rating. The name is not decoration: a
-    /// bare number would be read as Douban's, and NeoDB's is a different number
-    /// from a different set of people.
-    pub fn label(self) -> &'static str {
-        match self {
-            Provider::Douban => "豆瓣",
-            Provider::Neodb => "NeoDB",
-        }
+    fn search<'a>(
+        &'a self,
+        client: &'a Client,
+        lookup: &'a Lookup<'_>,
+        depth: usize,
+    ) -> Pin<Box<dyn Future<Output = AppResult<Vec<Candidate>>> + Send + 'a>> {
+        Box::pin(async move { search_douban(client, lookup, depth).await })
+    }
+}
+
+impl MetadataProvider for Neodb {
+    fn key(&self) -> &'static str {
+        "neodb"
+    }
+
+    fn label(&self) -> &'static str {
+        "NeoDB"
+    }
+
+    fn search<'a>(
+        &'a self,
+        client: &'a Client,
+        lookup: &'a Lookup<'_>,
+        _depth: usize,
+    ) -> Pin<Box<dyn Future<Output = AppResult<Vec<Candidate>>> + Send + 'a>> {
+        Box::pin(async move { search_neodb(client, NEODB_BASE, lookup).await })
     }
 }
 
@@ -650,17 +685,14 @@ pub fn propose_for_with(
 /// already returns everything.
 pub async fn search(
     client: &Client,
-    provider: Provider,
+    provider: &dyn MetadataProvider,
     lookup: &Lookup<'_>,
     depth: usize,
 ) -> AppResult<Vec<Candidate>> {
     if lookup.title.trim().is_empty() {
         return Err(AppError::InvalidArgument("这本书没有书名，查不了".into()));
     }
-    match provider {
-        Provider::Douban => search_douban(client, lookup, depth).await,
-        Provider::Neodb => search_neodb(client, NEODB, lookup).await,
-    }
+    provider.search(client, lookup, depth).await
 }
 
 /// Why a provider will not be asked again in this batch.
@@ -682,7 +714,7 @@ pub enum Skip {
 /// instead of a dialog that appears to have hung.
 #[derive(Default)]
 pub struct Attempts {
-    failed: Mutex<Vec<(Provider, Skip)>>,
+    failed: Mutex<Vec<(&'static str, Skip)>>,
 }
 
 impl Attempts {
@@ -690,27 +722,32 @@ impl Attempts {
         Self::default()
     }
 
-    pub fn skip(&self, provider: Provider) -> Option<Skip> {
-        self.failed.lock().ok()?.iter().find(|(p, _)| *p == provider).map(|(_, skip)| *skip)
+    pub fn skip(&self, provider: &dyn MetadataProvider) -> Option<Skip> {
+        self.failed
+            .lock()
+            .ok()?
+            .iter()
+            .find(|(key, _)| *key == provider.key())
+            .map(|(_, skip)| *skip)
     }
 
     /// A poisoned lock means another task panicked while holding it. Asking one
     /// more question is better than silently dropping a provider for the batch.
-    fn record(&self, provider: Provider, skip: Skip) {
+    fn record(&self, provider: &dyn MetadataProvider, skip: Skip) {
         if let Ok(mut failed) = self.failed.lock() {
-            if let Some(entry) = failed.iter_mut().find(|(p, _)| *p == provider) {
+            if let Some(entry) = failed.iter_mut().find(|(key, _)| *key == provider.key()) {
                 entry.1 = skip;
             } else {
-                failed.push((provider, skip));
+                failed.push((provider.key(), skip));
             }
         }
     }
 
-    fn mark_down(&self, provider: Provider) {
+    fn mark_down(&self, provider: &dyn MetadataProvider) {
         self.record(provider, Skip::Down);
     }
 
-    fn mark_throttled(&self, provider: Provider, status: u16, retry_after: Duration) {
+    fn mark_throttled(&self, provider: &dyn MetadataProvider, status: u16, retry_after: Duration) {
         self.record(provider, Skip::Throttled { status, retry_after });
     }
 }
@@ -732,7 +769,7 @@ pub async fn find(
     attempts: &Attempts,
 ) -> AppResult<Vec<Candidate>> {
     let mut results = Vec::new();
-    for provider in Provider::CHAIN {
+    for provider in PROVIDERS.iter().copied() {
         match attempts.skip(provider) {
             Some(Skip::Down) => {
                 results.push((provider, Err(AppError::Message("这次查询里连不上，已跳过".into()))));
@@ -779,7 +816,9 @@ pub async fn find(
 /// non-empty answer wins, and 「a provider that failed」 is not 「the book does
 /// not exist」 — it is only reported as an empty result when some provider
 /// actually answered.
-fn choose(results: Vec<(Provider, AppResult<Vec<Candidate>>)>) -> AppResult<Vec<Candidate>> {
+fn choose(
+    results: Vec<(&dyn MetadataProvider, AppResult<Vec<Candidate>>)>,
+) -> AppResult<Vec<Candidate>> {
     let mut notes = Vec::new();
     let mut answered = false;
     let mut weak: Option<Vec<Candidate>> = None;
@@ -829,7 +868,7 @@ async fn search_neodb(
     lookup: &Lookup<'_>,
 ) -> AppResult<Vec<Candidate>> {
     let url = build_url(base, lookup)?;
-    gate().wait(Provider::Neodb).await;
+    gate().wait(NEODB).await;
     let response = client
         .get(url)
         .timeout(Duration::from_secs(12))
@@ -843,10 +882,10 @@ async fn search_neodb(
     let status = response.status();
     if !status.is_success() {
         let wait = retry_after_of(response.headers());
-        gate().penalize(Provider::Neodb, wait);
+        gate().penalize(NEODB, wait);
         if is_throttle(status) {
             return Err(AppError::Throttled {
-                provider: Provider::Neodb.label().to_string(),
+                provider: NEODB.label().to_string(),
                 status: status.as_u16(),
                 retry_after: wait,
             });
@@ -900,7 +939,7 @@ async fn suggest(client: &Client, query: &str) -> AppResult<Value> {
     let mut url = reqwest::Url::parse(DOUBAN_SUGGEST)
         .map_err(|err| AppError::Message(format!("书源地址不合法：{err}")))?;
     url.query_pairs_mut().append_pair("q", query);
-    gate().wait(Provider::Douban).await;
+    gate().wait(DOUBAN).await;
     let response = client
         .get(url)
         .timeout(Duration::from_secs(12))
@@ -912,10 +951,10 @@ async fn suggest(client: &Client, query: &str) -> AppResult<Value> {
     let status = response.status();
     if !status.is_success() {
         let wait = retry_after_of(response.headers());
-        gate().penalize(Provider::Douban, wait);
+        gate().penalize(DOUBAN, wait);
         if is_throttle(status) {
             return Err(AppError::Throttled {
-                provider: Provider::Douban.label().to_string(),
+                provider: DOUBAN.label().to_string(),
                 status: status.as_u16(),
                 retry_after: wait,
             });
@@ -1085,7 +1124,7 @@ fn suggest_hit(item: &Value, lookup: &Lookup<'_>) -> Option<Hit> {
     Some(Hit {
         id: id.clone(),
         candidate: Candidate {
-            source: Provider::Douban.key().to_string(),
+            source: DOUBAN.key().to_string(),
             title,
             subtitle: None,
             authors,
@@ -1119,7 +1158,7 @@ fn parse_detail(body: &Value, lookup: &Lookup<'_>) -> Option<Candidate> {
     let match_score = score(lookup, &title, &authors);
     let rating = body.get("rating");
     Some(Candidate {
-        source: Provider::Douban.key().to_string(),
+        source: DOUBAN.key().to_string(),
         title,
         // `book_subtitle` is the string the app shows; `subtitle` is the same
         // thing as an array and is empty on older records.
@@ -1327,7 +1366,7 @@ fn candidate(doc: &Value, lookup: &Lookup<'_>) -> Option<Candidate> {
     // Each record is one edition, so the first entry of each array *is* this
     // book's value rather than one printing's share of a union.
     Some(Candidate {
-        source: Provider::Neodb.key().to_string(),
+        source: NEODB.key().to_string(),
         title,
         subtitle: text(doc, "subtitle"),
         authors,
@@ -1644,7 +1683,7 @@ mod tests {
 
     #[test]
     fn the_url_asks_the_book_catalogue_for_the_title() {
-        let url = build_url(NEODB, &lookup("三体 全集", &[])).expect("url");
+        let url = build_url(NEODB_BASE, &lookup("三体 全集", &[])).expect("url");
         let text = url.to_string();
         assert!(text.starts_with("https://neodb.social/api/catalog/search?"), "{text}");
         assert!(text.contains("category=book"), "不筛类别会连电影一起返回：{text}");
@@ -2290,24 +2329,24 @@ mod tests {
     #[test]
     fn a_provider_that_failed_is_not_asked_again_in_the_same_batch() {
         let attempts = Attempts::new();
-        assert_eq!(attempts.skip(Provider::Neodb), None);
-        attempts.mark_down(Provider::Neodb);
-        assert_eq!(attempts.skip(Provider::Neodb), Some(Skip::Down));
-        assert_eq!(attempts.skip(Provider::Douban), None, "一个来源挂了不影响另一个");
+        assert_eq!(attempts.skip(NEODB), None);
+        attempts.mark_down(NEODB);
+        assert_eq!(attempts.skip(NEODB), Some(Skip::Down));
+        assert_eq!(attempts.skip(DOUBAN), None, "一个来源挂了不影响另一个");
     }
 
     #[test]
     fn a_throttled_provider_is_remembered_as_waiting_not_broken() {
         let attempts = Attempts::new();
-        attempts.mark_throttled(Provider::Douban, 403, Duration::from_secs(30));
+        attempts.mark_throttled(DOUBAN, 403, Duration::from_secs(30));
         assert_eq!(
-            attempts.skip(Provider::Douban),
+            attempts.skip(DOUBAN),
             Some(Skip::Throttled { status: 403, retry_after: Duration::from_secs(30) })
         );
         // The next book in the batch gets the same answer, with the status and
         // the wait the reader needs in order to know when to try again.
         let err = AppError::Throttled {
-            provider: Provider::Douban.label().to_string(),
+            provider: DOUBAN.label().to_string(),
             status: 403,
             retry_after: Duration::from_secs(30),
         };
@@ -2343,10 +2382,9 @@ mod tests {
     #[test]
     fn a_cooled_down_provider_does_not_hand_out_a_slot_immediately() {
         let gate = CatalogueGate::default();
-        gate.penalize(Provider::Douban, Duration::from_millis(200));
+        gate.penalize(DOUBAN, Duration::from_millis(200));
         tauri::async_runtime::block_on(async {
-            let waited =
-                tokio::time::timeout(Duration::from_millis(50), gate.wait(Provider::Douban)).await;
+            let waited = tokio::time::timeout(Duration::from_millis(50), gate.wait(DOUBAN)).await;
             assert!(waited.is_err(), "限流冷却期内不该放行请求");
         });
     }
@@ -2356,18 +2394,44 @@ mod tests {
         // The order is the whole point: NeoDB is not reachable from mainland
         // China without a proxy, so asking it first costs a twelve-second
         // timeout before the provider that works even starts.
-        assert_eq!(Provider::CHAIN[0], Provider::Douban);
-        assert_eq!(Provider::CHAIN[1], Provider::Neodb);
+        assert_eq!(PROVIDERS.len(), 2);
+        assert_eq!(PROVIDERS[0].key(), "douban");
+        assert_eq!(PROVIDERS[1].key(), "neodb");
+        assert_eq!(by_key(" neodb ").map(|provider| provider.key()), Some("neodb"));
+        assert_eq!(by_key("unknown").map(|provider| provider.key()), None);
+    }
+
+    #[test]
+    fn a_provider_outside_the_registry_needs_no_change_to_the_chain_logic() {
+        struct Other;
+        impl MetadataProvider for Other {
+            fn key(&self) -> &'static str {
+                "other"
+            }
+            fn label(&self) -> &'static str {
+                "别的目录"
+            }
+            fn search<'a>(
+                &'a self,
+                _client: &'a Client,
+                _lookup: &'a Lookup<'_>,
+                _depth: usize,
+            ) -> Pin<Box<dyn Future<Output = AppResult<Vec<Candidate>>> + Send + 'a>> {
+                Box::pin(async { Ok(Vec::new()) })
+            }
+        }
+        let provider = Other;
+        let err = choose(vec![(&provider, Err(AppError::Message("连不上".into())))])
+            .expect_err("a sole failing provider is an error");
+        assert_eq!(err.to_string(), "别的目录：连不上");
     }
 
     #[test]
     fn the_chain_takes_the_first_answer() {
         let douban = parse_detail(&douban_detail_body(), &lookup("我们为什么会生病", &[]))
             .expect("a record");
-        let results = vec![
-            (Provider::Douban, Ok(vec![douban.clone()])),
-            (Provider::Neodb, Ok(vec![candidate(None, None, 0.9)])),
-        ];
+        let results =
+            vec![(DOUBAN, Ok(vec![douban.clone()])), (NEODB, Ok(vec![candidate(None, None, 0.9)]))];
         let chosen = choose(results).expect("an answer");
         assert_eq!(chosen.len(), 1);
         assert_eq!(chosen[0].source, "douban");
@@ -2375,10 +2439,7 @@ mod tests {
 
     #[test]
     fn the_chain_falls_through_when_the_first_has_nothing() {
-        let results = vec![
-            (Provider::Douban, Ok(Vec::new())),
-            (Provider::Neodb, Ok(vec![candidate(None, None, 0.9)])),
-        ];
+        let results = vec![(DOUBAN, Ok(Vec::new())), (NEODB, Ok(vec![candidate(None, None, 0.9)]))];
         let chosen = choose(results).expect("an answer");
         assert_eq!(chosen[0].source, "neodb");
     }
@@ -2389,8 +2450,8 @@ mod tests {
     #[test]
     fn two_failures_are_an_error_that_names_both() {
         let results = vec![
-            (Provider::Douban, Err(AppError::Message("连不上豆瓣：超时".into()))),
-            (Provider::Neodb, Err(AppError::Message("连不上 NeoDB：超时".into()))),
+            (DOUBAN, Err(AppError::Message("连不上豆瓣：超时".into()))),
+            (NEODB, Err(AppError::Message("连不上 NeoDB：超时".into()))),
         ];
         let err = choose(results).expect_err("no provider answered");
         let text = err.to_string();
@@ -2404,10 +2465,8 @@ mod tests {
     fn the_chain_keeps_asking_when_the_first_only_has_a_weak_match() {
         let mut weak = candidate(None, None, 0.3);
         weak.source = "douban".into();
-        let results = vec![
-            (Provider::Douban, Ok(vec![weak])),
-            (Provider::Neodb, Ok(vec![candidate(None, None, 0.95)])),
-        ];
+        let results =
+            vec![(DOUBAN, Ok(vec![weak])), (NEODB, Ok(vec![candidate(None, None, 0.95)]))];
         let chosen = choose(results).expect("an answer");
         assert_eq!(chosen[0].source, "neodb", "0.3 不该结束整条链");
     }
@@ -2418,10 +2477,8 @@ mod tests {
     fn a_weak_match_is_still_returned_when_it_is_all_there_is() {
         let mut weak = candidate(None, None, 0.3);
         weak.source = "douban".into();
-        let results = vec![
-            (Provider::Douban, Ok(vec![weak])),
-            (Provider::Neodb, Err(AppError::Message("连不上 NeoDB".into()))),
-        ];
+        let results =
+            vec![(DOUBAN, Ok(vec![weak])), (NEODB, Err(AppError::Message("连不上 NeoDB".into())))];
         let chosen = choose(results).expect("an answer");
         assert_eq!(chosen[0].match_score, 0.3);
     }
@@ -2431,10 +2488,8 @@ mod tests {
     /// something answered.
     #[test]
     fn one_answer_and_one_failure_is_an_empty_result_not_an_error() {
-        let results = vec![
-            (Provider::Douban, Ok(Vec::new())),
-            (Provider::Neodb, Err(AppError::Message("连不上 NeoDB".into()))),
-        ];
+        let results =
+            vec![(DOUBAN, Ok(Vec::new())), (NEODB, Err(AppError::Message("连不上 NeoDB".into())))];
         let chosen = choose(results).expect("not an error");
         assert!(chosen.is_empty());
     }
@@ -2470,7 +2525,7 @@ mod tests {
         let authors = ["[以色列] 尤瓦尔·赫拉利".to_string()];
         let lookup = Lookup::new("人类简史", &authors, false);
         let client = client();
-        let found = tauri::async_runtime::block_on(search(&client, Provider::Douban, &lookup, 3))
+        let found = tauri::async_runtime::block_on(search(&client, DOUBAN, &lookup, 3))
             .expect("live search");
         println!("\n{} candidates", found.len());
         for candidate in &found {
@@ -2511,7 +2566,7 @@ mod tests {
         assert_eq!(found[0].source, "douban");
         println!(
             "NeoDB 这条（有代理才通）：{:?}",
-            tauri::async_runtime::block_on(search(&client, Provider::Neodb, &lookup, 1))
+            tauri::async_runtime::block_on(search(&client, NEODB, &lookup, 1))
                 .map(|found| found.len())
         );
     }
@@ -2522,7 +2577,7 @@ mod tests {
         let authors = ["[以色列] 尤瓦尔·赫拉利".to_string()];
         let lookup = Lookup::new("人类简史", &authors, false);
         let client = client();
-        let found = tauri::async_runtime::block_on(search(&client, Provider::Neodb, &lookup, 1))
+        let found = tauri::async_runtime::block_on(search(&client, NEODB, &lookup, 1))
             .expect("live search");
         assert!(!found.is_empty(), "真实目录里不可能没有《人类简史》");
         assert!(found[0].title.contains("人类简史"), "{:?}", found[0]);

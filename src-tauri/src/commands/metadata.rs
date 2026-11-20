@@ -9,7 +9,7 @@ use futures_util::StreamExt;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::library::metadata::{self, Candidate, Lookup, Proposal, Provider, Target};
+use crate::library::metadata::{self, Candidate, Lookup, Proposal, Target};
 use crate::library::{ops, repository};
 use crate::state::AppState;
 
@@ -40,7 +40,7 @@ pub async fn metadata_search(
     id: String,
     source: String,
 ) -> AppResult<Vec<Candidate>> {
-    let provider = Provider::parse(&source)
+    let provider = metadata::by_key(&source)
         .ok_or_else(|| AppError::InvalidArgument(format!("没有这个书目来源：{source}")))?;
     let book = state
         .library
