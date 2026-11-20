@@ -382,7 +382,29 @@ Phase 4/5/6 一直全空，这一刀开在提示词 Phase 5 的第 1 步。边�
 
 **有意不做**：自定义来源任意主机的封面下载（白名单不变）、跨主机搜索模板、来源定义的分享 / 导入导出。第一次落地只支持「base host 内的 JSON API + JSONPath 映射」，HTML 站点继续走书源脚本层。
 
-**证据**：Rust **888 passed / 16 ignored**（884 → 888，新增 4 条在 `custom_source.rs`）/ clippy `-D warnings` / fmt；prettier / `tsc --noEmit` / oxlint（500 文件 0 warning）/ `vite build --no-emptyOutDir`；全量 vitest 142 文件 1379 passed（+2 文件、+5 用例）；e2e `smoke` + `book-meta` + `source-search-button` + `page-swap` + `palette` 双引擎 **24 passed**（`--workers=1`）。默认 5 worker 时 `palette` 的弹簧中间帧取样用例两次踩线失败（310.6 / 307.6，阈值 303.25），单跑与 `--workers=1` 均过，按已知负载 flake 处理，未改产品代码。改动留工作区，未提交。
+**真机验收（11-20，Open Library）**：无需 key 的书目接口，响应体取自 `https://openlibrary.org/search.json?q=three+body+problem&fields=title,author_name,first_publish_year,cover_i&limit=2`。可复制定义：
+
+```json
+{
+  "name": "Open Library",
+  "baseUrl": "https://openlibrary.org",
+  "searchUrl": "/search.json?q={{query}}&fields=title,author_name,first_publish_year,cover_i&limit=2",
+  "list": "$.docs[*]",
+  "title": "$.title",
+  "authors": "$.author_name[*]",
+  "publishedYear": "$.first_publish_year",
+  "intro": "",
+  "publisher": "",
+  "language": "",
+  "isbn": "",
+  "rating": "",
+  "cover": ""
+}
+```
+
+实测拿到 2 条候选，首位 `title=三体`、`authors` 含刘慈欣、`published_year=2008`、`source` 是来源行 id；未填字段保持空值。两个边界都写进测试：规则引擎只支持字段名与 `[*]`、没有 `[0]`，所以 `isbn` / `publisher` / `language` 这类数组字段取单项没有语法，留空比塞一坨换行串好；封面白名单不收 `covers.openlibrary.org`，且 `cover_i` 只是数字，填了也不会变成预览。本机没有 egress（直连与代理都超时），所以用真实响应体经 loopback HTTP 服务驱动生产代码跑完整链路（`a_real_open_library_response_drives_the_whole_chain`），另留 `#[ignore]` 的 `the_live_open_library_source_answers_with_real_candidates` 给有外网的机器跑真实 TCP 往返。
+
+**证据**：Rust **889 passed / 17 ignored**（4.5 的 888/16 → 验收再 +1 常规、+1 外网 ignored）/ clippy `-D warnings` / fmt；prettier / `tsc --noEmit` / oxlint（500 文件 0 warning）/ `vite build --no-emptyOutDir`；全量 vitest 142 文件 1380 passed（验收再 +1 用例：插件页接得住上面的完整定义）；e2e `smoke` + `book-meta` + `source-search-button` + `page-swap` + `palette` 双引擎 **24 passed**（`--workers=1`）。默认 5 worker 时 `palette` 的弹簧中间帧取样用例两次踩线失败（310.6 / 307.6，阈值 303.25），单跑与 `--workers=1` 均过，按已知负载 flake 处理，未改产品代码。改动留工作区，未提交。
 
 ### Phase 4.1 — 书源即插件：清单 + 主机权限 ✅（11-14）
 

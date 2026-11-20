@@ -375,4 +375,91 @@ mod tests {
         assert!(h.list().is_empty());
         assert!(delete(&h.library, &id).is_err(), "删除不存在的来源必须报错");
     }
+
+    /// Verbatim body returned by Open Library's search API (no key needed):
+    /// https://openlibrary.org/search.json?q=three+body+problem&fields=title,author_name,first_publish_year,cover_i&limit=2
+    /// This machine has no egress, so serve the real response over loopback:
+    /// production code still runs the whole HTTP round trip, host check, rule
+    /// evaluation and ranking.
+    #[test]
+    fn a_real_open_library_response_drives_the_whole_chain() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        const BODY: &str = r#"{"numFound":462,"start":0,"numFoundExact":true,"num_found":462,"documentation_url":"https://openlibrary.org/dev/docs/api/search","q":"three body problem","offset":null,"docs":[{"author_name":["刘慈欣","Vincent Schmitt","Gwennaël Gaffric","Marc Simonetti"],"cover_i":9157544,"first_publish_year":2008,"title":"三体"},{"author_name":["刘慈欣"],"cover_i":7893958,"first_publish_year":2010,"title":"Death's End (The Three-Body Problem Series Book 3)"}]}"#;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("local addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept one request");
+            let mut request = [0u8; 2048];
+            let _ = stream.read(&mut request).expect("read request");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                BODY.len(),
+                BODY
+            );
+            stream.write_all(response.as_bytes()).expect("write response");
+        });
+
+        // The rule language has no numeric index, so array-valued fields such
+        // as isbn and publisher stay empty rather than becoming a joined blob.
+        let def = CustomSourceDef {
+            name: "Open Library".into(),
+            base_url: format!("http://127.0.0.1:{port}"),
+            search_url: "/search.json?q={{query}}&limit=2".into(),
+            list: "$.docs[*]".into(),
+            title: "$.title".into(),
+            authors: "$.author_name[*]".into(),
+            published_year: "$.first_publish_year".into(),
+            ..CustomSourceDef::default()
+        };
+        def.validate().expect("a valid definition");
+        let provider = CustomProvider::new("openlibrary-live".into(), def);
+        let authors = ["刘慈欣".to_string()];
+        let lookup = Lookup::new("三体", &authors, false);
+        let client = crate::library::metadata::client();
+        let found = tauri::async_runtime::block_on(MetadataProvider::search(
+            &provider, &client, &lookup, 0,
+        ))
+        .expect("a search");
+        server.join().expect("server thread");
+
+        assert_eq!(found.len(), 2, "{:?}", found);
+        let first = &found[0];
+        assert_eq!(first.source, "openlibrary-live");
+        assert_eq!(first.title, "三体");
+        assert!(first.authors.iter().any(|name| name.contains("刘慈欣")), "{:?}", first);
+        assert_eq!(first.published_year, Some(2008), "{:?}", first);
+        assert!(first.isbn.is_none(), "规则里没填 isbn，不能凭空长出值");
+        assert!(first.rating.is_none() && first.publisher.is_none() && first.language.is_none());
+        assert!(first.cover_url.is_none(), "封面白名单不收 Open Library 的图片服务器");
+    }
+
+    /// The same definition against the live API, for a machine with egress.
+    #[test]
+    #[ignore = "hits the network: openlibrary.org"]
+    fn the_live_open_library_source_answers_with_real_candidates() {
+        let def = CustomSourceDef {
+            name: "Open Library".into(),
+            base_url: "https://openlibrary.org".into(),
+            search_url: "/search.json?q={{query}}&limit=5".into(),
+            list: "$.docs[*]".into(),
+            title: "$.title".into(),
+            authors: "$.author_name[*]".into(),
+            published_year: "$.first_publish_year".into(),
+            ..CustomSourceDef::default()
+        };
+        def.validate().expect("a valid definition");
+        let provider = CustomProvider::new("openlibrary-live".into(), def);
+        let authors = ["刘慈欣".to_string()];
+        let lookup = Lookup::new("three body problem", &authors, false);
+        let client = crate::library::metadata::client();
+        let found = tauri::async_runtime::block_on(MetadataProvider::search(
+            &provider, &client, &lookup, 0,
+        ))
+        .expect("a live search");
+        assert!(!found.is_empty());
+        assert!(found.iter().any(|candidate| candidate.title.contains("三体")), "{:?}", found);
+    }
 }

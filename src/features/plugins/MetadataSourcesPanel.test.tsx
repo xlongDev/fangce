@@ -42,6 +42,22 @@ const ENTRY: CustomSourceEntry = {
   },
 };
 
+const OPEN_LIBRARY: CustomSourceEntry["def"] = {
+  name: "Open Library",
+  baseUrl: "https://openlibrary.org",
+  searchUrl: "/search.json?q={{query}}&limit=2",
+  list: "$.docs[*]",
+  title: "$.title",
+  authors: "$.author_name[*]",
+  intro: "",
+  publisher: "",
+  publishedYear: "$.first_publish_year",
+  language: "",
+  isbn: "",
+  rating: "",
+  cover: "",
+};
+
 function open() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
@@ -81,6 +97,20 @@ describe("MetadataSourcesPanel", () => {
 
     await waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(1));
     expect(mocks.save.mock.calls[0]?.[1].name).toBe("第二个");
+  });
+
+  it("saves the Open Library definition without dropping fields", async () => {
+    open();
+    const user = userEvent.setup();
+    await screen.findByText("我的目录");
+    await user.click(screen.getByRole("button", { name: /新建/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "元数据来源规则" }), {
+      target: { value: JSON.stringify(OPEN_LIBRARY, null, 2) },
+    });
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(1));
+    expect(mocks.save.mock.calls[0]?.[1]).toEqual(OPEN_LIBRARY);
   });
 
   it("deletes a source", async () => {
