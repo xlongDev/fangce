@@ -323,15 +323,23 @@ test("the highlight keeps up when the rail is a scrolling row", async ({ page })
   const rail = page.locator('nav[aria-label="设置分类"]');
 
   await pick(page, rail, "外观");
-  const first = await railBoxes(page);
-
   await pick(page, rail, "操作记录");
-  const second = await railBoxes(page);
 
   // Without a width difference this case would pass on a pane that only ever
-  // learned to move vertically.
+  // learned to move vertically. Measure the two buttons directly, by name —
+  // not through `railBoxes`, which reads whatever `aria-current` points at.
+  // Clicking 操作记录 scrolls the long pane to its bottom, and the sight-line
+  // rule can move `aria-current` back onto a neighbour before this line runs
+  // (measured: sometimes 75px instead of 操作记录's 101px). That is a timing
+  // race in the guard, not in the feature — `pick` already pinned the real
+  // highlight above. `offsetWidth` is layout width, so a press-scale in flight
+  // cannot change it either.
+  const widthOf = (label: string) =>
+    rail
+      .getByRole("button", { name: label, exact: true })
+      .evaluate((el) => (el as HTMLElement).offsetWidth);
   expect(
-    Math.abs((second?.entry.width ?? 0) - (first?.entry.width ?? 0)) > 1,
+    Math.abs((await widthOf("操作记录")) - (await widthOf("外观"))) > 1,
     "the two entries differ in width, so the pane has to carry one",
   ).toBe(true);
   // And a rail that scrolls under the pane keeps it: the placement is in the
