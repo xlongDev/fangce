@@ -128,4 +128,17 @@ describe("整架补全的常驻胶囊", () => {
       "整架补全完成：已补全 2 本，跳过 0 本。",
     );
   });
+
+  it("进度与详情合在同一条浮层里，不再叠成两条通知条", async () => {
+    act(() => {
+      useFillRun.setState({ running: true, total: 10, done: 4, written: 3, skipped: 1 });
+    });
+    show();
+
+    const surfaces = document.querySelectorAll("[data-fill-run-surface]");
+    expect(surfaces.length).toBe(1);
+    const text = surfaces[0]?.textContent ?? "";
+    expect(text).toContain("补全中");
+    expect(text).toContain("已补全 3 本");
+  });
 });
