@@ -110,26 +110,29 @@ struct GateState {
 /// function signatures would make it easy for one caller to forget.
 #[derive(Default)]
 pub struct CatalogueGate {
-    state: Mutex<HashMap<&'static str, GateState>>,
+    // Owned keys: a reader-defined source's key is a row id that lives only as
+    // long as this process, not a `&'static str` from a compiled-in enum.
+    state: Mutex<HashMap<String, GateState>>,
 }
 
 impl CatalogueGate {
     /// Take the next slot for this provider, sleeping until it arrives.
     pub async fn wait(&self, provider: &dyn MetadataProvider) {
-        let key = provider.key();
+        let key = provider.key().to_string();
         loop {
             let at = {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 let now = Instant::now();
-                let entry =
-                    state.entry(key).or_insert(GateState { next: now, cooldown_until: now });
+                let entry = state
+                    .entry(key.clone())
+                    .or_insert(GateState { next: now, cooldown_until: now });
                 let at = entry.next.max(entry.cooldown_until).max(now);
                 entry.next = at + SUGGEST_INTERVAL;
                 at
             };
             sleep_until(tokio::time::Instant::from_std(at)).await;
             // A 403 that arrived while we slept outranks the slot reserved above.
-            if self.cooling_down(key) {
+            if self.cooling_down(&key) {
                 continue;
             }
             return;
@@ -140,12 +143,13 @@ impl CatalogueGate {
     pub fn penalize(&self, provider: &dyn MetadataProvider, retry_after: Duration) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
-        let entry =
-            state.entry(provider.key()).or_insert(GateState { next: now, cooldown_until: now });
+        let entry = state
+            .entry(provider.key().to_string())
+            .or_insert(GateState { next: now, cooldown_until: now });
         entry.cooldown_until = entry.cooldown_until.max(now + retry_after);
     }
 
-    fn cooling_down(&self, key: &'static str) -> bool {
+    fn cooling_down(&self, key: &str) -> bool {
         self.state
             .lock()
             .map(|state| state.get(key).is_some_and(|entry| entry.cooldown_until > Instant::now()))
@@ -162,7 +166,7 @@ pub fn gate() -> &'static CatalogueGate {
 /// `Retry-After` is either seconds or an HTTP date. No header means the
 /// provider's own default, which is deliberately long: guessing short keeps
 /// poking the server that just asked us to stop.
-fn retry_after_of(headers: &HeaderMap) -> Duration {
+pub(crate) fn retry_after_of(headers: &HeaderMap) -> Duration {
     let Some(value) = headers.get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok())
     else {
         return DEFAULT_RETRY_AFTER;
@@ -178,22 +182,27 @@ fn retry_after_of(headers: &HeaderMap) -> Duration {
         .min(MAX_RETRY_AFTER)
 }
 
-fn is_throttle(status: reqwest::StatusCode) -> bool {
+pub(crate) fn is_throttle(status: reqwest::StatusCode) -> bool {
     matches!(status.as_u16(), 403 | 418 | 429)
 }
 
 /// One catalogue this app can ask.
 ///
-/// Object-safe on purpose: the registry holds trait objects, so a new source
-/// is one implementation plus one entry in [`PROVIDERS`]. The boxed future is
-/// the cost of that — no `async_trait` dependency and no `Pin` at every call
-/// site beyond this one signature.
+/// Object-safe on purpose: the registry holds trait objects, so a built-in
+/// source is one implementation plus one entry in [`PROVIDERS`], while a
+/// reader-defined source is a [`CustomProvider`](crate::library::custom_source::CustomProvider)
+/// loaded from the database. The boxed future is the cost of that — no
+/// `async_trait` dependency and no `Pin` at every call site beyond this one
+/// signature.
+///
+/// `key` and `label` borrow rather than return `&'static str`: the key of a
+/// reader-defined source is a row id that only exists at runtime.
 pub trait MetadataProvider: Send + Sync {
     /// Stable identity written to the database and sent to the renderer.
-    fn key(&self) -> &'static str;
+    fn key(&self) -> &str;
     /// What the reader sees next to a rating. Not decoration: a bare number
     /// would be read as Douban's, and NeoDB's is a different number.
-    fn label(&self) -> &'static str;
+    fn label(&self) -> &str;
     fn search<'a>(
         &'a self,
         client: &'a Client,
@@ -219,11 +228,11 @@ pub fn by_key(key: &str) -> Option<&'static dyn MetadataProvider> {
 }
 
 impl MetadataProvider for Douban {
-    fn key(&self) -> &'static str {
+    fn key(&self) -> &str {
         "douban"
     }
 
-    fn label(&self) -> &'static str {
+    fn label(&self) -> &str {
         "豆瓣"
     }
 
@@ -238,11 +247,11 @@ impl MetadataProvider for Douban {
 }
 
 impl MetadataProvider for Neodb {
-    fn key(&self) -> &'static str {
+    fn key(&self) -> &str {
         "neodb"
     }
 
-    fn label(&self) -> &'static str {
+    fn label(&self) -> &str {
         "NeoDB"
     }
 
@@ -714,7 +723,7 @@ pub enum Skip {
 /// instead of a dialog that appears to have hung.
 #[derive(Default)]
 pub struct Attempts {
-    failed: Mutex<Vec<(&'static str, Skip)>>,
+    failed: Mutex<Vec<(String, Skip)>>,
 }
 
 impl Attempts {
@@ -727,7 +736,7 @@ impl Attempts {
             .lock()
             .ok()?
             .iter()
-            .find(|(key, _)| *key == provider.key())
+            .find(|(key, _)| key == provider.key())
             .map(|(_, skip)| *skip)
     }
 
@@ -735,10 +744,10 @@ impl Attempts {
     /// more question is better than silently dropping a provider for the batch.
     fn record(&self, provider: &dyn MetadataProvider, skip: Skip) {
         if let Ok(mut failed) = self.failed.lock() {
-            if let Some(entry) = failed.iter_mut().find(|(key, _)| *key == provider.key()) {
+            if let Some(entry) = failed.iter_mut().find(|(key, _)| key == provider.key()) {
                 entry.1 = skip;
             } else {
-                failed.push((provider.key(), skip));
+                failed.push((provider.key().to_string(), skip));
             }
         }
     }
@@ -762,14 +771,20 @@ impl Attempts {
 /// **A provider that fails is not a book that does not exist.** When every
 /// provider fails, the error carries each one's reason; when any provider
 /// answered — even with nothing — the result is an honest empty list.
-pub async fn find(
+/// Asks each provider in turn, and returns the first one that has anything.
+///
+/// Commands pass the built-in chain followed by any reader-defined sources
+/// loaded from the database; the chain semantics — first strong answer wins,
+/// failures carry their reason — are identical for both.
+pub async fn find_with(
     client: &Client,
+    providers: &[&dyn MetadataProvider],
     lookup: &Lookup<'_>,
     depth: usize,
     attempts: &Attempts,
 ) -> AppResult<Vec<Candidate>> {
     let mut results = Vec::new();
-    for provider in PROVIDERS.iter().copied() {
+    for &provider in providers {
         match attempts.skip(provider) {
             Some(Skip::Down) => {
                 results.push((provider, Err(AppError::Message("这次查询里连不上，已跳过".into()))));
@@ -1467,7 +1482,7 @@ fn is_invisible(ch: char) -> bool {
 /// gets right, and an author list is where providers disagree most (a
 /// translator, a `[日]` prefix, a different order). The numbers are a ranking,
 /// not a measurement — nothing downstream should treat 0.8 as a probability.
-fn score(lookup: &Lookup<'_>, title: &str, authors: &[String]) -> f64 {
+pub(crate) fn score(lookup: &Lookup<'_>, title: &str, authors: &[String]) -> f64 {
     // The better of the two: a record called 「索拉里斯星」 against a shelf title
     // of 「索拉里斯星（修订版）」 is the same book, and scoring only the full
     // title would rank it below a stranger that happens to share more characters.
@@ -2559,8 +2574,14 @@ mod tests {
         let authors = ["[以色列] 尤瓦尔·赫拉利".to_string()];
         let lookup = Lookup::new("人类简史", &authors, false);
         let client = client();
-        let found = tauri::async_runtime::block_on(find(&client, &lookup, 1, &Attempts::new()))
-            .expect("an answer without a proxy");
+        let found = tauri::async_runtime::block_on(find_with(
+            &client,
+            PROVIDERS,
+            &lookup,
+            1,
+            &Attempts::new(),
+        ))
+        .expect("an answer without a proxy");
         println!("\n答案来自 {}：{}", found[0].source, found[0].title);
         assert!(!found.is_empty());
         assert_eq!(found[0].source, "douban");

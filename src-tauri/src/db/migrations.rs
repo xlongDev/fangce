@@ -740,6 +740,22 @@ CREATE INDEX operations_book ON operations (book_id) WHERE book_id IS NOT NULL;
 CREATE INDEX operations_call ON operations (call_id);
 "#,
     },
+    Migration {
+        version: 28,
+        name: "metadata_sources",
+        // Reader-defined catalogues. Same shape as `sources`: one JSON column
+        // holding the whole definition, edited as one document in the plugin
+        // page. No foreign key — deleting a source must not touch book ratings
+        // already written from it; `rating_source` is a plain string by design.
+        sql: r#"
+CREATE TABLE metadata_sources (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  rules      TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.

@@ -9,7 +9,8 @@ use futures_util::StreamExt;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::library::metadata::{self, Candidate, Lookup, Proposal, Target};
+use crate::library::custom_source::{self, CustomProvider, CustomSourceDef, CustomSourceEntry};
+use crate::library::metadata::{self, Candidate, Lookup, MetadataProvider, Proposal, Target};
 use crate::library::{ops, repository};
 use crate::state::AppState;
 
@@ -40,21 +41,31 @@ pub async fn metadata_search(
     id: String,
     source: String,
 ) -> AppResult<Vec<Candidate>> {
-    let provider = metadata::by_key(&source)
-        .ok_or_else(|| AppError::InvalidArgument(format!("没有这个书目来源：{source}")))?;
+    let builtin = metadata::by_key(&source);
+    // A custom source's key is its row id. Resolve it before any network call,
+    // and keep the provider alive across the await — it owns its definition.
+    let custom = if builtin.is_none() {
+        custom_source::load(&state.library, &source)
+            .ok()
+            .map(|def| CustomProvider::new(source.clone(), def))
+    } else {
+        None
+    };
+    if builtin.is_none() && custom.is_none() {
+        return Err(AppError::InvalidArgument(format!("没有这个书目来源：{source}")));
+    }
+
     let book = state
         .library
         .with(|conn| repository::get(conn, &id))?
         .ok_or_else(|| AppError::NotFound(id.clone()))?;
 
     let client = metadata::client();
-    metadata::search(
-        &client,
-        provider,
-        &Lookup::new(&book.title, &book.authors, book.isbn.is_none()),
-        SEARCH_DEPTH,
-    )
-    .await
+    let lookup = Lookup::new(&book.title, &book.authors, book.isbn.is_none());
+    if let Some(provider) = &custom {
+        return metadata::search(&client, provider, &lookup, SEARCH_DEPTH).await;
+    }
+    metadata::search(&client, builtin.expect("resolved above"), &lookup, SEARCH_DEPTH).await
 }
 
 /// One book's share of a batch fill: the fields the reader accepted.
@@ -122,6 +133,20 @@ pub async fn metadata_propose(
     })?;
 
     let client = metadata::client();
+    // Loaded once for the whole batch, like `Attempts`: a definition the
+    // reader wrote is part of the chain for every book in this run.
+    // Loaded once for the whole batch, like `Attempts`: a definition the
+    // reader wrote is part of the chain for every book in this run. An Arc
+    // lets each concurrent task borrow its providers without outliving them.
+    let customs = std::sync::Arc::new(
+        state
+            .library
+            .with(custom_source::list)?
+            .into_iter()
+            .map(|entry| CustomProvider::new(entry.id, entry.def))
+            .collect::<Vec<_>>(),
+    );
+
     // Shared by the whole batch: a provider that failed for book three is not
     // asked again for book four, so forty books with the proxy off cost one
     // timeout rather than forty.
@@ -130,13 +155,16 @@ pub async fn metadata_propose(
         futures_util::stream::iter(targets.into_iter().map(|target| {
             let client = client.clone();
             let attempts = attempts.clone();
+            let customs = customs.clone();
             async move {
                 let lookup = Lookup::new(&target.title, &target.authors, target.isbn.is_none());
                 // A failure is reported per book, not swallowed into 「没有找到」:
                 // a reader whose network is down was being told to try a better
                 // title. One book failing still leaves the other twenty-nine
                 // worth asking about.
-                match metadata::find(&client, &lookup, 1, &attempts).await {
+                let mut chain = metadata::PROVIDERS.to_vec();
+                chain.extend(customs.iter().map(|provider| provider as &dyn MetadataProvider));
+                match metadata::find_with(&client, &chain, &lookup, 1, &attempts).await {
                     Ok(found) => metadata::propose_for_with(
                         &target,
                         found.into_iter().next(),
@@ -297,4 +325,30 @@ pub async fn metadata_cover_preview(url: String) -> AppResult<String> {
     let mime =
         metadata::preview_mime(&bytes).ok_or_else(|| AppError::Parse("拿到的不是图片".into()))?;
     Ok(format!("data:{mime};base64,{}", STANDARD.encode(&bytes)))
+}
+
+/// `metadata.sourceList` — reader-defined catalogues, definitions included.
+#[tauri::command]
+#[specta::specta]
+pub fn metadata_source_list(state: State<'_, AppState>) -> AppResult<Vec<CustomSourceEntry>> {
+    state.library.with(custom_source::list)
+}
+
+/// `metadata.sourceSave` — add or update one reader-defined catalogue.
+#[tauri::command]
+#[specta::specta]
+pub fn metadata_source_save(
+    state: State<'_, AppState>,
+    id: Option<String>,
+    def: CustomSourceDef,
+) -> AppResult<String> {
+    custom_source::save(&state.library, id.as_deref(), &def)
+}
+
+/// `metadata.sourceDelete` — remove one reader-defined catalogue. Ratings
+/// already written from it keep their source key; this never touches books.
+#[tauri::command]
+#[specta::specta]
+pub fn metadata_source_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    custom_source::delete(&state.library, &id)
 }

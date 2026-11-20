@@ -503,6 +503,21 @@ export const commands = {
    */
   metadataCoverPreview: (url: string, options?: InvokeOptions) =>
     __TAURI_INVOKE<string>("metadata_cover_preview", { url }, options),
+  /**  `metadata.sourceList` — reader-defined catalogues, definitions included. */
+  metadataSourceList: (options?: InvokeOptions) =>
+    __TAURI_INVOKE<CustomSourceEntry_Serialize[]>("metadata_source_list", undefined, options),
+  /**  `metadata.sourceSave` — add or update one reader-defined catalogue. */
+  metadataSourceSave: (
+    id: string | null,
+    def: CustomSourceDef_Deserialize,
+    options?: InvokeOptions,
+  ) => __TAURI_INVOKE<string>("metadata_source_save", { id, def }, options),
+  /**
+   *  `metadata.sourceDelete` — remove one reader-defined catalogue. Ratings
+   *  already written from it keep their source key; this never touches books.
+   */
+  metadataSourceDelete: (id: string, options?: InvokeOptions) =>
+    __TAURI_INVOKE<null>("metadata_source_delete", { id }, options),
   /**
    *  `ops.undo` — puts back what one call changed.
    *
@@ -2594,6 +2609,70 @@ export type CoverSource = {
   label: string;
   /**  Unix seconds of that operation. */
   at: number;
+};
+
+/**  One reader-defined catalogue, stored as JSON in `metadata_sources.rules`. */
+export type CustomSourceDef = CustomSourceDef_Serialize | CustomSourceDef_Deserialize;
+
+/**  One reader-defined catalogue, stored as JSON in `metadata_sources.rules`. */
+export type CustomSourceDef_Deserialize = {
+  /**  What the reader sees next to a rating from this source. */
+  name?: string;
+  /**  HTTPS base; its host is the only one this source may reach. */
+  baseUrl?: string;
+  /**  Search path; `{{query}}` is replaced by the percent-encoded title. */
+  searchUrl?: string;
+  /**  Rule locating the array of result items. */
+  list?: string;
+  title?: string;
+  /**  Rule for one author or an array of authors; optional. */
+  authors?: string;
+  intro?: string;
+  publisher?: string;
+  publishedYear?: string;
+  language?: string;
+  isbn?: string;
+  rating?: string;
+  cover?: string;
+};
+
+/**  One reader-defined catalogue, stored as JSON in `metadata_sources.rules`. */
+export type CustomSourceDef_Serialize = {
+  /**  What the reader sees next to a rating from this source. */
+  name: string;
+  /**  HTTPS base; its host is the only one this source may reach. */
+  baseUrl: string;
+  /**  Search path; `{{query}}` is replaced by the percent-encoded title. */
+  searchUrl: string;
+  /**  Rule locating the array of result items. */
+  list: string;
+  title: string;
+  /**  Rule for one author or an array of authors; optional. */
+  authors: string;
+  intro: string;
+  publisher: string;
+  publishedYear: string;
+  language: string;
+  isbn: string;
+  rating: string;
+  cover: string;
+};
+
+/**  One stored custom source, definition included so the editor can round-trip. */
+export type CustomSourceEntry = CustomSourceEntry_Serialize | CustomSourceEntry_Deserialize;
+
+/**  One stored custom source, definition included so the editor can round-trip. */
+export type CustomSourceEntry_Deserialize = {
+  id: string;
+  name: string;
+  def: CustomSourceDef_Deserialize;
+};
+
+/**  One stored custom source, definition included so the editor can round-trip. */
+export type CustomSourceEntry_Serialize = {
+  id: string;
+  name: string;
+  def: CustomSourceDef_Serialize;
 };
 
 /**  Reading time for one calendar day. */

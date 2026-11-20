@@ -212,7 +212,7 @@ fn walk(tokens: &[Token], value: &Value, out: &mut Vec<Value>) {
 
 /// Evaluates a rule against a JSON value; zero matches is an empty list, not
 /// an error, so optional fields degrade to empty strings.
-fn evaluate(rule: &str, value: &Value) -> AppResult<Vec<Value>> {
+pub(crate) fn evaluate(rule: &str, value: &Value) -> AppResult<Vec<Value>> {
     let tokens = parse_rule(rule)?;
     let mut out = Vec::new();
     walk(&tokens, value, &mut out);
@@ -221,7 +221,7 @@ fn evaluate(rule: &str, value: &Value) -> AppResult<Vec<Value>> {
 
 /// First match rendered as text; arrays join their string items with newlines
 /// so a paragraph-list rule reads naturally in the content step.
-fn text_of(value: &Value) -> String {
+pub(crate) fn text_of(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
         Value::Array(items) => {
@@ -232,13 +232,13 @@ fn text_of(value: &Value) -> String {
     }
 }
 
-fn first_text(rule: &str, value: &Value) -> AppResult<String> {
+pub(crate) fn first_text(rule: &str, value: &Value) -> AppResult<String> {
     Ok(evaluate(rule, value)?.first().map(text_of).unwrap_or_default())
 }
 
 /// Optional field: a broken or absent rule yields an empty string instead of
 /// failing the whole item.
-fn optional_text(rule: &str, value: &Value) -> String {
+pub(crate) fn optional_text(rule: &str, value: &Value) -> String {
     first_text(rule, value).unwrap_or_default()
 }
 
@@ -261,7 +261,7 @@ fn paragraphs_of(rule: &str, value: &Value) -> AppResult<Vec<String>> {
 // ---------------------------------------------------------------------------
 
 /// Percent-encodes everything outside the unreserved set; no extra dependency.
-fn encode_component(text: &str) -> String {
+pub(crate) fn encode_component(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for byte in text.as_bytes() {
         match byte {
@@ -276,7 +276,7 @@ fn encode_component(text: &str) -> String {
 
 /// Joins the source's base URL with a rule-provided path; an absolute URL in
 /// the data wins, which is how pagination and CDN hosts keep working.
-fn full_url(base_url: &str, path: &str) -> String {
+pub(crate) fn full_url(base_url: &str, path: &str) -> String {
     let path = path.trim();
     if path.starts_with("http://") || path.starts_with("https://") {
         return path.to_string();
