@@ -45,6 +45,10 @@ uuid = { version = "1", features = ["v4"] }
 # it — the alternative (a JS segmenter) would put a megabyte of dictionary in the
 # renderer, which is the one place this app keeps lean.
 jieba-rs = "0.11"
+# Restricted JS for book sources that cannot be expressed as JSON rules.
+# Statically linked QuickJS: no dylib to ship or sign, ~1ms to start a runtime,
+# and the sandbox is simply "QuickJS has no network or file APIs by default".
+rquickjs = "0.14"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 # `.ctzx` encryption. Both are RustCrypto crates; nothing here invents a cipher

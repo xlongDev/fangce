@@ -12,6 +12,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use crate::library::script::SourceScript;
 use crate::net::Hosts;
 
 /// How one search call finds books.
@@ -75,12 +76,19 @@ pub struct Permissions {
 #[serde(default, rename_all = "camelCase")]
 pub struct SourceDef {
     pub name: String,
+    /// Reader-facing grouping for the plugin page. Absent means 未分类.
+    #[serde(default)]
+    pub category: Option<String>,
     pub base_url: String,
     pub permissions: Permissions,
     pub search: SearchRules,
     pub book: BookRules,
     pub chapters: ChapterRules,
     pub content: ContentRules,
+    /// Optional restricted JS transform, run before the JSON rules. Sites that
+    /// answer in HTML or compute fields need it; most sources never will.
+    #[serde(default)]
+    pub script: Option<SourceScript>,
 }
 
 impl SourceDef {
@@ -100,6 +108,9 @@ impl SourceDef {
         // endpoint, same code (`crate::net`) — the opener plugin's URL
         // allowlist does not reach a reqwest request made from here.
         self.hosts()?;
+        if let Some(script) = &self.script {
+            script.validate()?;
+        }
         for (label, rule) in [
             ("搜索地址", &self.search.url),
             ("搜索结果列表", &self.search.list),
@@ -281,7 +292,18 @@ fn search_url(def: &SourceDef, keyword: &str) -> String {
 // Fetches
 // ---------------------------------------------------------------------------
 
-async fn fetch_json(client: &reqwest::Client, hosts: &Hosts, url: &str) -> AppResult<Value> {
+/// One HTTP round trip, optionally transformed by the source's script.
+///
+/// The permission check stays here, at the single network choke point, before
+/// anything (script included) sees the response. Scripts never receive the
+/// client, so they cannot make a second request of their own.
+async fn fetch(
+    client: &reqwest::Client,
+    hosts: &Hosts,
+    url: &str,
+    script: Option<&SourceScript>,
+    stage: &str,
+) -> AppResult<Value> {
     let url = hosts.check(url)?;
     let response = client
         .get(url)
@@ -289,7 +311,21 @@ async fn fetch_json(client: &reqwest::Client, hosts: &Hosts, url: &str) -> AppRe
         .await
         .and_then(|response| response.error_for_status())
         .map_err(|err| AppError::Message(format!("请求失败：{err}")))?;
-    response.json().await.map_err(|err| AppError::Message(format!("响应不是合法 JSON：{err}")))
+    let text =
+        response.text().await.map_err(|err| AppError::Message(format!("读取响应失败：{err}")))?;
+    let value = match serde_json::from_str(&text) {
+        Ok(value) => value,
+        // A script may know what to do with HTML; without one, non-JSON stays
+        // the same hard error it has always been.
+        Err(_) if script.is_some() => Value::String(text),
+        Err(err) => {
+            return Err(AppError::Message(format!("响应不是合法 JSON：{err}")));
+        }
+    };
+    match script {
+        Some(script) => script.apply(&value, stage),
+        None => Ok(value),
+    }
 }
 
 /// `search` — keyword lookup against the source's search endpoint.
@@ -299,7 +335,8 @@ pub async fn search(
     hosts: &Hosts,
     keyword: &str,
 ) -> AppResult<Vec<SourceBook>> {
-    let value = fetch_json(client, hosts, &search_url(def, keyword)).await?;
+    let value =
+        fetch(client, hosts, &search_url(def, keyword), def.script.as_ref(), "search").await?;
     let items = evaluate(&def.search.list, &value)?;
     let mut books = Vec::with_capacity(items.len());
     for item in &items {
@@ -325,7 +362,9 @@ pub async fn book_detail(
     hosts: &Hosts,
     book_url: &str,
 ) -> AppResult<SourceBook> {
-    let value = fetch_json(client, hosts, &full_url(&def.base_url, book_url)).await?;
+    let value =
+        fetch(client, hosts, &full_url(&def.base_url, book_url), def.script.as_ref(), "detail")
+            .await?;
     Ok(SourceBook {
         title: first_text(&def.book.title, &value)?,
         author: optional_text(&def.book.author, &value),
@@ -342,7 +381,9 @@ pub async fn chapters(
     hosts: &Hosts,
     book_url: &str,
 ) -> AppResult<Vec<SourceChapter>> {
-    let value = fetch_json(client, hosts, &full_url(&def.base_url, book_url)).await?;
+    let value =
+        fetch(client, hosts, &full_url(&def.base_url, book_url), def.script.as_ref(), "chapters")
+            .await?;
     let items = evaluate(&def.chapters.list, &value)?;
     let mut list = Vec::with_capacity(items.len());
     for item in &items {
@@ -363,7 +404,7 @@ pub async fn content(
     hosts: &Hosts,
     chapter_url: &str,
 ) -> AppResult<Vec<String>> {
-    let value = fetch_json(client, hosts, chapter_url).await?;
+    let value = fetch(client, hosts, chapter_url, def.script.as_ref(), "content").await?;
     paragraphs_of(&def.content.paragraphs, &value)
 }
 
@@ -553,6 +594,7 @@ mod tests {
     fn def() -> SourceDef {
         SourceDef {
             name: "示例源".into(),
+            category: None,
             base_url: "https://example.com/api".into(),
             permissions: Permissions::default(),
             search: SearchRules {
@@ -576,6 +618,7 @@ mod tests {
                 url: "$.url".into(),
             },
             content: ContentRules { paragraphs: "$.data.content".into() },
+            script: None,
         }
     }
 

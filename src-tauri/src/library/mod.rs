@@ -38,7 +38,8 @@ pub mod ops;
 
 pub use assist::{conversation, graph, guide, note_draft, note_recap, ocr, summary, tagging};
 pub use io::{
-    batch, calibre, calibre_fill, catalog, characters, clippings, export, import, pack, source,
+    batch, calibre, calibre_fill, catalog, characters, clippings, export, import, pack, script,
+    source,
 };
 pub use lookup::{dictionaries, markup, mdict, stardict};
 pub use marks::{annotations, bookmarks, migrate};

@@ -9,4 +9,5 @@ pub mod clippings;
 pub mod export;
 pub mod import;
 pub mod pack;
+pub mod script;
 pub mod source;

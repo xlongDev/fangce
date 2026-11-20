@@ -3658,23 +3658,37 @@ export type SourceDef = SourceDef_Serialize | SourceDef_Deserialize;
 /**  One complete source definition, stored as JSON in the `sources` table. */
 export type SourceDef_Deserialize = {
   name?: string;
+  /**  Reader-facing grouping for the plugin page. Absent means 未分类. */
+  category?: string | null;
   baseUrl?: string;
   permissions?: Permissions_Deserialize;
   search?: SearchRules_Deserialize;
   book?: BookRules_Deserialize;
   chapters?: ChapterRules_Deserialize;
   content?: ContentRules_Deserialize;
+  /**
+   *  Optional restricted JS transform, run before the JSON rules. Sites that
+   *  answer in HTML or compute fields need it; most sources never will.
+   */
+  script?: SourceScript_Deserialize | null;
 };
 
 /**  One complete source definition, stored as JSON in the `sources` table. */
 export type SourceDef_Serialize = {
   name: string;
+  /**  Reader-facing grouping for the plugin page. Absent means 未分类. */
+  category: string | null;
   baseUrl: string;
   permissions: Permissions_Serialize;
   search: SearchRules_Serialize;
   book: BookRules_Serialize;
   chapters: ChapterRules_Serialize;
   content: ContentRules_Serialize;
+  /**
+   *  Optional restricted JS transform, run before the JSON rules. Sites that
+   *  answer in HTML or compute fields need it; most sources never will.
+   */
+  script: SourceScript_Serialize | null;
 };
 
 /**  One stored source, definition included so the editor can round-trip it. */
@@ -3699,6 +3713,21 @@ export type SourceProgress = {
   total: number;
   /**  Title of the chapter that just finished. */
   chapter: string;
+};
+
+/**  Optional JS transform stored with a source definition. */
+export type SourceScript = SourceScript_Serialize | SourceScript_Deserialize;
+
+/**  Optional JS transform stored with a source definition. */
+export type SourceScript_Deserialize = {
+  /**  JS source defining a global `transform(input, stage)` function. */
+  code?: string;
+};
+
+/**  Optional JS transform stored with a source definition. */
+export type SourceScript_Serialize = {
+  /**  JS source defining a global `transform(input, stage)` function. */
+  code: string;
 };
 
 /**
