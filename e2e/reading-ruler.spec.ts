@@ -108,6 +108,26 @@ const DRAWN = `(() => {
 })()`;
 
 /**
+ * The band and its leading grip, read in one evaluation.
+ *
+ * The grip is a child of the band, so on a loaded runner the two can be read in
+ * different layouts if they come from separate round trips: the band settles,
+ * the grip is read a frame later after a re-measure, and the press point is no
+ * longer over the grip. Asking for both in one evaluation — and requiring three
+ * agreeing reads — keeps the baseline and the press point on the same frame.
+ */
+const BAND_AND_GRIP = `(() => {
+  const band = document.querySelector("[data-ruler-band]");
+  const grip = document.querySelector('[data-ruler-edge="leading"]');
+  if (!band || !grip) return null;
+  const box = (el) => {
+    const r = el.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+  };
+  return { band: box(band), grip: box(grip) };
+})()`;
+
+/**
  * The lines of type on screen, in window coordinates.
  *
  * A prose page is walked directly. A foliate book is not: its words are in a
@@ -2265,46 +2285,70 @@ test("dragging the band sideways in 竖排 follows the hand, not the axis", asyn
   await page.waitForTimeout(400);
 
   await choose(page, "竖排");
-  // The direction switch remounts the ruler, and on a loaded runner the band
-  // can re-measure *after* `rulerDrawn` has settled. A grip box read on one
-  // frame and pressed on the next lands in the prose: the pointer selects text
-  // instead of dragging, and the band barely moves (CI run 44673715195, twice).
-  // Read the box and check the press point in the same poll, then take the
-  // baseline from the frame the drag actually starts on.
+  // 🔴 The direction switch remounts the ruler, and on a loaded runner the band
+  // re-measures more than once: a grip read on one frame and pressed on the next
+  // lands in the prose — the pointer selects text and the band barely moves
+  // (CI 44673715195 + 44688535485, delta 0 / 5.5). Reading the grip and the band
+  // in two round trips is the trap: the second read can be a different layout.
+  // Ask for one evaluation that returns both, and accept it only after three
+  // agreeing reads — the same standard rulerDrawn uses — so the baseline and
+  // the press point are cut from the same settled frame.
+  type Pair = { band: Box; grip: Box };
+  let seen: Pair | null = null;
+  let still = 0;
+  let baseline = 0;
   let gx = 0;
   let gy = 0;
-  await expect
-    .poll(
-      async () => {
-        const grip = await page.locator('[data-ruler-edge="leading"]').boundingBox();
-        // Vertical: the grip spans the band's height and is a few px wide.
-        if (!grip || grip.height <= 40 || grip.width <= 0 || grip.width >= 40) return false;
-        gx = grip.x + grip.width / 2;
-        gy = grip.y + grip.height / 2;
-        return page.evaluate(
-          ([px, py]) =>
-            !!document
-              .elementFromPoint(px as number, py as number)
-              ?.closest('[data-ruler-edge="leading"]'),
-          [gx, gy],
-        );
-      },
-      { message: "竖排标尺的抓握边没有稳定在可点按的位置" },
-    )
-    .toBe(true);
-  // Baseline last: the wait above can span a re-measure, and a band read before
-  // it would be compared against a band dragged from a different frame.
-  const upright = await rulerDrawn(page);
-  expect(upright.vertical, "标尺没有切成竖排").toBe(true);
+  let settled = false;
+  for (let i = 0; i < 64; i += 1) {
+    const pair = (await page.evaluate(BAND_AND_GRIP)) as Pair | null;
+    if (!pair) {
+      seen = null;
+      still = 0;
+      await page.waitForTimeout(SETTLE_STEP);
+      continue;
+    }
+    const { band, grip } = pair;
+    const cx = (grip.left + grip.right) / 2;
+    const cy = (grip.top + grip.bottom) / 2;
+    const vertical = band.bottom - band.top > band.right - band.left;
+    // The grip spans the band's height and is a few px wide in 竖排.
+    const shaped =
+      grip.bottom - grip.top > 40 && grip.right - grip.left > 0 && grip.right - grip.left < 40;
+    const over =
+      vertical &&
+      shaped &&
+      (await page.evaluate(
+        ([px, py]) =>
+          !!document
+            .elementFromPoint(px as number, py as number)
+            ?.closest('[data-ruler-edge="leading"]'),
+        [cx, cy],
+      ));
+    const same =
+      seen !== null &&
+      Math.abs(seen.band.left - band.left) < 0.5 &&
+      Math.abs(seen.band.right - band.right) < 0.5 &&
+      Math.abs(seen.grip.left - grip.left) < 0.5 &&
+      Math.abs(seen.grip.right - grip.right) < 0.5;
+    still = same ? still + 1 : 0;
+    seen = pair;
+    if (still >= 2 && over) {
+      baseline = band.left;
+      gx = cx;
+      gy = cy;
+      settled = true;
+      break;
+    }
+    await page.waitForTimeout(SETTLE_STEP);
+  }
+  expect(settled, "标尺没有切成竖排并稳定下来").toBe(true);
   await page.mouse.move(gx, gy);
   await page.mouse.down();
   await page.mouse.move(gx - 120, gy, { steps: 12 });
   const dragged = await rulerDrawn(page);
   await page.mouse.up();
-  expect(
-    upright.band.left - dragged.band.left,
-    "竖排下向左拖，带子没有跟着手往左走",
-  ).toBeGreaterThan(80);
+  expect(baseline - dragged.band.left, "竖排下向左拖，带子没有跟着手往左走").toBeGreaterThan(80);
 });
 
 test("in the scrolled layout the arrows walk the band, and the page follows past the trigger", async ({
