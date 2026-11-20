@@ -364,9 +364,25 @@ Phase 4/5/6 一直全空，这一刀开在提示词 Phase 5 的第 1 步。边�
 
 **实测开销**：`script apply` 309µs/次（debug 构建，100 次平均，`runtime_startup_cost` 忽略测试）；`libquickjs.a` 2.4MB（debug），静态链进产物、无额外 dylib，因此没有新的签名对象。
 
-**明确未做的**：第 3 层（独立进程/WASM）隔离——第 2 层被证明不够时再做；脚本调试器（目前靠 `log()` + 异常里的阶段名与行号）；用户自定义元数据来源的持久化注册表（trait 已就位，注册仍是编译期常量）。
+**明确未做的**：第 3 层（独立进程/WASM）隔离——第 2 层被证明不够时再做；脚本调试器（目前靠 `log()` + 异常里的阶段名与行号）；用户自定义元数据来源的持久化注册表当时未做，已在 4.5 交付。
 
 **证据**：Rust 884 passed / 16 ignored（`script` +5、trait 可插拔 +1；`a_round_trip_restores_every_file_and_the_database` 全量里偶发一次，单跑与全量复跑均过，按已知 flake 处理）/ clippy `-D warnings` / fmt；prettier / `tsc --noEmit` / oxlint（497 文件 0 warning）/ `vite build --no-emptyOutDir`；全量 vitest 140 文件 1374 passed（插件页 +4）；e2e `smoke`（含新路由）+ `source-search-button` + `page-swap` + `palette` 双引擎 26 passed。改动留工作区，未提交。
+
+### Phase 4.5 — 用户自定义元数据来源 ✅（11-20）
+
+4.3 只把 provider 抽象成 trait，注册仍是编译期常量。这一步把注册也放出来：读者在插件页填一份 base URL + `{{query}}` 搜索路径 + JSONPath 字段映射，作为链尾 provider 参与单本查找与批量补全。
+
+| 层     | 位置                                                                                       | 内容                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 持久化 | `db/migrations.rs` v28                                                                     | `metadata_sources(id, name, rules, created_at)`，rules 是单 JSON 列，沿用 `sources` 的形状；删除来源不影响书里已写的 `rating_source` 字符串                                         |
+| 定义   | `library/custom_source.rs`                                                                 | `CustomSourceDef`：`searchUrl` 里的 `{{query}}` 换成百分号编码书名，搜索路径 / 结果列表 / 书名必填，其余字段可选；`validate()` 走 `Hosts::new(base_url, &[])`，只收 HTTPS base host |
+| 运行   | `CustomProvider`                                                                           | 实现 `MetadataProvider`，`key()` 是行 id、`label()` 是用户名称；复用 `gate()`、JSONPath helpers 与评分函数。封面只接受 doubanio.com / neodb.social，避免「界面显示了但下载失败」    |
+| 命令   | `commands/metadata.rs`                                                                     | `metadata_search` 在内置 key 未命中时按行 id 加载来源；`metadata_propose` 把自定义来源接在 `PROVIDERS` 之后；新增 list / save / delete 三命令                                       |
+| 前端   | `MetadataSourcesPanel.tsx`、`BookMetaDialog.tsx`、`BatchFillDialog.tsx`、`lib/metadata.ts` | 插件页里新建 / 编辑 JSON / 删除来源；单本与批量查找的来源按钮在运行时合并自定义来源；`sourceLabel(source, customNames)` 显示用户名称                                                |
+
+**有意不做**：自定义来源任意主机的封面下载（白名单不变）、跨主机搜索模板、来源定义的分享 / 导入导出。第一次落地只支持「base host 内的 JSON API + JSONPath 映射」，HTML 站点继续走书源脚本层。
+
+**证据**：Rust **888 passed / 16 ignored**（884 → 888，新增 4 条在 `custom_source.rs`）/ clippy `-D warnings` / fmt；prettier / `tsc --noEmit` / oxlint（500 文件 0 warning）/ `vite build --no-emptyOutDir`；全量 vitest 142 文件 1379 passed（+2 文件、+5 用例）；e2e `smoke` + `book-meta` + `source-search-button` + `page-swap` + `palette` 双引擎 **24 passed**（`--workers=1`）。默认 5 worker 时 `palette` 的弹簧中间帧取样用例两次踩线失败（310.6 / 307.6，阈值 303.25），单跑与 `--workers=1` 均过，按已知负载 flake 处理，未改产品代码。改动留工作区，未提交。
 
 ### Phase 4.1 — 书源即插件：清单 + 主机权限 ✅（11-14）
 
@@ -975,7 +991,7 @@ NeoDB 是 dalibre 用的那个联邦书目库，中文覆盖真实存在，而�
 🔴 本节原来写的是 1.2 回收站与 3.1+3.2 MCP 只读，**两者都已完成**，留着会让接手的人走回头路。11-13 过了六项（Phase 3 出口验收见 `docs/mcp/MCP_SETUP.md`、5.1 扫描、5.2 预览、5.3 导入、5.3b 大库、5.3c 格式偏好），11-14 过了 **5.4 只读半 + 5.4b 官方 schema 校准 + 5.4c 无需真库的自验 + 5.4d 写入半 + 5.4d 真机往返 + 5.5 书单导出与增量同步评估**，以及 **Phase 4.1 书源主机权限**（均见 §0）。§0 各段里的「仍未做」是写下那一刻的快照，**当前真实待办以本节为准**：
 
 1. **Phase 6 余项（按需）** —— 6.1 标签建议走通「建议 → 预览 → 应用 → 记账」并沉淀成 `tagging.rs` 的形状；**6.2 AI 补笔记（2026-11-15）** 照同一形状给「划了线但没笔记」的标注补草稿，只填空值、可撤销，见 §0。再加新动作仍照这个形状，不新造机制。**没有真实需求前不主动加**（6.2 是用户点名启动 Phase 6 后做的第一个切片）。
-2. **Phase 4 全部已交付**（4.1 权限、4.2 脚本层、4.3 Provider trait、4.4 插件页，见 §0）。余项只有「自定义来源的持久化注册」与第 3 层隔离，两者都要真实需求才动。
+2. **Phase 4 全部已交付**（4.1 权限、4.2 脚本层、4.3 Provider trait、4.4 插件页、4.5 自定义来源，见 §0）。余项只有第 3 层隔离，等第 2 层被证明不够时再动。
 3. **（可选补充，不阻塞）** 桌面版设置页「导出书单 CSV」**真机已销账**（2026-11-17：2386 本 / 512 KB，落盘 Downloads；Rust 落盘与组件行为均有测试）；真 Calibre 库并发打开时扫一次；评估 `document/pdf.rs::read_metadata` 对解析失败静默降级、让损坏 PDF 也能进书架这一既有行为。真机往返已用示例库走通，EPUB 导入已实测。
 
 **5.5 校验记录（2026-11-14）**：`cargo fmt --all --check` / `cargo clippy --all-targets -- -D warnings` / `cargo test --lib` **793 passed（14 ignored）**；`prettier --check .` / `tsc --noEmit` / `oxlint .`（464 文件 0 warning）/ `vite build --no-emptyOutDir`；全量 `vitest run --maxWorkers=2` **127 个测试文件、退出码 0**（最终统计行随会话切换没留存；vitest 有失败会非 0，所以「全过」有据，具体条数不虚报）；e2e `settings-rail` + `backup` + `smoke` 双引擎 **18 passed**。

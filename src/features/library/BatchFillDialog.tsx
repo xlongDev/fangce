@@ -6,7 +6,7 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
 import { CoverThumb } from "@/features/library/CoverThumb";
 import { FillRunStatus } from "@/features/library/FillRunStatus";
-import { useMetadataApply, useMetadataPropose } from "@/hooks/useMetadata";
+import { useMetadataApply, useMetadataPropose, useMetadataSources } from "@/hooks/useMetadata";
 import { CHUNK, useFillRun } from "@/stores/fillRun";
 import { cn } from "@/lib/cn";
 import { FIELD_LABELS, existingHint, hasSomething, sourceLabel, toFill } from "@/lib/metadata";
@@ -230,6 +230,10 @@ function FillBody({
   replaceCovers: boolean;
 }) {
   const propose = useMetadataPropose(ids, true, replaceCovers);
+  const customSources = useMetadataSources();
+  const customNames = Object.fromEntries(
+    (customSources.data ?? []).map((entry) => [entry.id, entry.name]),
+  );
   const apply = useMetadataApply();
   /** Ticked book ids. `null` until the first answer, then "everything with a
    *  fill" — the reader can untick, and an unticked row stays unticked. */
@@ -288,6 +292,7 @@ function FillBody({
               proposal={proposal}
               ticked={!unticked.has(proposal.bookId)}
               onToggle={() => toggle(proposal.bookId)}
+              customNames={customNames}
             />
           ))}
         </ul>
@@ -324,10 +329,12 @@ function Row({
   proposal,
   ticked,
   onToggle,
+  customNames,
 }: {
   proposal: Proposal;
   ticked: boolean;
   onToggle: () => void;
+  customNames: Record<string, string>;
 }) {
   // `hasSomething`, not `fills.length`: a book whose six fields are all there
   // still gains a rating and a Douban link, and judging by `fills` alone made
@@ -424,7 +431,7 @@ function Row({
               {typeof proposal.rating === "number" && (
                 // Named, always: a bare number here would be read as Douban's.
                 <span className="text-text-3">
-                  {sourceLabel(proposal.ratingSource)} {proposal.rating.toFixed(1)}
+                  {sourceLabel(proposal.ratingSource, customNames)} {proposal.rating.toFixed(1)}
                   {proposal.ratingCount !== null && `（${proposal.ratingCount} 人）`}
                 </span>
               )}
@@ -482,7 +489,7 @@ function Row({
                 <div className="flex gap-3">
                   <dt className="text-text-3 w-12 shrink-0 text-[11px] leading-5">评分</dt>
                   <dd className="text-text-1 min-w-0 flex-1 text-[12px] leading-5">
-                    {sourceLabel(proposal.ratingSource)} {proposal.rating.toFixed(1)}
+                    {sourceLabel(proposal.ratingSource, customNames)} {proposal.rating.toFixed(1)}
                     {typeof proposal.ratingCount === "number" && `（${proposal.ratingCount} 人）`}
                   </dd>
                 </div>

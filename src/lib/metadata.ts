@@ -11,9 +11,13 @@
  * that predate the column were backfilled as NeoDB's, which is what they were.
  * It falls back to a word that is not a catalogue name rather than guessing.
  */
-export function sourceLabel(source: string | null | undefined): string {
+export function sourceLabel(
+  source: string | null | undefined,
+  customNames?: Record<string, string>,
+): string {
   if (source === "douban") return "豆瓣";
   if (source === "neodb") return "NeoDB";
+  if (source && customNames?.[source]) return customNames[source];
   return "评分";
 }
 

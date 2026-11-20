@@ -6,6 +6,7 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { MetadataSourcesPanel } from "@/features/plugins/MetadataSourcesPanel";
 import { useDeleteSource, useSaveSource, useSources } from "@/hooks/useSource";
 import type { SourceEntry } from "@/lib/bindings";
 import type { SourceRules } from "@/types/ipc";
@@ -258,6 +259,8 @@ export function PluginsPage() {
             沙箱中，没有网络与文件接口，单次最多两秒。独立的脚本插件会放在这一页。
           </p>
         </section>
+
+        <MetadataSourcesPanel />
 
         {confirming && (
           <GlassDialog

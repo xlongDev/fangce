@@ -3,10 +3,39 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, isDesktopRuntime } from "@/lib/ipc";
 import { demoEnabled, demoProposals } from "@/lib/demo";
 import { showToast } from "@/stores/toasts";
-import type { Candidate, MetadataFill, Proposal } from "@/types/ipc";
+import type { Candidate, CustomSourceDef, MetadataFill, Proposal } from "@/types/ipc";
 
-/** The two catalogues the sheet offers, by the name the backend knows them by. */
-export type Source = "douban" | "neodb";
+/** A source key: `douban` / `neodb`, or a reader-defined source's row id. */
+export type Source = string;
+
+/** Reader-defined catalogues, definitions included for the plugin page. */
+export function useMetadataSources() {
+  return useQuery({
+    queryKey: ["metadata", "sources"],
+    queryFn: () => (isDesktopRuntime ? ipc.metadataSourceList() : Promise.resolve([])),
+    enabled: isDesktopRuntime,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useSaveMetadataSource() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, def }: { id: string | null; def: CustomSourceDef }) =>
+      ipc.metadataSourceSave(id, def),
+    meta: { silent: true },
+    onSuccess: () => client.invalidateQueries({ queryKey: ["metadata", "sources"] }),
+  });
+}
+
+export function useDeleteMetadataSource() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => ipc.metadataSourceDelete(id),
+    meta: { silent: true },
+    onSuccess: () => client.invalidateQueries({ queryKey: ["metadata", "sources"] }),
+  });
+}
 
 /**
  * Asks one catalogue about one book.

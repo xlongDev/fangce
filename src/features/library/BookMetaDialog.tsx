@@ -9,7 +9,12 @@ import { GlassDialog } from "@/components/glass/overlay";
 import { CoverThumb } from "@/features/library/CoverThumb";
 import { formatFileSize } from "@/features/library/format";
 import { useBookInfo } from "@/hooks/useLibrary";
-import { type Source, useLocalCoverPreview, useMetadataSearch } from "@/hooks/useMetadata";
+import {
+  type Source,
+  useLocalCoverPreview,
+  useMetadataSearch,
+  useMetadataSources,
+} from "@/hooks/useMetadata";
 import { sourceLabel } from "@/lib/metadata";
 import { showToast } from "@/stores/toasts";
 import { isDesktopRuntime } from "@/lib/ipc";
@@ -34,7 +39,7 @@ import type { BookMetadataPatch, BookSummary, Candidate } from "@/types/ipc";
  *  website, not a lookup that fills the form. `detail` used to hide in a
  *  `title` tooltip — nobody hovered a glass pill to learn which catalogue
  *  answers better, so it is printed under the buttons now. */
-const SOURCES: { key: Source; label: string; detail: string }[] = [
+const BUILTIN_SOURCES: { key: Source; label: string; detail: string }[] = [
   { key: "douban", label: "查豆瓣", detail: "中文版次全，国内直连" },
   { key: "neodb", label: "查 NeoDB", detail: "外文书与 ISBN，需代理" },
 ];
@@ -170,6 +175,27 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
   /** Candidates from the last 查找, or `null` when the reader has not asked. */
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   const search = useMetadataSearch();
+  const customSources = useMetadataSources();
+  // Reader-defined sources join the sheet after the built-ins. Their button
+  // says whose catalogue it is, and the host under it tells the reader where
+  // the query actually goes.
+  const sources: { key: Source; label: string; detail: string }[] = [
+    ...BUILTIN_SOURCES,
+    ...(customSources.data ?? []).map((entry) => ({
+      key: entry.id as Source,
+      label: `查${entry.name}`,
+      detail: (() => {
+        try {
+          return new URL(entry.def.baseUrl ?? "").host;
+        } catch {
+          return "自定义来源";
+        }
+      })(),
+    })),
+  ];
+  const customNames = Object.fromEntries(
+    (customSources.data ?? []).map((entry) => [entry.id, entry.name]),
+  );
   const coverPreview = useLocalCoverPreview();
 
   /** Open the native picker, then read the chosen image back as a data URL so
@@ -272,7 +298,7 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
               在线补全信息
             </span>
             <div className="flex flex-wrap items-center gap-2">
-              {SOURCES.map((source) => (
+              {sources.map((source) => (
                 <GlassButton
                   key={source.key}
                   type="button"
@@ -290,7 +316,7 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
               ))}
               {candidates !== null && (
                 <span className="text-text-3 text-xs">
-                  {sourceLabel(search.variables?.source)} {candidates.length} 条
+                  {sourceLabel(search.variables?.source, customNames)} {candidates.length} 条
                   {/* The catalogue lists every name attached to any edition,
                       translators included. Saying so is cheaper and more honest
                       than guessing which names are authors. */}
@@ -315,7 +341,7 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
             {/* Trade-offs as visible text, not a tooltip: nobody hovered a glass
                 pill to learn which source to pick. Left-aligned under the row. */}
             <ul className="text-text-3 flex flex-col gap-0.5 text-[11px] leading-relaxed">
-              {SOURCES.map((source) => (
+              {sources.map((source) => (
                 <li key={source.key}>
                   <span className="text-text-2">{source.label}</span>：{source.detail}
                 </li>
@@ -330,7 +356,7 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
 
         {candidates !== null && candidates.length === 0 && (
           <p className="text-text-3 text-xs leading-relaxed">
-            {sourceLabel(search.variables?.source)}{" "}
+            {sourceLabel(search.variables?.source, customNames)}{" "}
             没有找到相近的书。可以换个书名再试、换个来源再查，或者自己填。
           </p>
         )}
@@ -538,7 +564,7 @@ function BookMetaForm({ book, busy, onCancel, onSave }: BookMetaFormProps) {
               which crashed the whole sheet on `.toFixed` of undefined. */}
           {typeof rating.value === "number" && (
             <span className="text-text-2">
-              {sourceLabel(rating.source)} {rating.value.toFixed(1)}
+              {sourceLabel(rating.source, customNames)} {rating.value.toFixed(1)}
               {rating.count !== null && `（${rating.count} 人）`}
             </span>
           )}
