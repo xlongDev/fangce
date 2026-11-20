@@ -1019,6 +1019,18 @@ export const commands = {
   /**  `sync.now` — pull, merge, apply and push; returns what each side kept. */
   syncNow: (config: SyncConfig_Deserialize, options?: InvokeOptions) =>
     __TAURI_INVOKE<SyncReport>("sync_now", { config }, options),
+  /**  `kindle.getConfig` */
+  kindleGetConfig: (options?: InvokeOptions) =>
+    __TAURI_INVOKE<KindleConfig_Serialize>("kindle_get_config", undefined, options),
+  /**  `kindle.setConfig` — returns the stored, normalized form. */
+  kindleSetConfig: (config: KindleConfig_Deserialize, options?: InvokeOptions) =>
+    __TAURI_INVOKE<KindleConfig_Serialize>("kindle_set_config", { config }, options),
+  /**
+   *  `book.sendToKindle` — one book, one message. Desktop only: the browser has
+   *  no SMTP relay and no source path, so no local command is registered for it.
+   */
+  bookSendToKindle: (id: string, options?: InvokeOptions) =>
+    __TAURI_INVOKE<null>("book_send_to_kindle", { id }, options),
   /**  `system.info` */
   systemInfo: (options?: InvokeOptions) =>
     __TAURI_INVOKE<SystemInfo_Serialize>("system_info", undefined, options),
@@ -2999,6 +3011,37 @@ export type ImportProgress = {
   done: number;
   total: number;
   path: string;
+};
+
+/**  Where the file goes and which relay carries it. */
+export type KindleConfig = KindleConfig_Serialize | KindleConfig_Deserialize;
+
+/**  Where the file goes and which relay carries it. */
+export type KindleConfig_Deserialize = {
+  /**  SMTP relay, e.g. `smtp.qq.com`. */
+  smtpHost?: string;
+  /**  465 = implicit TLS, 587 = STARTTLS. No plaintext port. */
+  smtpPort?: number;
+  /**  The approved sender on Amazon's Personal Document Settings list. */
+  username?: string;
+  /**  App password, never the account's login password. */
+  password?: string;
+  /**  The `@kindle.com` address from Personal Document Settings. */
+  kindleEmail?: string;
+};
+
+/**  Where the file goes and which relay carries it. */
+export type KindleConfig_Serialize = {
+  /**  SMTP relay, e.g. `smtp.qq.com`. */
+  smtpHost: string;
+  /**  465 = implicit TLS, 587 = STARTTLS. No plaintext port. */
+  smtpPort: number;
+  /**  The approved sender on Amazon's Personal Document Settings list. */
+  username: string;
+  /**  App password, never the account's login password. */
+  password: string;
+  /**  The `@kindle.com` address from Personal Document Settings. */
+  kindleEmail: string;
 };
 
 /**  Counts for the shelf's filter panel, one list per dimension. */

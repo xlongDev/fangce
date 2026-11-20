@@ -9,6 +9,7 @@ import {
   Info,
   Keyboard,
   Palette,
+  PaperPlaneTilt,
   Sparkle,
   TextAa,
 } from "@phosphor-icons/react";
@@ -33,6 +34,7 @@ export const SECTIONS = [
   { id: "dictionary", label: "词典", icon: BookOpenText },
   { id: "fonts", label: "字体", icon: TextAa },
   { id: "sync", label: "同步", icon: CloudArrowUp },
+  { id: "kindle", label: "发送到 Kindle", icon: PaperPlaneTilt },
   { id: "backup", label: "备份", icon: Archive },
   { id: "operations", label: "操作记录", icon: ClockCounterClockwise },
   { id: "reset", label: "重置", icon: ArrowsClockwise },

@@ -16,6 +16,7 @@ pub mod dictionary;
 pub mod export;
 pub mod font;
 pub mod graph;
+pub mod kindle;
 pub mod lookup;
 pub mod metadata;
 pub mod mini_bar;

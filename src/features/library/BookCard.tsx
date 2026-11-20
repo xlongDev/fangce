@@ -5,6 +5,7 @@ import {
   Check,
   DownloadSimple,
   Export,
+  PaperPlaneTilt,
   PencilSimple,
   Star,
   Tag,
@@ -44,6 +45,8 @@ interface BookCardProps {
   onToggleFavorite: (book: BookSummary) => void;
   onAskDelete: (book: BookSummary) => void;
   onAskExport: (book: BookSummary) => void;
+  /** Desktop + EPUB only. The icon is not rendered for other formats. */
+  onSendToKindle?: (book: BookSummary) => void;
   /** The browser's export: a download of the book's own file. The desktop has
    *  somewhere to write and a panel to ask, so it offers `onAskExport`
    *  (a `.ctz`) instead — only one of the two is ever rendered. */
@@ -86,6 +89,7 @@ export function BookCard({
   onToggleFavorite,
   onAskDelete,
   onAskExport,
+  onSendToKindle,
   onExportFile,
   onEditTags,
   onEditMeta,
@@ -95,6 +99,7 @@ export function BookCard({
   variant = "grid",
 }: BookCardProps) {
   const authors = authorLine(book);
+  const canSend = isDesktopRuntime && book.format === "epub" && !!onSendToKindle;
   const m = useMotion();
   const star = useAnimationControls();
   const halo = useAnimationControls();
@@ -333,16 +338,20 @@ export function BookCard({
       ) : (
         <div
           className={cn(
-            // grid-cols-5 across the cover's own width: the cells shrink with
-            // the cover, so five actions fit a tile at any breakpoint instead
-            // of riding out past the cover's edge (what a fixed-width pill
-            // did on the 6-column shelf).
+            // Five cells across the cover's own width, six when this EPUB
+            // also offers Send to Kindle: the cells shrink with the cover, so
+            // the actions fit a tile at any breakpoint instead of riding out
+            // past the cover's edge (what a fixed-width pill did on the
+            // 6-column shelf).
             //
             // The grid tiles slide the row in under the lift; a list row is too
             // shallow for that — its own centering uses `translate-y`, which
             // would fight the slide — so it fades in place instead.
             variant === "grid"
-              ? "absolute inset-x-1.5 top-1.5 grid grid-cols-5 place-items-center gap-0.5"
+              ? cn(
+                  "absolute inset-x-1.5 top-1.5 grid place-items-center gap-0.5",
+                  canSend ? "grid-cols-6" : "grid-cols-5",
+                )
               : "absolute top-1/2 right-3 flex -translate-y-1/2 items-center gap-1",
             variant === "grid" ? "translate-y-2 group-hover:translate-y-0" : "",
             // The row follows the lift rather than racing it: it waits well
@@ -427,6 +436,18 @@ export function BookCard({
               className={coverAction}
             >
               <DownloadSimple size={13} />
+            </GlassIconButton>
+          )}
+          {canSend && (
+            <GlassIconButton
+              label="发送到 Kindle"
+              onClick={(event) => {
+                event.stopPropagation();
+                onSendToKindle?.(book);
+              }}
+              className={coverAction}
+            >
+              <PaperPlaneTilt size={13} />
             </GlassIconButton>
           )}
           <GlassIconButton

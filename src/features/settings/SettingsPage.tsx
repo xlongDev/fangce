@@ -60,11 +60,21 @@ import {
 } from "@/features/settings/section";
 import { AiSection } from "@/features/settings/ai/AiForm";
 import { CatalogExportRow } from "@/features/settings/CatalogExportRow";
+import { KindleSection } from "@/features/settings/KindleSection";
 import { KeymapSection } from "@/features/settings/KeymapSection";
 import { SecretsNotice } from "@/features/settings/SecretsNotice";
 import type { Operation, SyncChange, SyncConfig, SyncReport, SyncTally } from "@/types/ipc";
 import { cn } from "@/lib/cn";
 import { DURATION, EASE_LAND, EASE_OUT, SPRING } from "@/lib/motion";
+
+/**
+ * The rail is a jump table over the groups that actually mount. Send to Kindle
+ * has no SMTP relay in the browser, so its group returns null there — leaving
+ * its rail entry would give the reader a jump to nowhere.
+ */
+const VISIBLE_SECTIONS = isDesktopRuntime
+  ? SECTIONS
+  : SECTIONS.filter((section) => section.id !== "kindle");
 
 /**
  * Whether the pane has nowhere left to scroll.
@@ -341,7 +351,7 @@ export function SettingsPage() {
     // cache is still about the same set of groups.
     const found = root.querySelectorAll("[data-section]");
     counted.current = found.length;
-    offsets.current = SECTIONS.map((section) => ({
+    offsets.current = VISIBLE_SECTIONS.map((section) => ({
       id: section.id,
       top: root.querySelector<HTMLElement>(`[data-section="${section.id}"]`)?.offsetTop ?? 0,
     }));
@@ -500,7 +510,7 @@ export function SettingsPage() {
   const { hash } = useLocation();
   useEffect(() => {
     const id = hash.slice(1) as SectionId;
-    if (!SECTIONS.some((section) => section.id === id)) return;
+    if (!VISIBLE_SECTIONS.some((section) => section.id === id)) return;
     let frames = 0;
     let frame = 0;
     const look = () => {
@@ -580,7 +590,7 @@ export function SettingsPage() {
                 data-settings-rail-pane
                 className="glass pointer-events-none absolute top-0 left-0 rounded-lg opacity-0 transition-[transform,width,height,opacity] duration-[420ms] ease-[var(--ease-spring)] will-change-transform motion-reduce:transition-none"
               />
-              {SECTIONS.map(({ id, label, icon: Icon }) => {
+              {VISIBLE_SECTIONS.map(({ id, label, icon: Icon }) => {
                 const on = active === id;
                 return (
                   <li key={id} className="shrink-0 lg:shrink">
@@ -622,6 +632,7 @@ export function SettingsPage() {
             <KeymapSection />
             <FontSection />
             <SyncSection />
+            <KindleSection />
             <BackupSection />
             <OperationsSection />
             <ResetSection />

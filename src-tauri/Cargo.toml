@@ -98,6 +98,18 @@ tauri-plugin-single-instance = { version = "2.5.5", features = ["deep-link"] }
 # Imported StarDict dictionaries ship their bodies as `.dict.dz`. Inflated on
 # the way in so a lookup is a seek and a read (see `library/dictionaries.rs`).
 flate2 = "1"
+# Send to Kindle: one authenticated SMTP message with an EPUB attachment.
+# `ring` matches the rustls provider pinned below; rustls-native-certs keeps
+# the usual relay certs working without shipping a separate root store.
+lettre = { version = "0.11", default-features = false, features = [
+  "builder",
+  "smtp-transport",
+  "tokio1",
+  "tokio1-rustls",
+  "rustls",
+  "ring",
+  "rustls-native-certs",
+] }
 tauri-specta = { version = "=2.0.0-rc.29", features = ["typescript"] }
 specta = { version = "=2.0.0-rc.28", features = ["derive"] }
 specta-typescript = "=0.0.15"

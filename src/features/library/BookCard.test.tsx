@@ -54,6 +54,7 @@ const baseBook: BookSummary = {
 function renderCard(
   book: Partial<BookSummary> = {},
   onAskExport: (book: BookSummary) => void = () => {},
+  onSendToKindle?: (book: BookSummary) => void,
 ) {
   return render(
     <BookCard
@@ -62,6 +63,7 @@ function renderCard(
       onToggleFavorite={() => {}}
       onAskDelete={() => {}}
       onAskExport={onAskExport}
+      onSendToKindle={onSendToKindle}
       onExportFile={() => {}}
       onEditTags={() => {}}
       onEditMeta={() => {}}
@@ -146,5 +148,19 @@ describe("BookCard — format / file size row (T2/T3)", () => {
     // original file, both packs and the catalogue CSV as peer choices.
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(onAskExport).toHaveBeenCalledWith(expect.objectContaining({ id: "test-1" }));
+  });
+
+  it("offers Send to Kindle only for EPUB books that have a handler", async () => {
+    const onSend = vi.fn();
+    renderCard({ format: "epub" }, () => {}, onSend);
+    expect(screen.getByRole("button", { name: "发送到 Kindle" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "发送到 Kindle" }));
+    expect(onSend).toHaveBeenCalledWith(expect.objectContaining({ id: "test-1" }));
+  });
+
+  it("does not show Send to Kindle for non-EPUB formats", () => {
+    renderCard({ format: "pdf" }, () => {}, vi.fn());
+    expect(screen.queryByRole("button", { name: "发送到 Kindle" })).not.toBeInTheDocument();
   });
 });

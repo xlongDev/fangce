@@ -62,12 +62,13 @@ const SERVICE: &str = "dev.xlong.fangce";
 /// The WebDAV username is on the list although it is not itself a secret: half
 /// a credential pair is useless for signing in and still names the account, so
 /// it travels with the password everywhere the password goes.
-pub const SECRET_FIELDS: [(&str, &[&str]); 2] = [
+pub const SECRET_FIELDS: [(&str, &[&str]); 3] = [
     // `profileKeys.*` is the one entry that is not a plain field: it names an
     // object whose *values* are all credentials (one API key per saved AI
     // profile). See [`for_each_secret`].
     ("ai.config", &["apiKey", "deeplKey", "embeddingApiKey", "imageApiKey", "profileKeys.*"]),
     ("sync.webdav", &["username", "password"]),
+    ("send.kindle", &["username", "password"]),
 ];
 
 /// Marks a sealed value. Versioned so a future format can be told apart from

@@ -41,6 +41,7 @@ import { useShelfSelection } from "@/features/library/useShelfSelection";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
 import { useBookCatalogExport } from "@/hooks/useCatalogExport";
 import { useShelfWindow } from "@/hooks/useShelfWindow";
+import { useSendToKindle } from "@/hooks/useKindle";
 import { useAssignTags, useTags } from "@/hooks/useTags";
 import {
   useBooks,
@@ -302,6 +303,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const migrateEdition = useMigrateEdition();
   const exportPack = useExportPack();
   const exportFile = useExportBookFile();
+  const sendToKindle = useSendToKindle();
   const exportCsv = useBookCatalogExport();
   const deleteBook = useDeleteBook();
   const setFavorite = useSetFavorite();
@@ -587,6 +589,11 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         }
         onAskDelete={setDeleteTarget}
         onAskExport={setExportTarget}
+        onSendToKindle={(target) => {
+          sendToKindle.mutate(target.id, {
+            onSuccess: () => showToast("success", "已提交到 Kindle，稍后可在 Kindle 库中查看。"),
+          });
+        }}
         // No dialog: a download has nothing to choose. Failures surface
         // through the shared mutation toast, like every other write.
         onExportFile={(target) => exportFile.mutate({ id: target.id })}
