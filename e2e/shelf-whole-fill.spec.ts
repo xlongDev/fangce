@@ -54,6 +54,8 @@ test("后台运行关掉弹窗后进度仍在", async ({ page }) => {
   const pill = page.locator("[data-fill-run-pill]");
   await expect(pill).toBeVisible();
   await expect(pill).toContainText("120 / 120", { timeout: 10_000 });
-  await pill.getByRole("button", { name: "展开补全进度" }).click();
+  // The pill stays expanded through the run (only an explicit user fold sets
+  // `collapsed`), so the completion summary is already visible — no "expand"
+  // click to make, and no toggle that only exists in the folded state.
   await expect(pill).toContainText("已补全");
 });
