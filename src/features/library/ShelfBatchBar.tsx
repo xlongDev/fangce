@@ -260,10 +260,14 @@ export function ShelfBatchBar({
                 // `whitespace-nowrap` is the last line of defence — a label
                 // that wrapped to one character per line is what this bug
                 // looked like from the outside.
-                className="glass-2 shadow-panel pointer-events-auto flex items-center gap-1.5 rounded-2xl p-2 pl-4 whitespace-nowrap"
+                // A denser liquid pane than `glass-2`: the bar floats over
+                // book covers, and a 7.5%-white fill let bright art read
+                // through the labels. `glass-liquid` keeps the blur, the lit
+                // rim and the specular while giving the text a darker bed.
+                className="glass-liquid pointer-events-auto flex items-center gap-1.5 rounded-2xl p-2 pl-4 whitespace-nowrap [--liquid-density:92%]"
                 data-batch-bar
               >
-                <span className="text-text-2 mr-1 text-sm whitespace-nowrap">
+                <span className="text-text-1 mr-1 text-sm whitespace-nowrap">
                   已选{" "}
                   <motion.span
                     key={selection.count}
