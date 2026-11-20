@@ -78,12 +78,14 @@ test("leaving the reader flies the cover home and restores the shelf's place", a
       peakCounts?: Record<string, number>;
       flightRadius?: string | null;
       flightSamples?: number;
-      lastLanding?: { flight: string; tile: string } | null;
+      flightLanding?: { x: number; y: number } | null;
+      lastTile?: string | null;
     };
     w.peakCounts = {};
     w.flightRadius = null;
     w.flightSamples = 0;
-    w.lastLanding = null;
+    w.flightLanding = null;
+    w.lastTile = null;
     const rect = (el: Element) => {
       const b = el.getBoundingClientRect();
       return `${b.x.toFixed(1)},${b.y.toFixed(1)}`;
@@ -96,15 +98,26 @@ test("leaving the reader flies the cover home and restores the shelf's place", a
         );
       }
       const flight = document.querySelector(flightSelector);
+      const cover = document.querySelector("[data-book-cover]");
+      // Where the cover actually is, sampled on the last frame it is visible.
+      if (cover) w.lastTile = rect(cover);
       if (!flight) return;
       w.flightSamples = (w.flightSamples ?? 0) + 1;
       w.flightRadius ??= getComputedStyle(flight).borderTopLeftRadius;
-      // Where the flight is, next to where the tile it is aiming at is. They
-      // have to agree at the end: the destination's box is registered while its
-      // page is still settling from its own entrance, so a one-shot reading
-      // leaves the flight landing 9px low and the tile then hops up into place.
-      const cover = document.querySelector("[data-book-cover]");
-      if (cover) w.lastLanding = { flight: rect(flight), tile: rect(cover) };
+      // Where the flight is *aimed*, not where a 5Hz runner last painted it.
+      // The layer carries the decision as data attributes on the commit that
+      // launches it, so this needs no frame. Comparing the flight's painted
+      // rect against the tile on the last frame before it dissolves loses by
+      // tens of pixels on a loaded runner — the compositor had not painted the
+      // arrival yet. The destination's box is registered while its page is
+      // still settling from its own entrance, so reading the decision next to
+      // the tile's settled box is what catches a genuine miss (a one-shot box
+      // left the flight 9px low and the tile then hopped into place).
+      const lx = flight.getAttribute("data-flight-landing-x");
+      const ly = flight.getAttribute("data-flight-landing-y");
+      if (lx !== null && ly !== null) {
+        w.flightLanding = { x: Number(lx), y: Number(ly) };
+      }
     };
     sample();
     window.setInterval(sample, 16);
@@ -134,13 +147,15 @@ test("leaving the reader flies the cover home and restores the shelf's place", a
       peakCounts?: Record<string, number>;
       flightRadius?: string | null;
       flightSamples?: number;
-      lastLanding?: { flight: string; tile: string } | null;
+      flightLanding?: { x: number; y: number } | null;
+      lastTile?: string | null;
     };
     return {
       peak: w.peakCounts,
       radius: w.flightRadius,
       samples: w.flightSamples ?? 0,
-      landing: w.lastLanding ?? null,
+      landing: w.flightLanding ?? null,
+      tile: w.lastTile ?? null,
       flying: document.querySelectorAll("[data-cover-flight]").length,
     };
   });
@@ -156,23 +171,22 @@ test("leaving the reader flies the cover home and restores the shelf's place", a
   expect(watched.radius, "the corner of the flight came from the tile").toBe(point.radius);
   expect(watched.peak?.["[data-header-cover]"], "one reader at a time").toBe(1);
   expect(watched.peak?.["[data-shelf-scroller]"], "one shelf at a time").toBe(1);
-  // And it arrives where the tile actually is. A box read once, while the shelf
-  // was still rising out of its entrance, put the two 9px apart and the cover
-  // hopped into place when the flight let go.
-  expect(watched.landing, "a landing was sampled").not.toBeNull();
+  // And it is aimed at where the tile actually is. Compare the flight's
+  // *decision* (written on the launch commit, no frame needed) to the tile's
+  // last painted box, not the flight's last painted box: a 5Hz runner can go
+  // most of a 420ms flight without painting its arrival, so the painted pair
+  // was 24.8px apart on CI for a flight that did land. A box registered once,
+  // while the shelf was still rising out of its entrance, really did leave the
+  // cover 9px low — that is the miss this still catches.
+  expect(watched.landing, "a landing was aimed").not.toBeNull();
+  expect(watched.tile, "the tile was sampled").not.toBeNull();
   const xy = (pair: string): [number, number] => {
     const [x = 0, y = 0] = pair.split(",").map(Number);
     return [x, y];
   };
-  const [flightX, flightY] = xy(watched.landing?.flight ?? "0,0");
-  const [tileX, tileY] = xy(watched.landing?.tile ?? "0,0");
-  // Within a few pixels, not within one. The pair is captured on the last
-  // sample both were still in the DOM for, and that sample can be a frame short
-  // of the arrival — on CI (WebKit, loaded runner) it read 2.4px, which a 1.5px
-  // threshold rejects for a flight that did land on its tile. The bug this
-  // guards is a *visible* miss: the one-shot box left the flight 9px low.
-  expect(Math.abs(flightX - tileX), "landed on the tile, x").toBeLessThan(4);
-  expect(Math.abs(flightY - tileY), "landed on the tile, y").toBeLessThan(4);
+  const [tileX, tileY] = xy(watched.tile ?? "0,0");
+  expect(Math.abs(watched.landing!.x - tileX), "aimed at the tile, x").toBeLessThan(4);
+  expect(Math.abs(watched.landing!.y - tileY), "aimed at the tile, y").toBeLessThan(4);
 });
 
 /**

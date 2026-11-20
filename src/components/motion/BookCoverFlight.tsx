@@ -186,6 +186,7 @@ function Flight({
       // that reads this asks the app what it decided; one that reads the rect
       // asks a runner painting five frames a second to have painted the right
       // one.
+      data-flight-landing-x={landing.x}
       data-flight-landing-y={landing.y}
       className="shadow-panel pointer-events-none fixed z-[70] overflow-hidden"
       style={{
