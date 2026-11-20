@@ -2265,11 +2265,37 @@ test("dragging the band sideways in 竖排 follows the hand, not the axis", asyn
   await page.waitForTimeout(400);
 
   await choose(page, "竖排");
-  await rulerDrawn(page);
+  // The direction switch remounts the ruler, and on a loaded runner the band
+  // can re-measure *after* `rulerDrawn` has settled. A grip box read on one
+  // frame and pressed on the next lands in the prose: the pointer selects text
+  // instead of dragging, and the band barely moves (CI run 44673715195, twice).
+  // Read the box and check the press point in the same poll, then take the
+  // baseline from the frame the drag actually starts on.
+  let gx = 0;
+  let gy = 0;
+  await expect
+    .poll(
+      async () => {
+        const grip = await page.locator('[data-ruler-edge="leading"]').boundingBox();
+        // Vertical: the grip spans the band's height and is a few px wide.
+        if (!grip || grip.height <= 40 || grip.width <= 0 || grip.width >= 40) return false;
+        gx = grip.x + grip.width / 2;
+        gy = grip.y + grip.height / 2;
+        return page.evaluate(
+          ([px, py]) =>
+            !!document
+              .elementFromPoint(px as number, py as number)
+              ?.closest('[data-ruler-edge="leading"]'),
+          [gx, gy],
+        );
+      },
+      { message: "竖排标尺的抓握边没有稳定在可点按的位置" },
+    )
+    .toBe(true);
+  // Baseline last: the wait above can span a re-measure, and a band read before
+  // it would be compared against a band dragged from a different frame.
   const upright = await rulerDrawn(page);
-  const grip = (await page.locator('[data-ruler-edge="leading"]').boundingBox())!;
-  const gx = grip.x + grip.width / 2;
-  const gy = grip.y + grip.height / 2;
+  expect(upright.vertical, "标尺没有切成竖排").toBe(true);
   await page.mouse.move(gx, gy);
   await page.mouse.down();
   await page.mouse.move(gx - 120, gy, { steps: 12 });
