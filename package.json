@@ -27,7 +27,7 @@
     "rust:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml --all",
     "rust:fmt:check": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check",
     "rust:lint": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
-    "rust:test": "cargo test --manifest-path src-tauri/Cargo.toml"
+    "rust:test": "cargo test --manifest-path src-tauri/Cargo.toml && prettier --write src/lib/bindings.ts"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
