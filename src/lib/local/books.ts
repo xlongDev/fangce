@@ -259,6 +259,8 @@ function matches(
   if (query.filter === "favorites" && !book.favorite) return false;
   if (query.filter === "recent" && book.lastReadAt === null) return false;
   if (tag && !book.tags.some((name) => name.toLowerCase() === tag)) return false;
+  // Like the search term, this narrows every facet rather than being one.
+  if (query.untagged && book.tags.length > 0) return false;
   if (
     needle &&
     !book.title.toLowerCase().includes(needle) &&
@@ -347,6 +349,9 @@ export async function bookFacets(query: BookQuery): Promise<LibraryFacets> {
   // leave the reader no way back.
   const statusRows = rows.filter((book) => matches(book, query, "status", covered));
   const coverRows = rows.filter((book) => matches(book, query, "cover", covered));
+  const untaggedRows = rows.filter((book) =>
+    matches(book, { ...query, untagged: false }, undefined, covered),
+  );
 
   return {
     formats: tally((book) => book.format),
@@ -360,6 +365,7 @@ export async function bookFacets(query: BookQuery): Promise<LibraryFacets> {
       { value: "has", count: coverRows.filter((book) => covered.has(book.id)).length },
       { value: "none", count: coverRows.filter((book) => !covered.has(book.id)).length },
     ],
+    untaggedCount: untaggedRows.filter((book) => book.tags.length === 0).length,
   };
 }
 

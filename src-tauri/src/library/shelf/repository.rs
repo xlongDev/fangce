@@ -204,6 +204,11 @@ pub struct BookQuery {
     /// `Some(true)` = only books with a cover, `Some(false)` = only without.
     #[serde(default)]
     pub has_cover: Option<bool>,
+    /// Only books that carry no label. A narrowing like `search`, not a facet
+    /// dimension: it rides along with every count the panel prints, so picking
+    /// 无标签 leaves each chip showing what is actually left under it.
+    #[serde(default)]
+    pub untagged: bool,
     /// Reads the bin instead of the shelf.
     ///
     /// One flag on the one query type, rather than a second `trash.list`
@@ -265,6 +270,9 @@ pub struct LibraryFacets {
     pub status: Vec<Facet>,
     /// `has` / `none`.
     pub covers: Vec<Facet>,
+    /// How many books the panel would leave if 无标签 were picked. Counted with
+    /// that one narrowing cleared, like every other chip in the panel.
+    pub untagged_count: i64,
 }
 
 /// Aggregate counts shown above the shelf.
@@ -476,6 +484,13 @@ fn conditions(query: &BookQuery, skip: Option<Dimension>) -> (Vec<String>, Vec<V
         );
         binds.push(Value::Text(tag.to_string()));
     }
+    // Not skippable: like a search term, this narrows every facet rather than
+    // being a facet of its own. `book_tags` has no row for an untagged book,
+    // so the negative check is the whole predicate (no join needed).
+    if query.untagged {
+        conditions
+            .push("NOT EXISTS (SELECT 1 FROM book_tags bt WHERE bt.book_id = b.id)".to_string());
+    }
     if let Some(needle) = normalized_search(&query.search) {
         conditions.push(
             "(b.title LIKE ? ESCAPE '\\' OR b.sort_title LIKE ? ESCAPE '\\' OR EXISTS (\
@@ -619,6 +634,7 @@ pub fn facets(conn: &Connection, query: &BookQuery) -> AppResult<LibraryFacets> 
         publishers: facet_counts(conn, query, Dimension::Publisher, "b.publisher")?,
         status: status_counts(conn, query)?,
         covers: cover_counts(conn, query)?,
+        untagged_count: untagged_count(conn, query)?,
     })
 }
 
@@ -690,6 +706,18 @@ fn cover_counts(conn: &Connection, query: &BookQuery) -> AppResult<Vec<Facet>> {
         Facet { value: "has".to_string(), count: has },
         Facet { value: "none".to_string(), count: none },
     ])
+}
+
+/// Count of untagged books under the *other* filters — the number beside the
+/// 无标签 chip. The one narrowing is cleared first, so a chip already on does
+/// not report its own result as if it were the whole shelf; see [`facets`].
+fn untagged_count(conn: &Connection, query: &BookQuery) -> AppResult<i64> {
+    let mut cleared = query.clone();
+    cleared.untagged = false;
+    let (mut conditions, binds) = conditions(&cleared, None);
+    conditions.push("NOT EXISTS (SELECT 1 FROM book_tags bt WHERE bt.book_id = b.id)".to_string());
+    let sql = format!("SELECT COUNT(*) FROM {} b {}", relation(query), where_clause(&conditions));
+    Ok(conn.query_row(&sql, rusqlite::params_from_iter(binds.iter()), |row| row.get(0))?)
 }
 
 /// A single book by id, for the reader header. `None` when unknown — or when it
@@ -1518,6 +1546,29 @@ mod tests {
         let all =
             list(&conn, &BookQuery { tag: Some("  ".into()), ..Default::default() }).expect("list");
         assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn untagged_narrows_to_books_with_no_label() {
+        let conn = seed();
+        add(&conn, "b1", "三体", &[], "h1");
+        add(&conn, "b2", "Dune", &[], "h2");
+        conn.execute("INSERT INTO tags (id, name) VALUES ('t', '科幻')", []).expect("tag");
+        conn.execute("INSERT INTO book_tags (book_id, tag_id) VALUES ('b2', 't')", [])
+            .expect("label");
+
+        let query = BookQuery { untagged: true, ..Default::default() };
+        let books = list(&conn, &query).expect("list");
+        assert_eq!(books.len(), 1, "只有无标签的那本留下");
+        assert_eq!(books[0].id, "b1");
+
+        let counts = facets(&conn, &query).expect("facets");
+        assert_eq!(counts.untagged_count, 1, "chip 数字在自身筛选打开时仍是可作选择的数");
+        assert_eq!(
+            counts.formats.iter().map(|f| f.count).sum::<i64>(),
+            1,
+            "其余维度的计数也跟着收窄，点下去不会落空"
+        );
     }
 
     #[test]

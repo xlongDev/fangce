@@ -25,6 +25,8 @@ export interface ShelfFilters {
   status: ReadingStatus;
   /** `null` = don't care; `true` / `false` = has / has not. */
   hasCover: boolean | null;
+  /** Only books with no label at all. */
+  untagged: boolean;
 }
 
 export const NO_FILTERS: ShelfFilters = {
@@ -33,6 +35,7 @@ export const NO_FILTERS: ShelfFilters = {
   publishers: [],
   status: "any",
   hasCover: null,
+  untagged: false,
 };
 
 /** How many dimensions are in use — the number on the button. */
@@ -42,7 +45,8 @@ export function activeFilterCount(filters: ShelfFilters): number {
     (filters.languages.length > 0 ? 1 : 0) +
     (filters.publishers.length > 0 ? 1 : 0) +
     (filters.status !== "any" ? 1 : 0) +
-    (filters.hasCover !== null ? 1 : 0)
+    (filters.hasCover !== null ? 1 : 0) +
+    (filters.untagged ? 1 : 0)
   );
 }
 
@@ -85,6 +89,8 @@ export function buildBookQuery(
     publishers: filters.publishers.length > 0 ? filters.publishers : undefined,
     status: filters.status === "any" ? undefined : filters.status,
     hasCover: filters.hasCover ?? undefined,
+    // Absent when off, so an untouched panel still sends the old request.
+    untagged: filters.untagged || undefined,
     trash: trash ? true : undefined,
   };
 }

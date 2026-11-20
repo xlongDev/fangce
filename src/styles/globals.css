@@ -598,8 +598,12 @@ button {
     inset 1px 0 0 var(--glass-side),
     inset -1px 0 0 var(--glass-side),
     var(--shadow-panel);
-  backdrop-filter: blur(var(--blur-md)) saturate(180%);
-  -webkit-backdrop-filter: blur(var(--blur-md)) saturate(180%);
+  /* Saturating what the blur samples is what makes the covers behind a glass
+     pane read as colour rather than as grey mud. A variable so a surface over
+     particularly bright artwork can push it without losing the blur — a
+     separate `backdrop-saturate-*` utility would replace this whole filter. */
+  backdrop-filter: blur(var(--blur-md)) saturate(var(--liquid-saturation, 180%));
+  -webkit-backdrop-filter: blur(var(--blur-md)) saturate(var(--liquid-saturation, 180%));
 }
 
 /* `!important` because the utility layer outranks a plain rule, and "reduce

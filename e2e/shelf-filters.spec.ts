@@ -50,3 +50,38 @@ test("the filter panel counts, toggles and clears", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(panel).toBeHidden();
 });
+
+/**
+ * The panel floats over the cover grid, so its material is a balance: dense
+ * enough that labels stay readable over bright artwork, but still liquid —
+ * blur and a lit rim, not an opaque slab. It used to be `glass-2` with a padded
+ * inner edge, which showed as a second rectangle around the chips.
+ */
+test("the filter panel is one liquid pane, legible over covers", async ({ page }) => {
+  await page.goto(SHELF);
+  await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
+  await page.getByRole("button", { name: "筛选" }).click();
+  const panel = page.getByRole("menu", { name: "筛选书库" });
+  await expect(panel).toBeVisible();
+
+  const style = await panel.evaluate((el) => {
+    const s = getComputedStyle(el);
+    // The panel's own padding was the second rectangle: a 6px bare ring
+    // between its rim and the chips. Padding now lives inside the scroll area.
+    return {
+      padding: parseFloat(s.paddingLeft),
+      bg: s.backgroundColor,
+      rim: s.borderTopColor,
+    };
+  });
+
+  expect(style.padding).toBe(0);
+  // The fill is surface-3 mixed at 84%: translucent enough for the covers to
+  // colour the glass, dense enough to keep the labels clear of them. WebKit
+  // serialises the colour as `color(srgb … / 0.76)`, Chromium as `rgba(…, 0.76)`,
+  // so compare the alpha rather than the string.
+  const alpha = parseFloat(style.bg.match(/([\d.]+)\)$/)?.[1] ?? "0");
+  expect(alpha).toBeGreaterThan(0.7);
+  expect(alpha).toBeLessThan(0.85);
+  expect(style.rim).not.toBe("rgba(0, 0, 0, 0)");
+});

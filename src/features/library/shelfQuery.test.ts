@@ -82,6 +82,7 @@ describe("shelf filters", () => {
     expect(query.publishers).toBeUndefined();
     expect(query.status).toBeUndefined();
     expect(query.hasCover).toBeUndefined();
+    expect(query.untagged).toBeUndefined();
   });
 
   it("forwards a narrowed panel", () => {
@@ -91,6 +92,7 @@ describe("shelf filters", () => {
       publishers: [],
       status: "reading",
       hasCover: false,
+      untagged: true,
     };
     expect(buildBookQuery("all", "recentlyAdded", "", null, filters)).toMatchObject({
       formats: ["epub"],
@@ -98,6 +100,7 @@ describe("shelf filters", () => {
       publishers: undefined,
       status: "reading",
       hasCover: false,
+      untagged: true,
     });
   });
 
@@ -109,6 +112,7 @@ describe("shelf filters", () => {
       2,
     );
     expect(activeFilterCount({ ...NO_FILTERS, hasCover: false })).toBe(1);
+    expect(activeFilterCount({ ...NO_FILTERS, untagged: true })).toBe(1);
   });
 
   it("toggles a value without mutating the list it was given", () => {

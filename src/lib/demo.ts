@@ -432,6 +432,7 @@ export const demoFacets: LibraryFacets = (() => {
       { value: "has", count: demoBooks.filter((book) => book.coverUrl).length },
       { value: "none", count: demoBooks.filter((book) => !book.coverUrl).length },
     ],
+    untaggedCount: demoBooks.filter((book) => book.tags.length === 0).length,
   };
 })();
 

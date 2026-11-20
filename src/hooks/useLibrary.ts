@@ -24,21 +24,10 @@ import type {
 /** Shelf contents for one filter/sort/search combination. */
 export function useBooks(query: BookQuery) {
   return useQuery<BookSummary[]>({
-    // Every narrowing field is part of the key, or switching a filter would
-    // show the previous shelf until the next invalidation.
-    queryKey: [
-      "books",
-      query.filter,
-      query.sort,
-      query.search ?? "",
-      query.tag ?? "",
-      query.formats ?? [],
-      query.languages ?? [],
-      query.publishers ?? [],
-      query.status ?? "any",
-      query.hasCover ?? null,
-      query.trash ?? false,
-    ],
+    // Keyed on the whole query, the same way facets are: enumerating fields
+    // here meant every new narrowing had to be remembered in two places, and
+    // forgetting one left the shelf showing the previous query's books.
+    queryKey: ["books", "list", query],
     queryFn: () => {
       // `?demo=1` is the sample shelf, and an explicit one: without it the web
       // build reads the books the reader imported here (IndexedDB), the same

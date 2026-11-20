@@ -109,11 +109,12 @@ export function ShelfFilterMenu({
     <GlassMenu
       label="筛选书库"
       widthClass="w-72"
-      // `glass-2` + `shadow-panel` rather than the default `glass`: this panel
-      // opens over the cover grid, and at elevation 1 the covers read straight
-      // through the labels. This is the same pair `GlassDialog` uses — a sheet
-      // that floats over content, not a card resting inside a pane.
-      panelClassName="glass-2 shadow-panel"
+      // This panel floats over the cover grid, not over another pane. The fill
+      // stays translucent so the covers behind it colour the glass — the whole
+      // point of the liquid material — while 84% still keeps the labels legible
+      // over bright artwork. Padding lives inside the scroll area so the rim
+      // does not read as a second rectangle.
+      panelClassName="glass-liquid shadow-panel p-0 [--liquid-density:84%] [--liquid-saturation:210%]"
       trigger={
         <GlassButton size="md">
           <Funnel size={15} weight={active > 0 ? "fill" : "regular"} />
@@ -126,7 +127,7 @@ export function ShelfFilterMenu({
         </GlassButton>
       }
     >
-      <div className="max-h-[min(70vh,540px)] overflow-y-auto">
+      <div className="max-h-[min(70vh,540px)] overflow-y-auto px-1.5 pt-1.5">
         <Section title="阅读状态">
           {(["unread", "reading", "finished"] as const).map((value) => (
             <OptionChip
@@ -176,6 +177,16 @@ export function ShelfFilterMenu({
           ))}
         </Section>
 
+        <Section title="标签">
+          <OptionChip
+            on={filters.untagged}
+            count={facets?.untaggedCount}
+            onClick={() => onChange({ ...filters, untagged: !filters.untagged })}
+          >
+            无标签
+          </OptionChip>
+        </Section>
+
         {(facets?.languages.length ?? 0) > 0 && (
           <Section title="语言">
             {facets?.languages.map((facet) => (
@@ -207,7 +218,7 @@ export function ShelfFilterMenu({
         )}
       </div>
 
-      <div className="mt-1 flex items-center justify-between border-t px-1 pt-1.5">
+      <div className="mt-1 flex items-center justify-between border-t px-2.5 py-1.5">
         <span className="text-text-3 text-[11px]">
           {facets === undefined ? "正在统计…" : active > 0 ? `已筛 ${active} 项` : "全部书籍"}
         </span>

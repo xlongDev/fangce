@@ -1759,6 +1759,12 @@ export type BookQuery_Deserialize = {
   /**  `Some(true)` = only books with a cover, `Some(false)` = only without. */
   hasCover?: boolean | null;
   /**
+   *  Only books that carry no label. A narrowing like `search`, not a facet
+   *  dimension: it rides along with every count the panel prints, so picking
+   *  无标签 leaves each chip showing what is actually left under it.
+   */
+  untagged?: boolean;
+  /**
    *  Reads the bin instead of the shelf.
    *
    *  One flag on the one query type, rather than a second `trash.list`
@@ -1813,6 +1819,12 @@ export type BookQuery_Serialize = {
   status: ReadingStatus;
   /**  `Some(true)` = only books with a cover, `Some(false)` = only without. */
   hasCover: boolean | null;
+  /**
+   *  Only books that carry no label. A narrowing like `search`, not a facet
+   *  dimension: it rides along with every count the panel prints, so picking
+   *  无标签 leaves each chip showing what is actually left under it.
+   */
+  untagged: boolean;
   /**
    *  Reads the bin instead of the shelf.
    *
@@ -2998,6 +3010,11 @@ export type LibraryFacets = {
   status: Facet[];
   /**  `has` / `none`. */
   covers: Facet[];
+  /**
+   *  How many books the panel would leave if 无标签 were picked. Counted with
+   *  that one narrowing cleared, like every other chip in the panel.
+   */
+  untaggedCount: number;
 };
 
 /**  Which shelf the user is looking at. */
