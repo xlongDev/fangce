@@ -23,6 +23,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The pre-commit hook checks staged files only, so it can't catch an
+      # unstaged/untracked file. CI keeps the whole-tree gate here.
+      - run: pnpm exec prettier --check .
       # CI has no proxy injecting NODE_OPTIONS, so plain verify works here.
       - run: pnpm verify
       # `pnpm verify` runs the suite with `--coverage` (O5), which leaves

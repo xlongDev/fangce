@@ -2,8 +2,8 @@
 # Fast gate only. The full matrix (build, clippy) runs in CI.
 set -e
 
-echo "› prettier"
-pnpm exec prettier --check .
+echo "› prettier (staged)"
+git diff --cached --name-only --diff-filter=ACM -z | xargs -0 -r pnpm exec prettier --check --ignore-unknown
 
 echo "› oxlint"
 pnpm exec oxlint .
