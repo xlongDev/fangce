@@ -18,12 +18,18 @@ describe("resetAllSettings", () => {
   });
 
   it("puts both persisted stores back to what the app shipped with", () => {
-    useSettings.setState({ theme: "dark", shelfLayout: "list", sidebarCollapsed: true });
+    useSettings.setState({
+      theme: "dark",
+      accent: { kind: "custom", hex: "#5566aa" },
+      shelfLayout: "list",
+      sidebarCollapsed: true,
+    });
     useReaderSettings.setState({ fontSize: 26, marginX: 160, surface: "sepia" });
 
     resetAllSettings();
 
     expect(useSettings.getState().theme).toBe("system");
+    expect(useSettings.getState().accent).toEqual(DEFAULT_SETTINGS.accent);
     expect(useSettings.getState().shelfLayout).toBe("grid");
     expect(useSettings.getState().sidebarCollapsed).toBe(false);
     expect(useReaderSettings.getState().fontSize).toBe(18);

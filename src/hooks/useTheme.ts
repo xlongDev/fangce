@@ -1,8 +1,15 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
 
+import { inkOn, rgbBytes } from "@/lib/color";
 import { isDesktopRuntime } from "@/lib/ipc";
-import { useSettings, type ThemeMode, type TransparencyMode } from "@/stores/settings";
+import {
+  accentHex,
+  useSettings,
+  type AccentChoice,
+  type ThemeMode,
+  type TransparencyMode,
+} from "@/stores/settings";
 
 const THEME_MEDIA = "(prefers-color-scheme: light)";
 
@@ -20,20 +27,46 @@ function applyTheme(mode: ThemeMode): void {
   document.documentElement.setAttribute("data-theme", resolveTheme(mode));
 }
 
+/**
+ * One inherited source for every accent token. Written on <html> rather than a
+ * data attribute on each theme pane: the reader wraps its surface in its own
+ * `data-theme`, so a value written only for the outer theme would be redeclared
+ * and lost the moment a book opened. The default preset removes the override,
+ * leaving the light/dark fallbacks in globals.css in charge.
+ */
+function applyAccent(choice: AccentChoice, mode: ThemeMode): void {
+  const root = document.documentElement;
+  if (choice.kind === "preset" && choice.id === "amber") {
+    root.style.removeProperty("--accent-rgb-custom");
+    root.style.removeProperty("--on-accent-custom");
+    return;
+  }
+  const hex = accentHex(choice, resolveTheme(mode));
+  const bytes = rgbBytes(hex);
+  if (!bytes) return;
+  root.style.setProperty("--accent-rgb-custom", bytes.join(" "));
+  root.style.setProperty("--on-accent-custom", inkOn(hex));
+}
+
 /** Sync the settings store to the document, including live system changes. */
 export function useTheme(): void {
   const theme = useSettings((state) => state.theme);
+  const accent = useSettings((state) => state.accent);
   const transparency = useSettings((state) => state.transparency);
 
   useEffect(() => {
     applyTheme(theme);
+    applyAccent(accent, theme);
     const onSystem = () => {
-      if (useSettings.getState().theme === "system") applyTheme("system");
+      if (useSettings.getState().theme === "system") {
+        applyTheme("system");
+        applyAccent(useSettings.getState().accent, "system");
+      }
     };
     const mql = window.matchMedia(THEME_MEDIA);
     mql.addEventListener("change", onSystem);
     return () => mql.removeEventListener("change", onSystem);
-  }, [theme]);
+  }, [theme, accent]);
 
   useEffect(() => {
     applyTransparency(transparency);

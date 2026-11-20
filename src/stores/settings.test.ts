@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { useCommandStore } from "@/stores/commands";
-import { DEFAULT_SETTINGS, useSettings, withDefaults } from "@/stores/settings";
+import { accentHex, DEFAULT_SETTINGS, useSettings, withDefaults } from "@/stores/settings";
 import type { Command } from "@/lib/commands";
 
 const alpha: Command = { id: "a", title: "A", group: "g", run: () => {} };
@@ -37,6 +37,7 @@ describe("useSettings", () => {
     useSettings.setState({
       theme: "system",
       transparency: "full",
+      accent: DEFAULT_SETTINGS.accent,
       sidebarCollapsed: false,
     });
   });
@@ -48,6 +49,20 @@ describe("useSettings", () => {
   it("updates the theme", () => {
     useSettings.getState().setTheme("dark");
     expect(useSettings.getState().theme).toBe("dark");
+  });
+
+  it("keeps one accent for both themes, with a step for each preset", () => {
+    expect(useSettings.getState().accent).toEqual(DEFAULT_SETTINGS.accent);
+    expect(accentHex({ kind: "preset", id: "amber" }, "dark")).toBe("#e9a13b");
+    expect(accentHex({ kind: "preset", id: "amber" }, "light")).toBe("#96591a");
+
+    useSettings.getState().setAccent({ kind: "custom", hex: "56A" });
+    expect(useSettings.getState().accent).toEqual({ kind: "custom", hex: "#5566aa" });
+    expect(accentHex(useSettings.getState().accent, "light")).toBe("#5566aa");
+
+    // A bad persisted or typed value is a reset, never a broken CSS token.
+    useSettings.getState().setAccent({ kind: "custom", hex: "nope" });
+    expect(useSettings.getState().accent).toEqual(DEFAULT_SETTINGS.accent);
   });
 
   it("toggles the sidebar", () => {

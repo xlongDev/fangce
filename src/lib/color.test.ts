@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { hexToHsv, hsvToHex } from "./color";
+import { hexToHsv, hsvToHex, inkOn, normalizeHex } from "./color";
 
 describe("the pickers' colour space", () => {
   it("loses nothing on the way there and back", () => {
@@ -59,5 +59,18 @@ describe("the pickers' colour space", () => {
     // style, which fails silently and looks like a missing control.
     expect(hexToHsv("nonsense")).toEqual({ h: 0, s: 0, v: 0 });
     expect(hsvToHex(hexToHsv("nonsense").h, 0, 0)).toBe("#000000");
+  });
+});
+
+describe("the accent's own ink", () => {
+  it("normalises a typed hex before it reaches the store", () => {
+    expect(normalizeHex("56A")).toBe("#5566aa");
+    expect(normalizeHex("nope")).toBeNull();
+  });
+
+  it("picks the ink by contrast, not by theme", () => {
+    expect(inkOn("#e9a13b")).toBe("#17120a");
+    expect(inkOn("#96591a")).toBe("#fff8ec");
+    expect(inkOn("nope")).toBe("#17120a");
   });
 });

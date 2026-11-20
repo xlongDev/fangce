@@ -4,11 +4,47 @@ import { persist } from "zustand/middleware";
 import type { ShelfGroup } from "@/features/library/group";
 import type { LibraryFilter } from "@/features/library/shelfQuery";
 import type { KeyOverrides, Shortcut } from "@/lib/commands";
+import { normalizeHex } from "@/lib/color";
 import type { LibrarySort } from "@/types/ipc";
 
 export type ThemeMode = "system" | "light" | "dark";
 export type TransparencyMode = "full" | "reduced";
 export type ShelfLayout = "grid" | "list";
+
+/** One hue, with a lighter step for night and a darker one for paper. */
+export const ACCENT_PRESETS = [
+  { id: "amber", label: "琥珀", dark: "#e9a13b", light: "#96591a" },
+  { id: "jade", label: "青玉", dark: "#5cc28a", light: "#267a55" },
+  { id: "lake", label: "湖蓝", dark: "#79aee0", light: "#2f648f" },
+  { id: "coral", label: "朱砂", dark: "#ec856f", light: "#a64234" },
+  { id: "iris", label: "鸢尾", dark: "#b19be8", light: "#6652a3" },
+] as const;
+
+export type AccentPresetId = (typeof ACCENT_PRESETS)[number]["id"];
+export type AccentChoice = { kind: "preset"; id: AccentPresetId } | { kind: "custom"; hex: string };
+
+/** The theme's own step for a preset; a custom hex is used in both. */
+export function accentHex(choice: AccentChoice, theme: "light" | "dark"): string {
+  if (choice.kind === "custom") return normalizeHex(choice.hex) ?? ACCENT_PRESETS[0].dark;
+  const preset = ACCENT_PRESETS.find((item) => item.id === choice.id) ?? ACCENT_PRESETS[0];
+  return theme === "light" ? preset.light : preset.dark;
+}
+
+/** Persisted payloads are untrusted: a bad id or hex falls back to the default. */
+function normalizeAccent(value: unknown): AccentChoice | null {
+  if (!value || typeof value !== "object") return null;
+  const choice = value as Partial<AccentChoice>;
+  if (choice.kind === "custom") {
+    const hex = typeof choice.hex === "string" ? normalizeHex(choice.hex) : null;
+    return hex ? { kind: "custom", hex } : null;
+  }
+  if (choice.kind === "preset") {
+    return ACCENT_PRESETS.some((preset) => preset.id === choice.id)
+      ? { kind: "preset", id: choice.id as AccentPresetId }
+      : null;
+  }
+  return null;
+}
 
 /**
  * How one shelf is arranged — the search, order, direction, grouping and label
@@ -60,6 +96,8 @@ export interface LookupSources {
 interface SettingsState {
   theme: ThemeMode;
   transparency: TransparencyMode;
+  /** The accent of the app's chrome, not the reading surface's own theme. */
+  accent: AccentChoice;
   sidebarCollapsed: boolean;
   sidebarHidden: boolean;
   /** Per-reader shelf density; `grid` is the cover-on-top tiles the app
@@ -91,6 +129,7 @@ interface SettingsState {
   downloadedFonts: string[];
   setTheme: (mode: ThemeMode) => void;
   setTransparency: (mode: TransparencyMode) => void;
+  setAccent: (choice: AccentChoice) => void;
   toggleSidebar: () => void;
   setSidebarHidden: (hidden: boolean) => void;
   setShelfLayout: (layout: ShelfLayout) => void;
@@ -125,6 +164,7 @@ const shelfView = (sort: LibrarySort): ShelfView => ({
 export const DEFAULT_SETTINGS = {
   theme: "system",
   transparency: "full",
+  accent: { kind: "preset", id: "amber" } as AccentChoice,
   sidebarCollapsed: false,
   sidebarHidden: false,
   shelfLayout: "grid",
@@ -180,6 +220,7 @@ export const useSettings = create<SettingsState>()(
       ...DEFAULT_SETTINGS,
       setTheme: (theme) => set({ theme }),
       setTransparency: (transparency) => set({ transparency }),
+      setAccent: (choice) => set({ accent: normalizeAccent(choice) ?? DEFAULT_SETTINGS.accent }),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarHidden: (sidebarHidden) => set({ sidebarHidden }),
       setShelfLayout: (shelfLayout) => set({ shelfLayout }),
@@ -226,6 +267,7 @@ export const useSettings = create<SettingsState>()(
         return {
           ...current,
           ...stored,
+          accent: normalizeAccent(stored.accent) ?? current.accent,
           // One level deeper for the three records: these are the places a new
           // key gets added, and the shallow spread above would leave it missing.
           shelfViews: withDefaults(stored.shelfViews, current.shelfViews),

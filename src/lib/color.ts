@@ -21,14 +21,54 @@ const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 
 /** The six channels of `#rgb` or `#rrggbb`, or `null` if it is neither. */
 function channels(hex: string): [number, number, number] | null {
+  const bytes = rgbBytes(hex);
+  return bytes ? (bytes.map((byte) => byte / 255) as [number, number, number]) : null;
+}
+
+/** The same hex in 0–255 channels, for CSS variables and contrast maths. */
+export function rgbBytes(hex: string): [number, number, number] | null {
   const value = hex.trim().replace(/^#/, "").toLowerCase();
   if (!/^([0-9a-f]{3}|[0-9a-f]{6})$/.test(value)) return null;
   const full = value.length === 3 ? [...value].map((digit) => digit + digit).join("") : value;
-  return [0, 2, 4].map((at) => Number.parseInt(full.slice(at, at + 2), 16) / 255) as [
+  return [0, 2, 4].map((at) => Number.parseInt(full.slice(at, at + 2), 16)) as [
     number,
     number,
     number,
   ];
+}
+
+/** Normalises a typed `#abc` / `aabbcc` to `#aabbcc`, or `null` if invalid. */
+export function normalizeHex(hex: string): string | null {
+  const bytes = rgbBytes(hex);
+  if (!bytes) return null;
+  return `#${bytes.map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+const relativeLuminance = (bytes: [number, number, number]): number => {
+  const [r, g, b] = bytes.map((byte) => {
+    const channel = byte / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+
+const DARK_INK: [number, number, number] = [23, 18, 10];
+const LIGHT_INK: [number, number, number] = [255, 248, 236];
+
+/**
+ * The readable ink on an accent fill. A custom colour can be any lightness;
+ * picking the ink by WCAG contrast instead of by theme keeps a pale accent from
+ * inheriting pale-on-pale text.
+ */
+export function inkOn(hex: string): string {
+  const bytes = rgbBytes(hex);
+  if (!bytes) return "#17120a";
+  const luminance = relativeLuminance(bytes);
+  const dark = relativeLuminance(DARK_INK);
+  const light = relativeLuminance(LIGHT_INK);
+  const contrast = (other: number) =>
+    (Math.max(luminance, other) + 0.05) / (Math.min(luminance, other) + 0.05);
+  return contrast(dark) >= contrast(light) ? "#17120a" : "#fff8ec";
 }
 
 export function hexToHsv(hex: string): Hsv {

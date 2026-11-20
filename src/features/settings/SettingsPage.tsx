@@ -26,7 +26,13 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
 import { GlassInput, GlassSwitch } from "@/components/glass/input";
 import { BrandMark } from "@/components/brand/Mark";
-import { useSettings, type ThemeMode } from "@/stores/settings";
+import {
+  ACCENT_PRESETS,
+  accentHex,
+  useSettings,
+  type AccentChoice,
+  type ThemeMode,
+} from "@/stores/settings";
 import { resetAllSettings } from "@/stores/reset";
 import { showToast } from "@/stores/toasts";
 import { useSystemInfo } from "@/hooks/useSystemInfo";
@@ -42,6 +48,7 @@ import { useOperations, useUndoOperation } from "@/hooks/useLibrary";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { acceptOf, pickFiles as pickBrowserFiles } from "@/lib/pickFile";
 import { formatFileSize } from "@/features/library/format";
+import { ColorPicker } from "@/features/reader/ColorPicker";
 import {
   Actions,
   Feedback,
@@ -57,7 +64,7 @@ import { KeymapSection } from "@/features/settings/KeymapSection";
 import { SecretsNotice } from "@/features/settings/SecretsNotice";
 import type { Operation, SyncChange, SyncConfig, SyncReport, SyncTally } from "@/types/ipc";
 import { cn } from "@/lib/cn";
-import { EASE_OUT, SPRING } from "@/lib/motion";
+import { DURATION, EASE_LAND, EASE_OUT, SPRING } from "@/lib/motion";
 
 /**
  * Whether the pane has nowhere left to scroll.
@@ -97,10 +104,212 @@ const THEMES: readonly { value: ThemeMode; label: string; icon: typeof Sun }[] =
   { value: "dark", label: "深色", icon: Moon },
 ];
 
+/** One ripple, keyed by a counter so a second click restarts it mid-flight. */
+interface AccentPulse {
+  key: string;
+  seq: number;
+}
+
+/**
+ * A preset bead, the rainbow one included.
+ *
+ * The selection ring is one shared layout element rather than six independent
+ * box-shadows: a change of accent then reads as the ring travelling to the new
+ * colour, not as two unrelated states swapping. The ripple is the other half —
+ * it happens at the bead that was pressed, which is where the eye already is.
+ */
+function AccentBead({
+  label,
+  id,
+  color,
+  background,
+  active,
+  ringId,
+  pulse,
+  reduce,
+  onSelect,
+  onPulseDone,
+}: {
+  label: string;
+  id: string;
+  color: string;
+  background?: string;
+  active: boolean;
+  ringId: string;
+  pulse: AccentPulse | null;
+  reduce: boolean;
+  onSelect: () => void;
+  onPulseDone: (seq: number) => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={active}
+      title={label}
+      data-accent-id={id}
+      onClick={onSelect}
+      className={cn(
+        "focus-visible:focus-ring relative flex h-7 w-7 items-center justify-center rounded-full transition-transform",
+        active ? "scale-105" : "hover:scale-105",
+      )}
+    >
+      {active && (
+        <motion.span
+          layoutId={ringId}
+          aria-hidden
+          data-accent-ring
+          // The ring hugs the 16px dot, not the 28px hit area: `inset-1`
+          // leaves a 2px gap, so the shadow reads as a ring rather than a halo.
+          className="pointer-events-none absolute inset-1 rounded-full"
+          style={{ boxShadow: `0 0 0 1.5px var(--surface-3), 0 0 0 2.5px ${color}` }}
+          transition={reduce ? { duration: 0 } : SPRING.layout}
+        />
+      )}
+      <span
+        aria-hidden
+        className="block h-4 w-4 rounded-full"
+        // Never hand React an undefined `background`: writing the shorthand
+        // clears the `background-color` set beside it, leaving an empty bead.
+        style={background ? { background } : { backgroundColor: color }}
+      />
+      {pulse && (
+        <motion.span
+          key={pulse.seq}
+          aria-hidden
+          data-accent-pulse
+          className="pointer-events-none absolute inset-0 rounded-full"
+          style={{ boxShadow: `0 0 0 1.5px ${color}` }}
+          initial={{ scale: 0.8, opacity: 0.6 }}
+          animate={{ scale: 1.9, opacity: 0 }}
+          transition={{ duration: 0.45, ease: EASE_LAND }}
+          onAnimationComplete={() => onPulseDone(pulse.seq)}
+        />
+      )}
+    </button>
+  );
+}
+
+/**
+ * Presets first, then one rainbow bead for a colour of the reader's own. The
+ * picker stays in the row rather than opening a native dialog, the same reason
+ * the reader's ruler colour uses `ColorPicker`.
+ */
+function AccentRow({
+  accent,
+  onChange,
+}: {
+  accent: AccentChoice;
+  onChange: (choice: AccentChoice) => void;
+}) {
+  const reduce = useReducedMotion();
+  const ringId = useId();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pulse, setPulse] = useState<AccentPulse | null>(null);
+  const seq = useRef(0);
+  const custom = accent.kind === "custom" ? accent.hex : null;
+  const selected = accent.kind === "preset" ? accent.id : null;
+
+  /** Feedback alone — opening the picker must not adopt a colour yet. */
+  const ripple = (key: string) => {
+    if (reduce) return;
+    seq.current += 1;
+    setPulse({ key, seq: seq.current });
+  };
+
+  /** A change of colour, with the ripple at the bead that caused it. */
+  const choose = (key: string, choice: AccentChoice) => {
+    onChange(choice);
+    setPickerOpen(false);
+    ripple(key);
+  };
+
+  const pulseDone = (done: number) =>
+    setPulse((current) => (current?.seq === done ? null : current));
+
+  return (
+    <Row
+      label="强调色"
+      hint="按钮、焦点与筛选标记的颜色。预设会按明暗各取一档；自定义色两档通用，按钮文字按亮度自动选。"
+    >
+      <div className="w-full">
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+          {ACCENT_PRESETS.map((preset) => (
+            <AccentBead
+              key={preset.id}
+              label={preset.label}
+              id={preset.id}
+              color={preset.dark}
+              active={selected === preset.id}
+              ringId={`accent-ring-${ringId}`}
+              pulse={pulse?.key === preset.id ? pulse : null}
+              reduce={!!reduce}
+              onSelect={() => choose(preset.id, { kind: "preset", id: preset.id })}
+              onPulseDone={pulseDone}
+            />
+          ))}
+          <AccentBead
+            label="自定义强调色"
+            id="custom"
+            color={custom ?? "#e9a13b"}
+            background={
+              custom
+                ? undefined
+                : "conic-gradient(from 40deg, #f76f6f, #ffd12e, #7cd92c, #56aee2, #b08fe8, #f76f6f)"
+            }
+            active={custom !== null}
+            ringId={`accent-ring-${ringId}`}
+            pulse={pulse?.key === "custom" ? pulse : null}
+            reduce={!!reduce}
+            onSelect={() => {
+              setPickerOpen((wasOpen) => !wasOpen);
+              if (!pickerOpen) ripple("custom");
+            }}
+            onPulseDone={pulseDone}
+          />
+        </div>
+        <AnimatePresence initial={false}>
+          {pickerOpen && (
+            <motion.div
+              key="accent-picker"
+              data-accent-picker
+              initial={{ height: 0 }}
+              animate={{ height: "auto" }}
+              exit={{ height: 0 }}
+              transition={{ duration: reduce ? 0 : DURATION.base, ease: EASE_OUT }}
+              className="overflow-hidden"
+            >
+              {/* The row only makes room; the contents drop into that room from
+                  the bead above. Padding stays on the measured child so a
+                  collapsed `height: 0` cannot leak it. */}
+              <motion.div
+                className="origin-top pt-3"
+                initial={reduce ? { opacity: 0 } : { y: -10, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={reduce ? { opacity: 0 } : { y: -8, opacity: 0 }}
+                // Same curve as the height above: one easing for the whole
+                // reveal, and no spring overshoot past the resting position.
+                transition={{ duration: reduce ? 0 : DURATION.base, ease: EASE_OUT }}
+              >
+                <ColorPicker
+                  value={custom ?? accentHex(accent, "dark")}
+                  onChange={(hex) => onChange({ kind: "custom", hex })}
+                />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </Row>
+  );
+}
+
 export function SettingsPage() {
   const theme = useSettings((s) => s.theme);
+  const accent = useSettings((s) => s.accent);
   const transparency = useSettings((s) => s.transparency);
   const setTheme = useSettings((s) => s.setTheme);
+  const setAccent = useSettings((s) => s.setAccent);
   const setTransparency = useSettings((s) => s.setTransparency);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -403,6 +612,8 @@ export function SettingsPage() {
             <AppearanceSection
               theme={theme}
               onThemeChange={setTheme}
+              accent={accent}
+              onAccentChange={setAccent}
               reducedTransparency={transparency === "reduced"}
               onTransparencyChange={(reduced) => setTransparency(reduced ? "reduced" : "full")}
             />
@@ -426,6 +637,8 @@ export function SettingsPage() {
 interface AppearanceSectionProps {
   theme: ThemeMode;
   onThemeChange: (mode: ThemeMode) => void;
+  accent: AccentChoice;
+  onAccentChange: (choice: AccentChoice) => void;
   reducedTransparency: boolean;
   onTransparencyChange: (reduced: boolean) => void;
 }
@@ -433,6 +646,8 @@ interface AppearanceSectionProps {
 function AppearanceSection({
   theme,
   onThemeChange,
+  accent,
+  onAccentChange,
   reducedTransparency,
   onTransparencyChange,
 }: AppearanceSectionProps) {
@@ -477,6 +692,8 @@ function AppearanceSection({
           })}
         </div>
       </Row>
+
+      <AccentRow accent={accent} onChange={onAccentChange} />
 
       <Row
         label="减少透明度"
