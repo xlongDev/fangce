@@ -15,6 +15,7 @@ import {
   Command as CommandIcon,
   FilePlus,
   ImageSquare,
+  PuzzlePiece,
 } from "@phosphor-icons/react";
 
 import type { Command, Shortcut } from "@/lib/commands";
@@ -229,6 +230,7 @@ function navigationCommands(): Command[] {
     navCommand("/recent", "最近", "recent", <ClockCounterClockwise size={16} />),
     navCommand("/favorites", "收藏", "favorites", <Star size={16} />),
     navCommand("/tags", "标签", "tags", <Tag size={16} />),
+    navCommand("/plugins", "插件", "plugins", <PuzzlePiece size={16} />),
   ];
 }
 

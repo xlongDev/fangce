@@ -14,6 +14,7 @@ import {
   Monitor,
   Moon,
   Notebook,
+  PuzzlePiece,
   Sun,
   Trash,
 } from "@phosphor-icons/react";
@@ -40,6 +41,7 @@ const ITEMS: NavItem[] = [
   { to: "/notes", label: "笔记", icon: Notebook },
   { to: "/stats", label: "统计", icon: ChartLine },
   { to: "/search", label: "搜索", icon: MagnifyingGlass },
+  { to: "/plugins", label: "插件", icon: PuzzlePiece },
   // Last, and after 搜索 rather than beside 书库: the bin is a place you go on
   // purpose, not a shelf you browse. Nothing in this list is hidden when it is
   // empty — a 回收站 that appears only after a delete would be a menu that

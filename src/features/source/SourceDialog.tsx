@@ -1,72 +1,26 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { motion } from "motion/react";
-import {
-  ArrowUUpLeft,
-  CircleNotch,
-  DownloadSimple,
-  Globe,
-  MagnifyingGlass,
-  Plus,
-  Trash,
-} from "@phosphor-icons/react";
+import { CircleNotch, DownloadSimple, Globe, MagnifyingGlass, Plus } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
-import { Reveal } from "@/components/motion/Reveal";
 import { SourcePicker, sourcePickerOpen } from "@/features/source/SourcePicker";
 import { staggerDelay, useMotion } from "@/lib/motion";
-import {
-  useDeleteSource,
-  useSaveSource,
-  useSourceDownload,
-  useSourceSearch,
-  useSources,
-} from "@/hooks/useSource";
-import type { SourceRules } from "@/types/ipc";
+import { useSourceDownload, useSourceSearch, useSources } from "@/hooks/useSource";
 
-const BLANK_SOURCE: SourceRules = {
-  name: "新书源",
-  baseUrl: "https://",
-  // Hosts beyond `baseUrl` this source may call. Empty means "the base host
-  // only" — the rule data cannot send the reader anywhere else.
-  permissions: { hosts: [] },
-  search: {
-    url: "/search?kw={{keyword}}",
-    list: "$.data.list[*]",
-    title: "$.name",
-    author: "$.author",
-    intro: "$.intro",
-    cover: "$.cover",
-    bookUrl: "$.book_id",
-  },
-  book: { title: "$.title", author: "$.author", intro: "$.intro", cover: "" },
-  chapters: { list: "$.data.chapters[*]", title: "$.name", url: "$.url" },
-  content: { paragraphs: "$.data.content" },
-};
-
-interface Editor {
-  id: string | null;
-  text: string;
-}
-
-/** `https://example.com/api` → `example.com`; a half-typed base URL is shown
- *  as typed rather than swallowing the row. */
-function hostOf(baseUrl: string | undefined): string {
-  if (!baseUrl) return "未填地址";
-  try {
-    return new URL(baseUrl).host;
-  } catch {
-    return baseUrl;
-  }
-}
-
+/** Search stays in the dialog because it is an action on the shelf. Editing and
+ *  batch management moved to `/plugins`; both entry points land there. */
 export function SourceDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [view, setView] = useState<"search" | "manage">("search");
-  const [editing, setEditing] = useState<Editor | null>(null);
-
+  const navigate = useNavigate();
   if (!open) return null;
+
+  const manage = () => {
+    onClose();
+    navigate("/plugins");
+  };
 
   return (
     <GlassDialog
@@ -74,16 +28,8 @@ export function SourceDialog({ open, onClose }: { open: boolean; onClose: () => 
       onOpenChange={(next) => {
         if (!next) onClose();
       }}
-      title={
-        <span className="flex items-center gap-2">
-          {view === "manage" ? "管理书源" : "在线找书"}
-        </span>
-      }
-      description={
-        view === "manage"
-          ? "书源是一份 JSON 规则，描述如何调用一个网站的搜索、详情、章节和正文接口。"
-          : "选一个书源，用书名或作者搜索，下载后自动进书架。"
-      }
+      title="在线找书"
+      description="选一个书源，用书名或作者搜索，下载后自动进书架。"
       widthClass="w-[min(94vw,560px)]"
       // An open source picker takes Escape for itself: the key folds the list
       // away, and the dialog stays. See `SourcePicker.sourcePickerOpen`.
@@ -91,24 +37,7 @@ export function SourceDialog({ open, onClose }: { open: boolean; onClose: () => 
         if (sourcePickerOpen()) event.preventDefault();
       }}
     >
-      {/* Keyed so the pane remounts and rises in: search, the source list and
-          the JSON editor differ enough that cutting between them reads as a
-          jump rather than a step sideways. */}
-      <Reveal key={view === "search" ? "search" : editing ? "editor" : "manage"}>
-        {view === "search" ? (
-          <SearchView onManage={() => setView("manage")} />
-        ) : editing ? (
-          <SourceEditor editor={editing} onBack={() => setEditing(null)} />
-        ) : (
-          <ManageView
-            onNew={() => setEditing({ id: null, text: JSON.stringify(BLANK_SOURCE, null, 2) })}
-            onEdit={(entry) =>
-              setEditing({ id: entry.id, text: JSON.stringify(entry.def, null, 2) })
-            }
-            onBack={() => setView("search")}
-          />
-        )}
-      </Reveal>
+      <SearchView onManage={manage} />
     </GlassDialog>
   );
 }
@@ -330,118 +259,6 @@ function SearchSkeleton() {
           <div className="skeleton h-8 w-16 rounded-md" />
         </div>
       ))}
-    </div>
-  );
-}
-
-function ManageView({
-  onNew,
-  onEdit,
-  onBack,
-}: {
-  onNew: () => void;
-  onEdit: (entry: { id: string; name: string; def: SourceRules }) => void;
-  onBack: () => void;
-}) {
-  const sources = useSources();
-  const deleteSource = useDeleteSource();
-
-  const list = sources.data ?? [];
-
-  return (
-    <div className="space-y-3">
-      {list.length === 0 && (
-        <p className="text-text-3 py-4 text-center text-[12.5px]">
-          一个书源都没有。新建一个，搜索才有东西可搜。
-        </p>
-      )}
-      <ul className="max-h-60 space-y-2 overflow-y-auto pr-1">
-        {list.map((entry) => (
-          <li
-            key={entry.id}
-            className="glass flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5"
-          >
-            <button
-              type="button"
-              className="press focus-visible:focus-ring text-text-1 min-w-0 flex-1 text-left"
-              onClick={() => onEdit(entry)}
-            >
-              <span className="block truncate text-[13.5px] font-medium">{entry.name}</span>
-              {/* The host a source talks to is the one thing about it worth
-                  knowing before running it; the rest is rules. */}
-              <span className="text-text-3 block truncate text-[11.5px]">
-                {hostOf(entry.def.baseUrl)}
-                {entry.def.permissions?.hosts?.length
-                  ? `，另可访问 ${entry.def.permissions.hosts.join("、")}`
-                  : ""}
-              </span>
-            </button>
-            <GlassButton
-              size="sm"
-              disabled={deleteSource.isPending}
-              onClick={() => deleteSource.mutate(entry.id)}
-            >
-              <Trash size={14} />
-            </GlassButton>
-          </li>
-        ))}
-      </ul>
-
-      <div className="flex items-center justify-between gap-2">
-        <GlassButton size="md" onClick={onBack}>
-          <ArrowUUpLeft size={14} /> 返回
-        </GlassButton>
-        <GlassButton variant="primary" size="md" onClick={onNew}>
-          <Plus size={14} /> 新建书源
-        </GlassButton>
-      </div>
-    </div>
-  );
-}
-
-function SourceEditor({ editor, onBack }: { editor: Editor; onBack: () => void }) {
-  const save = useSaveSource();
-  const [text, setText] = useState(editor.text);
-  const [error, setError] = useState<string | null>(null);
-
-  const runSave = () => {
-    let def: SourceRules;
-    try {
-      def = JSON.parse(text) as SourceRules;
-    } catch (err) {
-      setError(`JSON 解析失败：${err instanceof Error ? err.message : String(err)}`);
-      return;
-    }
-    save.mutate(
-      { id: editor.id, def },
-      { onSuccess: onBack, onError: (err) => setError(String(err)) },
-    );
-  };
-
-  return (
-    <div className="space-y-3">
-      <textarea
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        spellCheck={false}
-        aria-label="书源规则"
-        className="glass text-text-1 focus-visible:border-accent focus-visible:bg-surface-2 h-72 w-full rounded-xl border p-3 font-mono text-[12px] leading-relaxed outline-none"
-      />
-      {/* Backend refuses anything outside this list, redirects included, so
-          saying it here is what keeps the error from being a surprise. */}
-      <p className="text-text-3 text-[11.5px] leading-relaxed">
-        书源只能访问 baseUrl 的主机。接口返回的绝对地址若在别的主机（CDN、第二个域名），把它加进
-        permissions.hosts。
-      </p>
-      {error && <p className="text-text-2 text-[12.5px] break-all">{error}</p>}
-      <div className="flex items-center justify-end gap-2">
-        <GlassButton size="md" onClick={onBack}>
-          取消
-        </GlassButton>
-        <GlassButton variant="primary" size="md" disabled={save.isPending} onClick={runSave}>
-          保存
-        </GlassButton>
-      </div>
     </div>
   );
 }

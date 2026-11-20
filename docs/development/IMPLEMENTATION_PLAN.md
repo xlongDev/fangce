@@ -350,6 +350,24 @@ Phase 4/5/6 一直全空，这一刀开在提示词 Phase 5 的第 1 步。边�
 
 **证据**：Rust **793 passed**（784 → 793，新增 9：表头 / BOM、列顺序、空值不编造、CSV 转义、公式注入、进度钳制、空库、真实库一行且排除回收站、未知扩展名拒绝）/ clippy `-D warnings` / fmt；`CatalogExportRow.test.tsx` **8 passed**（桌面显示、浏览器不渲染、路径与过滤、0 本、取消、面板拒绝、写失败、pending 禁用）；prettier / `tsc --noEmit` / oxlint（464 文件 0 warning）/ `vite build --no-emptyOutDir`；全量 vitest 与 e2e 见 §4 的校验记录。
 
+### Phase 4.2–4.4 — 脚本层 / Provider trait / 插件页 ✅（11-20）
+
+用户明确要求启动三条此前按「等真实需求」推迟的能力，按最小可用切片交付：
+
+| 切片                | 位置                                                                                      | 内容                                                                                                                                                                                                                                                                                   |
+| ------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4.2 脚本层          | `library/io/script.rs`（新）、`source.rs`、`fetch` 四个阶段钩子                           | `rquickjs`（静态链接，4 个新 crate / Cargo.lock +41 行）；`SourceDef.script: Option<SourceScript>` 带 `#[serde(default)]`，旧书源照常加载。每轮全新 Runtime、16MB 内存上限、2s 中断、只暴露 `log()`，无网络/文件 API；非 JSON 响应以原文交给脚本。脚本返回 JSON 后仍走原来的 JSON 规则 |
+| 4.3 元数据 Provider | `library/metadata.rs`、`commands/metadata.rs`                                             | `enum Provider` + `CHAIN` → `MetadataProvider` trait + `Douban`/`Neodb` 实现 + `PROVIDERS` 注册表；泛型化的 async 用 boxed future（无 `async_trait` 依赖）。`CatalogueGate`/`Attempts` 按 `key()` 字符串分桶，DB 的 `rating_source` 与 TS 的来源字符串不变                             |
+| 4.4 独立插件页      | `features/plugins/PluginsPage.tsx`（新）、`router.tsx`、`NavList.tsx`、`SourceDialog.tsx` | 新 `/plugins` 路由 + 侧栏/命令面板入口；分类（`SourceDef.category`，可选）、按名称/主机/分类搜索、多选批量删除（确认弹窗）、JSON 编辑器带分类输入。`SourceDialog` 只保留「在线找书」，管理与新建按钮导航到插件页                                                                       |
+
+**安全边界**：脚本发起的二次请求仍是零——沙箱里没有 `fetch`，所有响应都先过 `fetch()` 里唯一的 `Hosts::check`。脚本代码 64KB 上限在保存时校验，输出 4MB 上限在执行后校验。
+
+**实测开销**：`script apply` 309µs/次（debug 构建，100 次平均，`runtime_startup_cost` 忽略测试）；`libquickjs.a` 2.4MB（debug），静态链进产物、无额外 dylib，因此没有新的签名对象。
+
+**明确未做的**：第 3 层（独立进程/WASM）隔离——第 2 层被证明不够时再做；脚本调试器（目前靠 `log()` + 异常里的阶段名与行号）；用户自定义元数据来源的持久化注册表（trait 已就位，注册仍是编译期常量）。
+
+**证据**：Rust 884 passed / 16 ignored（`script` +5、trait 可插拔 +1；`a_round_trip_restores_every_file_and_the_database` 全量里偶发一次，单跑与全量复跑均过，按已知 flake 处理）/ clippy `-D warnings` / fmt；prettier / `tsc --noEmit` / oxlint（497 文件 0 warning）/ `vite build --no-emptyOutDir`；全量 vitest 140 文件 1374 passed（插件页 +4）；e2e `smoke`（含新路由）+ `source-search-button` + `page-swap` + `palette` 双引擎 26 passed。改动留工作区，未提交。
+
 ### Phase 4.1 — 书源即插件：清单 + 主机权限 ✅（11-14）
 
 Phase 4 的第一步只做「权限」这一件真事。现有 JSON 书源本来就是插件——定义由别人写、用读者的网络跑——所以先给它一个能收住的边界，而不是先造运行时。
@@ -918,7 +936,7 @@ NeoDB 是 dalibre 用的那个联邦书目库，中文覆盖真实存在，而�
 
 ### Phase 4 — 插件
 
-**4.1 权限 ✅**（11-14，见 §0）。剩下的按需：脚本层运行时 / `MetadataProvider` trait / 独立插件页 —— 都等真实需求，详见映射文档 §2。
+**4.1 权限 ✅**（11-14，见 §0）。**4.2 脚本层 / 4.3 Provider trait / 4.4 独立插件页 ✅**（11-20，用户明确要求启动，见 §0）。
 
 ### Phase 5 — Calibre（成本最高）
 
@@ -957,7 +975,7 @@ NeoDB 是 dalibre 用的那个联邦书目库，中文覆盖真实存在，而�
 🔴 本节原来写的是 1.2 回收站与 3.1+3.2 MCP 只读，**两者都已完成**，留着会让接手的人走回头路。11-13 过了六项（Phase 3 出口验收见 `docs/mcp/MCP_SETUP.md`、5.1 扫描、5.2 预览、5.3 导入、5.3b 大库、5.3c 格式偏好），11-14 过了 **5.4 只读半 + 5.4b 官方 schema 校准 + 5.4c 无需真库的自验 + 5.4d 写入半 + 5.4d 真机往返 + 5.5 书单导出与增量同步评估**，以及 **Phase 4.1 书源主机权限**（均见 §0）。§0 各段里的「仍未做」是写下那一刻的快照，**当前真实待办以本节为准**：
 
 1. **Phase 6 余项（按需）** —— 6.1 标签建议走通「建议 → 预览 → 应用 → 记账」并沉淀成 `tagging.rs` 的形状；**6.2 AI 补笔记（2026-11-15）** 照同一形状给「划了线但没笔记」的标注补草稿，只填空值、可撤销，见 §0。再加新动作仍照这个形状，不新造机制。**没有真实需求前不主动加**（6.2 是用户点名启动 Phase 6 后做的第一个切片）。
-2. **Phase 4 余项（按需，不主动做）** —— 脚本层运行时、`MetadataProvider` trait、独立插件页。三条都缺真实需求：配置型书源已能表达搜索/详情/章节/正文，两个元数据来源用 `enum + CHAIN` 就够。
+2. **Phase 4 全部已交付**（4.1 权限、4.2 脚本层、4.3 Provider trait、4.4 插件页，见 §0）。余项只有「自定义来源的持久化注册」与第 3 层隔离，两者都要真实需求才动。
 3. **（可选补充，不阻塞）** 桌面版设置页「导出书单 CSV」**真机已销账**（2026-11-17：2386 本 / 512 KB，落盘 Downloads；Rust 落盘与组件行为均有测试）；真 Calibre 库并发打开时扫一次；评估 `document/pdf.rs::read_metadata` 对解析失败静默降级、让损坏 PDF 也能进书架这一既有行为。真机往返已用示例库走通，EPUB 导入已实测。
 
 **5.5 校验记录（2026-11-14）**：`cargo fmt --all --check` / `cargo clippy --all-targets -- -D warnings` / `cargo test --lib` **793 passed（14 ignored）**；`prettier --check .` / `tsc --noEmit` / `oxlint .`（464 文件 0 warning）/ `vite build --no-emptyOutDir`；全量 `vitest run --maxWorkers=2` **127 个测试文件、退出码 0**（最终统计行随会话切换没留存；vitest 有失败会非 0，所以「全过」有据，具体条数不虚报）；e2e `settings-rail` + `backup` + `smoke` 双引擎 **18 passed**。

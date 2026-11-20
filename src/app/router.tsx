@@ -25,6 +25,9 @@ const CoversPage = lazy(() =>
 const NotesPage = lazy(() =>
   import("@/features/notes/NotesPage").then((m) => ({ default: m.NotesPage })),
 );
+const PluginsPage = lazy(() =>
+  import("@/features/plugins/PluginsPage").then((m) => ({ default: m.PluginsPage })),
+);
 
 const routes: RouteObject[] = [
   {
@@ -42,6 +45,7 @@ const routes: RouteObject[] = [
       { path: "stats", element: <StatsPage /> },
       { path: "covers", element: <CoversPage /> },
       { path: "settings", element: <SettingsPage /> },
+      { path: "plugins", element: <PluginsPage /> },
     ],
   },
 ];

@@ -21,6 +21,10 @@ test("all routes render without console errors", async ({ page }) => {
   await page.getByRole("link", { name: "搜索" }).click();
   await expect(page.getByPlaceholder("搜索正文").first()).toBeVisible();
 
+  // The plugin page is the second lazy route that carries its own data hooks.
+  await page.getByRole("link", { name: "插件" }).click();
+  await expect(page.getByRole("heading", { name: "插件", level: 1 })).toBeVisible();
+
   // 设置 is the sidebar footer's gear button, not a nav link. The route
   // cross-fade keeps the outgoing page mounted for a beat — and the incoming
   // one can sit in the tree more than once while it settles — so assert on the
