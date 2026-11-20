@@ -124,6 +124,55 @@ mod tests {
         assert_eq!(out, json!({"title":"书名"}));
     }
 
+    /// The Wikisource example pasted into the plugins page must actually run:
+    /// a broken script there would look like a broken source to a newcomer.
+    #[test]
+    fn the_wikisource_example_maps_all_four_stages() {
+        let code = r#"function transform(input, stage) {
+  var pages = input.query && input.query.pages;
+  var id = pages && Object.keys(pages)[0];
+  var page = id ? pages[id] : null;
+  var url = "/w/api.php?action=query&prop=extracts&explaintext=1&pageids=" + id + "&format=json";
+  if (stage === "search") {
+    return {
+      results: ((input.query && input.query.search) || []).map(function (item) {
+        return {
+          title: item.title,
+          author: "",
+          book_url: "/w/api.php?action=query&prop=extracts&explaintext=1&pageids=" + item.pageid + "&format=json"
+        };
+      })
+    };
+  }
+  if (stage === "detail") {
+    return { title: (page && page.title) || "", intro: ((page && page.extract) || "").slice(0, 200) };
+  }
+  if (stage === "chapters") {
+    return { list: [{ title: (page && page.title) || "全文", url: url }] };
+  }
+  if (stage === "content") {
+    var text = (page && page.extract) || "";
+    return { paragraphs: text.split(/\n\s*\n/).filter(function (p) { return p.trim().length > 0; }) };
+  }
+  return input;
+}"#;
+        let found = script(code)
+            .apply(&json!({"query":{"search":[{"title":"三國演義","pageid":7223}]}}), "search")
+            .unwrap();
+        assert_eq!(found["results"][0]["title"], json!("三國演義"));
+        assert!(found["results"][0]["book_url"].as_str().unwrap().contains("pageids=7223"));
+
+        let page = json!({"query":{"pages":{"7223":{"title":"三國演義","extract":"第一段。\n\n第二段。"}}}});
+        let detail = script(code).apply(&page, "detail").unwrap();
+        assert_eq!(detail["title"], json!("三國演義"));
+        let chapters = script(code).apply(&page, "chapters").unwrap();
+        assert_eq!(chapters["list"][0]["title"], json!("三國演義"));
+        assert!(chapters["list"][0]["url"].as_str().unwrap().contains("pageids=7223"));
+        let content = script(code).apply(&page, "content").unwrap();
+        assert_eq!(content["paragraphs"][0], json!("第一段。"));
+        assert_eq!(content["paragraphs"][1], json!("第二段。"));
+    }
+
     #[test]
     fn a_script_cannot_loop_forever() {
         let started = std::time::Instant::now();

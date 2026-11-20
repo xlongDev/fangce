@@ -7,7 +7,9 @@ import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetadataSourcesPanel } from "@/features/plugins/MetadataSourcesPanel";
+import { useChatStream } from "@/hooks/useAi";
 import { useDeleteSource, useSaveSource, useSources } from "@/hooks/useSource";
+import { isDesktopRuntime } from "@/lib/ipc";
 import type { SourceEntry } from "@/lib/bindings";
 import type { SourceRules } from "@/types/ipc";
 
@@ -27,6 +29,74 @@ const BLANK_SOURCE: SourceRules = {
   book: { title: "$.title", author: "$.author", intro: "$.intro", cover: "" },
   chapters: { list: "$.data.chapters[*]", title: "$.name", url: "$.url" },
   content: { paragraphs: "$.data.content" },
+};
+
+// Kept in sync with the QuickJS check in src-tauri/src/library/io/script.rs.
+const WIKISOURCE_SCRIPT = String.raw`function transform(input, stage) {
+  var pages = input.query && input.query.pages;
+  var id = pages && Object.keys(pages)[0];
+  var page = id ? pages[id] : null;
+  var url = "/w/api.php?action=query&prop=extracts&explaintext=1&pageids=" + id + "&format=json";
+  if (stage === "search") {
+    return {
+      results: ((input.query && input.query.search) || []).map(function (item) {
+        return {
+          title: item.title,
+          author: "",
+          book_url: "/w/api.php?action=query&prop=extracts&explaintext=1&pageids=" + item.pageid + "&format=json"
+        };
+      })
+    };
+  }
+  if (stage === "detail") {
+    return { title: (page && page.title) || "", intro: ((page && page.extract) || "").slice(0, 200) };
+  }
+  if (stage === "chapters") {
+    return { list: [{ title: (page && page.title) || "全文", url: url }] };
+  }
+  if (stage === "content") {
+    var text = (page && page.extract) || "";
+    return { paragraphs: text.split(/\n\s*\n/).filter(function (p) { return p.trim().length > 0; }) };
+  }
+  return input;
+}`;
+
+const SOURCE_PROMPT = [
+  "给方册阅读器写一份书源 JSON 规则，只输出 JSON 对象，不要解释、不要代码块。",
+  "字段：name, baseUrl(https), permissions:{hosts:[]},",
+  "search:{url,list,title,author,intro,cover,bookUrl}, book:{title,author,intro,cover},",
+  "chapters:{list,title,url}, content:{paragraphs}。",
+  "规则是极简 JSONPath：$ 起头、.取字段、[*]取数组全部，不支持 [0] 或函数。",
+  "搜索地址用 {{keyword}} 占关键词的位置。",
+  "站点不是 JSON 接口就直说做不到，不要编造规则。",
+].join("\n");
+
+/** Models like fences; a source definition ends at its last brace either way. */
+function extractJson(text: string): string | null {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  return start >= 0 && end > start ? text.slice(start, end + 1) : null;
+}
+
+/** A real source: Wikisource, public-domain text, no key. Works out of the box
+ *  once saved; not preinstalled because the public API rate-limits bursts. */
+const SAMPLE_SOURCE: SourceRules = {
+  name: "维基文库（公有领域）",
+  baseUrl: "https://zh.wikisource.org",
+  permissions: { hosts: [] },
+  search: {
+    url: "/w/api.php?action=query&list=search&srsearch={{keyword}}&format=json&srlimit=5",
+    list: "$.results[*]",
+    title: "$.title",
+    author: "$.author",
+    intro: "",
+    cover: "",
+    bookUrl: "$.book_url",
+  },
+  book: { title: "$.title", author: "", intro: "$.intro", cover: "" },
+  chapters: { list: "$.list[*]", title: "$.title", url: "$.url" },
+  content: { paragraphs: "$.paragraphs[*]" },
+  script: { code: WIKISOURCE_SCRIPT },
 };
 
 interface Editor {
@@ -57,11 +127,13 @@ export function PluginsPage() {
   const sources = useSources();
   const deleteSource = useDeleteSource();
   const save = useSaveSource();
+  const chat = useChatStream();
 
   const [keyword, setKeyword] = useState("");
   const [category, setCategory] = useState("全部");
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [editing, setEditing] = useState<Editor | null>(null);
+  const [brief, setBrief] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -112,6 +184,34 @@ export function PluginsPage() {
       text: JSON.stringify(entry.def, null, 2),
       category: entry.def.category ?? "",
     });
+  };
+
+  const generateRules = async () => {
+    const request = brief.trim();
+    if (!request || !editing) return;
+    setError(null);
+    const answer = await chat.ask(request, {
+      turns: 0,
+      prompt: `${SOURCE_PROMPT}\n\n用户描述：${request}`,
+    });
+    if (!answer) {
+      setError("没拿到 AI 回复，先检查 AI 设置");
+      return;
+    }
+    const json = extractJson(answer.content);
+    if (!json) {
+      setError("AI 的回复里没有 JSON 对象");
+      return;
+    }
+    try {
+      const def = JSON.parse(json) as SourceRules;
+      if (!def.name || !def.baseUrl || !def.search?.url || !def.search.list || !def.search.title) {
+        throw new Error("缺少 name / baseUrl / search 必填项");
+      }
+      setEditing({ ...editing, text: JSON.stringify(def, null, 2) });
+    } catch (err) {
+      setError(`AI 给的规则不能用：${err instanceof Error ? err.message : String(err)}`);
+    }
   };
 
   const runSave = () => {
@@ -291,10 +391,15 @@ export function PluginsPage() {
             open
             onOpenChange={(next) => !next && setEditing(null)}
             title={editing.id ? "编辑书源" : "新建书源"}
-            description="分类用于这一页的筛选；规则仍然是一份 JSON 文档。"
+            description="分类用于这一页的筛选；规则仍然是一份 JSON 文档。不知道从哪填起，先展开下面的说明。"
             widthClass="w-[min(94vw,680px)]"
           >
-            <div className="space-y-3">
+            {/* The help block and the JSON together outgrow a short window.
+                One scroller for the form, with the actions outside it, so
+                保存 never lands below the bottom edge of the screen.
+                Not flex: a flex column shrinks the h-80 editor to two lines
+                and fights its native resize handle. */}
+            <div className="max-h-[62vh] space-y-3 overflow-y-auto pr-1">
               <div className="flex items-center gap-2">
                 <span className="text-text-3 w-10 shrink-0 text-[12.5px]">分类</span>
                 <GlassInput
@@ -305,6 +410,58 @@ export function PluginsPage() {
                   aria-label="书源分类"
                 />
               </div>
+              <details className="text-text-3 text-[12px]">
+                <summary className="cursor-pointer">怎么填？先看说明和示例</summary>
+                <ol className="mt-2 list-decimal space-y-1 pl-5 leading-relaxed">
+                  <li>目标网站得有返回 JSON 的搜索接口——书源读接口，不读网页。</li>
+                  <li>
+                    <code>baseUrl</code> 填网站根地址，<code>search.url</code>{" "}
+                    填搜索路径，关键词的位置写成 <code>{"{{keyword}}"}</code>。
+                  </li>
+                  <li>
+                    <code>list</code> 指向结果数组，<code>title</code> / <code>author</code> /{" "}
+                    <code>bookUrl</code> 指向每一项的书名 / 作者 / 详情地址。
+                  </li>
+                  <li>
+                    <code>book</code> / <code>chapters</code> / <code>content</code>{" "}
+                    照同一套写法填详情、目录、正文；点下载时才用到。
+                  </li>
+                </ol>
+                <p className="mt-2">
+                  示例接的是维基文库的公有领域书目，可以直接保存试用；正文是整篇纯文本。
+                </p>
+                <GlassButton
+                  size="sm"
+                  className="mt-2"
+                  onClick={() =>
+                    setEditing((current) =>
+                      current ? { ...current, text: JSON.stringify(SAMPLE_SOURCE, null, 2) } : null,
+                    )
+                  }
+                >
+                  填入示例
+                </GlassButton>
+                <div className="mt-3 border-t pt-3">
+                  <p className="mb-2">有接口地址或一段返回样例？让 AI 写：</p>
+                  <textarea
+                    value={brief}
+                    onChange={(event) => setBrief(event.target.value)}
+                    aria-label="书源需求描述"
+                    placeholder={
+                      '例如：站点是 https://example.com，搜索接口 /api/search?q=关键词，返回 {"list":[…]}'
+                    }
+                    className="glass text-text-1 focus-visible:border-accent focus-visible:bg-surface-2 h-20 w-full rounded-xl border p-2.5 text-[12px] outline-none"
+                  />
+                  <GlassButton
+                    size="sm"
+                    className="mt-2"
+                    disabled={!isDesktopRuntime || chat.streaming || !brief.trim()}
+                    onClick={() => void generateRules()}
+                  >
+                    {chat.streaming ? "生成中…" : "让 AI 写"}
+                  </GlassButton>
+                </div>
+              </details>
               <textarea
                 value={editing.text}
                 onChange={(event) => setEditing({ ...editing, text: event.target.value })}
@@ -320,19 +477,14 @@ export function PluginsPage() {
                 permissions.hosts。脚本写在 script.code 里。
               </p>
               {error && <p className="text-text-2 text-[12.5px] break-all">{error}</p>}
-              <div className="flex justify-end gap-2">
-                <GlassButton size="md" onClick={() => setEditing(null)}>
-                  取消
-                </GlassButton>
-                <GlassButton
-                  variant="primary"
-                  size="md"
-                  disabled={save.isPending}
-                  onClick={runSave}
-                >
-                  保存
-                </GlassButton>
-              </div>
+            </div>
+            <div className="mt-3 flex justify-end gap-2">
+              <GlassButton size="md" onClick={() => setEditing(null)}>
+                取消
+              </GlassButton>
+              <GlassButton variant="primary" size="md" disabled={save.isPending} onClick={runSave}>
+                保存
+              </GlassButton>
             </div>
           </GlassDialog>
         )}

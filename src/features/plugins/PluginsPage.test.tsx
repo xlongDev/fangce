@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   sourceList: vi.fn(),
   sourceSave: vi.fn(),
   sourceDelete: vi.fn(),
+  ask: vi.fn(),
   desktop: true,
 }));
 
@@ -23,6 +24,10 @@ vi.mock("@/lib/ipc", () => ({
     sourceDelete: mocks.sourceDelete,
   },
   onSourceProgress: vi.fn(),
+}));
+
+vi.mock("@/hooks/useAi", () => ({
+  useChatStream: () => ({ ask: mocks.ask, streaming: false }),
 }));
 
 import { PluginsPage } from "@/features/plugins/PluginsPage";
@@ -80,6 +85,7 @@ beforeEach(() => {
   mocks.sourceList.mockReset().mockResolvedValue(SOURCES);
   mocks.sourceSave.mockReset().mockResolvedValue("new-id");
   mocks.sourceDelete.mockReset().mockResolvedValue(null);
+  mocks.ask.mockReset();
 });
 
 describe("PluginsPage", () => {
@@ -121,6 +127,85 @@ describe("PluginsPage", () => {
     });
     expect(mocks.sourceDelete).toHaveBeenCalledWith("a");
     expect(mocks.sourceDelete).toHaveBeenCalledWith("b");
+  });
+
+  it("offers a fillable example to readers new to sources", async () => {
+    open();
+    const user = userEvent.setup();
+    await screen.findByText("星光小说");
+
+    await user.click(screen.getByRole("button", { name: /新建书源/ }));
+    await user.click(screen.getByText("怎么填？先看说明和示例"));
+    await user.click(screen.getByRole("button", { name: "填入示例" }));
+
+    const editor = screen.getByRole("textbox", { name: "书源规则" }) as HTMLTextAreaElement;
+    expect(editor.value).toContain("https://zh.wikisource.org");
+    expect(editor.value).toContain("{{keyword}}");
+
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(mocks.sourceSave).toHaveBeenCalledTimes(1));
+    expect(mocks.sourceSave.mock.calls[0]?.[1].name).toBe("维基文库（公有领域）");
+    expect(mocks.sourceSave.mock.calls[0]?.[1].script?.code).toContain("function transform");
+  });
+
+  it("keeps the actions outside the editor's scroll area", async () => {
+    open();
+    const user = userEvent.setup();
+    await screen.findByText("星光小说");
+    await user.click(screen.getByRole("button", { name: /新建书源/ }));
+    await user.click(screen.getByText("怎么填？先看说明和示例"));
+
+    // The expanded help makes the sheet taller than the window. The form
+    // scrolls on its own; 保存 is always beside it, not below the viewport.
+    const editor = screen.getByRole("textbox", { name: "书源规则" });
+    const scroller = editor.closest(".overflow-y-auto");
+    expect(scroller).not.toBeNull();
+    expect(scroller?.className).toContain("max-h-[62vh]");
+    // Block layout, not flex: a flex column shrinks the h-80 editor and
+    // overrides its native resize handle (the reported "compressed" sheet).
+    expect(scroller?.className).not.toContain("flex");
+    expect(scroller?.contains(screen.getByRole("button", { name: "保存" }))).toBe(false);
+  });
+
+  it("lets AI write a source definition into the editor", async () => {
+    open();
+    const user = userEvent.setup();
+    await screen.findByText("星光小说");
+    await user.click(screen.getByRole("button", { name: /新建书源/ }));
+    await user.click(screen.getByText("怎么填？先看说明和示例"));
+
+    const generated: SourceRules = {
+      name: "AI 生成的源",
+      baseUrl: "https://ai.example.com",
+      permissions: { hosts: [] },
+      search: {
+        url: "/s?q={{keyword}}",
+        list: "$.l[*]",
+        title: "$.t",
+        author: "",
+        intro: "",
+        cover: "",
+        bookUrl: "$.u",
+      },
+      book: { title: "$.t", author: "", intro: "", cover: "" },
+      chapters: { list: "$.c[*]", title: "$.t", url: "$.u" },
+      content: { paragraphs: "$.p[*]" },
+    };
+    mocks.ask.mockResolvedValueOnce({
+      content: "```json\n" + JSON.stringify(generated) + "\n```",
+      reasoning: "",
+      citations: [],
+      usage: null,
+      tools: [],
+    });
+
+    await user.type(screen.getByRole("textbox", { name: "书源需求描述" }), "站点 ai.example.com");
+    await user.click(screen.getByRole("button", { name: "让 AI 写" }));
+
+    await waitFor(() => expect(mocks.ask).toHaveBeenCalledTimes(1));
+    const editor = screen.getByRole("textbox", { name: "书源规则" }) as HTMLTextAreaElement;
+    await waitFor(() => expect(JSON.parse(editor.value).name).toBe("AI 生成的源"));
+    expect(editor.value).toContain("https://ai.example.com");
   });
 
   it("saves a new source with the chosen category", async () => {
