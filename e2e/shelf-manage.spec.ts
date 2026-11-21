@@ -175,3 +175,23 @@ test("shelf layout switches between grid and list", async ({ page }) => {
   const restoredWidth = (await page.locator("[data-book-cover]").first().boundingBox())!.width;
   expect(restoredWidth).toBeGreaterThan(100);
 });
+
+test("list hover actions clear the format/size line", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/?demo=1");
+  await page.getByRole("button", { name: "列表视图" }).click();
+
+  const card = page.locator("[data-book-cover]").first().locator("xpath=../..");
+  const format = card.getByText(/· \d+\.\d+ (KB|MB)/);
+  const actions = card.locator("[data-book-actions]");
+
+  // The row's last meta line used to end at the right edge under an absolutely
+  // positioned toolbar. Measure the boxes with the actions in place — they are
+  // transparent until hover but still hold their flex cell — and require no
+  // intersection and no spill past the row.
+  const a = (await format.boundingBox())!;
+  const b = (await actions.boundingBox())!;
+  const row = (await card.boundingBox())!;
+  expect(a.x + a.width).toBeLessThanOrEqual(b.x + 1);
+  expect(b.x + b.width).toBeLessThanOrEqual(row.x + row.width + 1);
+});

@@ -239,7 +239,12 @@ export function BookCard({
         aria-pressed={selecting ? selected : undefined}
         className={cn(
           "focus-visible:focus-ring text-left disabled:opacity-50",
-          variant === "grid" ? "w-full rounded-md" : "flex w-full items-center gap-4 rounded-lg",
+          // In the list the actions take their own flex cell on the right, so
+          // this must give up `w-full` and share the row. Absolute actions used
+          // to sit on top of the format/size line at the row's right edge.
+          variant === "grid"
+            ? "w-full rounded-md"
+            : "flex min-w-0 flex-1 items-center gap-4 rounded-lg",
         )}
         disabled={busy}
       >
@@ -377,6 +382,7 @@ export function BookCard({
         </span>
       ) : (
         <div
+          data-book-actions
           className={cn(
             // Five cells across the cover's own width, six when this EPUB
             // also offers Send to Kindle: the cells shrink with the cover, so
@@ -392,7 +398,11 @@ export function BookCard({
                   "absolute inset-x-1.5 top-1.5 grid place-items-center gap-0.5",
                   canSend ? "grid-cols-6" : "grid-cols-5",
                 )
-              : "absolute top-1/2 right-3 flex -translate-y-1/2 items-center gap-1",
+              : // Its own cell at the row's right edge, not an overlay: the
+                // format/size line ends there too, and an absolutely placed
+                // toolbar covered it on hover. Transparent-but-present keeps
+                // the row from reflowing when it appears.
+                "flex shrink-0 items-center gap-1",
             variant === "grid" ? "translate-y-2 group-hover:translate-y-0" : "",
             // The row follows the lift rather than racing it: it waits well
             // past the cover (180 ms vs the cover's 60 ms) and travels the
