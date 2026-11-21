@@ -1,5 +1,5 @@
-import { useRef, useState, type MouseEvent } from "react";
-import { motion, useAnimationControls } from "motion/react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { AnimatePresence, motion, useAnimationControls } from "motion/react";
 import {
   BookOpen,
   Check,
@@ -10,6 +10,7 @@ import {
   Star,
   Tag,
   Trash,
+  WarningCircle,
 } from "@phosphor-icons/react";
 
 import { GlassDialog } from "@/components/glass/overlay";
@@ -47,6 +48,8 @@ interface BookCardProps {
   onAskExport: (book: BookSummary) => void;
   /** Desktop + EPUB only. The icon is not rendered for other formats. */
   onSendToKindle?: (book: BookSummary) => void;
+  /** This book's send result, injected by the shelf. Idle when absent. */
+  kindlePhase?: KindleSendPhase;
   /** The browser's export: a download of the book's own file. The desktop has
    *  somewhere to write and a panel to ask, so it offers `onAskExport`
    *  (a `.ctz`) instead — only one of the two is ever rendered. */
@@ -67,6 +70,10 @@ interface BookCardProps {
 const coverAction =
   "h-6 w-6 rounded-full border-white/15 bg-black/45 text-white/90 backdrop-blur-[2px] " +
   "hover:bg-black/65 hover:text-white";
+
+/** One book's trip to Kindle, as told to its card. The card owns the icon;
+ *  the shelf only knows which book is in flight and how it ended. */
+export type KindleSendPhase = "sending" | "success" | "error";
 
 /** One shelf tile: cover, title, authors and quiet hover actions. */
 /**
@@ -90,6 +97,7 @@ export function BookCard({
   onAskDelete,
   onAskExport,
   onSendToKindle,
+  kindlePhase,
   onExportFile,
   onEditTags,
   onEditMeta,
@@ -103,6 +111,8 @@ export function BookCard({
   const m = useMotion();
   const star = useAnimationControls();
   const halo = useAnimationControls();
+  const plane = useAnimationControls();
+  const sendHalo = useAnimationControls();
   const beginHandoff = useBookHandoff((s) => s.begin);
   const coverRef = useRef<HTMLSpanElement>(null);
   /**
@@ -155,6 +165,36 @@ export function BookCard({
     }
     onToggleFavorite(book);
   };
+
+  /**
+   * Send to Kindle is the one action here with a delay between intent and
+   * result — the SMTP round-trip. The click gets an immediate take-off (so the
+   * tap is never unanswered), and the phase coming back from the shelf swaps
+   * the glyph to a check or a warning. Both are finite: nothing pulses while
+   * the reader waits, because an indeterminate spinner would promise an
+   * arrival this command cannot time.
+   */
+  useEffect(() => {
+    if (!kindlePhase || m.reduce) return;
+    if (kindlePhase === "sending") {
+      void plane.start({
+        x: [0, 3, 0],
+        y: [0, -2, 0],
+        scale: [1, 1.16, 0.94, 1],
+        transition: { duration: 0.44, times: [0, 0.26, 0.62, 1], ease: EASE_LAND },
+      });
+      void sendHalo.start({
+        scale: [0.5, 1.55],
+        opacity: [0.45, 0],
+        transition: { duration: 0.5, ease: EASE_LAND },
+      });
+    } else if (kindlePhase === "error") {
+      void plane.start({
+        x: [0, -2, 2, -1, 0],
+        transition: { duration: 0.32, times: [0, 0.25, 0.5, 0.75, 1], ease: EASE_LAND },
+      });
+    }
+  }, [kindlePhase, m.reduce, plane, sendHalo]);
 
   // The other end of the same gesture. When this book's cover is in the air —
   // on its way back from the reader — this tile is the landing pad, and it
@@ -445,9 +485,42 @@ export function BookCard({
                 event.stopPropagation();
                 onSendToKindle?.(book);
               }}
-              className={coverAction}
+              className={cn(
+                coverAction,
+                kindlePhase === "success" && "text-accent",
+                kindlePhase === "error" && "text-danger",
+              )}
             >
-              <PaperPlaneTilt size={13} />
+              <span className="relative flex">
+                <motion.span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 rounded-full bg-white/35 blur-[3px]"
+                  initial={{ scale: 0.5, opacity: 0 }}
+                  animate={sendHalo}
+                />
+                <motion.span animate={plane} className="relative flex">
+                  <AnimatePresence mode="wait" initial={false}>
+                    <motion.span
+                      key={
+                        kindlePhase === "success" ? "ok" : kindlePhase === "error" ? "bad" : "go"
+                      }
+                      initial={{ opacity: 0, scale: m.reduce ? 1 : 0.6 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: m.reduce ? 1 : 0.6 }}
+                      transition={{ duration: m.reduce ? 0 : 0.16, ease: EASE_LAND }}
+                      className="flex"
+                    >
+                      {kindlePhase === "success" ? (
+                        <Check size={13} weight="bold" />
+                      ) : kindlePhase === "error" ? (
+                        <WarningCircle size={13} weight="bold" />
+                      ) : (
+                        <PaperPlaneTilt size={13} />
+                      )}
+                    </motion.span>
+                  </AnimatePresence>
+                </motion.span>
+              </span>
             </GlassIconButton>
           )}
           <GlassIconButton

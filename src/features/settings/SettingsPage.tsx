@@ -359,6 +359,8 @@ export function SettingsPage() {
 
   /** The jump the rail asked for, held until the pane finishes travelling. */
   const jumping = useRef<{ id: SectionId; top: number } | null>(null);
+  /** A rail jump waiting for a group whose config is still resolving. */
+  const jumpFrame = useRef<number | undefined>(undefined);
 
   /**
    * Where a finished jump left the pane.
@@ -465,6 +467,7 @@ export function SettingsPage() {
     root.addEventListener("pointerdown", drop);
     return () => {
       clearTimeout(settle);
+      if (jumpFrame.current !== undefined) cancelAnimationFrame(jumpFrame.current);
       resize.disconnect();
       root.removeEventListener("scroll", onScroll);
       root.removeEventListener("wheel", drop);
@@ -475,24 +478,34 @@ export function SettingsPage() {
   const jumpTo = useCallback(
     (id: SectionId) => {
       const root = scrollRef.current;
-      const target = root?.querySelector<HTMLElement>(`[data-section="${id}"]`);
-      if (!root || !target) return;
-      const top = Math.max(target.offsetTop - 16, 0);
-      // Set it now rather than waiting for the scroll: the smooth scroll would
-      // otherwise leave the rail ticking through the groups it passes.
-      jumping.current = { id, top };
+      if (!root) return;
+      // Claim the highlight before the group exists: a form still loading its
+      // config returns null, and a click with no immediate answer reads as
+      // ignored. The same retry the hash jump uses, for the same reason.
       setActive(id);
-      root.scrollTo({ top, behavior: reduce ? "auto" : "smooth" });
-      // A jump to where the pane can already reach fires no scroll event at all,
-      // and a claim nobody releases would then swallow the reader's next scroll.
-      // Compared against where the pane *can* go rather than where it was asked to
-      // go: a pane parked at its bottom, asked for a group further up, is not there
-      // yet — and releasing it here is what let the rule below light 关于 for a
-      // click on 同步.
-      if (Math.abs(root.scrollTop - reachableTop(root, top)) < 2) {
-        jumping.current = null;
-        settled.current = root.scrollTop;
-      }
+      if (jumpFrame.current !== undefined) cancelAnimationFrame(jumpFrame.current);
+      let frames = 0;
+      const seek = () => {
+        const target = root.querySelector<HTMLElement>(`[data-section="${id}"]`);
+        if (!target) {
+          if (frames++ < 120) jumpFrame.current = requestAnimationFrame(seek);
+          return;
+        }
+        const top = Math.max(target.offsetTop - 16, 0);
+        jumping.current = { id, top };
+        root.scrollTo({ top, behavior: reduce ? "auto" : "smooth" });
+        // A jump to where the pane can already reach fires no scroll event at all,
+        // and a claim nobody releases would then swallow the reader's next scroll.
+        // Compared against where the pane *can* go rather than where it was asked to
+        // go: a pane parked at its bottom, asked for a group further up, is not there
+        // yet — and releasing it here is what let the rule below light 关于 for a
+        // click on 同步.
+        if (Math.abs(root.scrollTop - reachableTop(root, top)) < 2) {
+          jumping.current = null;
+          settled.current = root.scrollTop;
+        }
+      };
+      seek();
     },
     [reduce],
   );

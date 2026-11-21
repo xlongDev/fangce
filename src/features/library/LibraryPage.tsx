@@ -304,6 +304,28 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const exportPack = useExportPack();
   const exportFile = useExportBookFile();
   const sendToKindle = useSendToKindle();
+  // One SMTP message at a time: a second click while the first is in flight
+  // would push the same book twice, with no visible way to pull one back. The
+  // phase is state because the card on the shelf has to show the flight, the
+  // landing and the failure — a ref alone would be invisible to the UI.
+  const sendingToKindle = useRef(false);
+  const [kindlePhase, setKindlePhase] = useState<{
+    id: string;
+    phase: "sending" | "success" | "error";
+  } | null>(null);
+  const kindleReset = useRef<number | undefined>(undefined);
+  const settleKindle = useCallback((id: string, phase: "success" | "error") => {
+    setKindlePhase({ id, phase });
+    // Hold the result long enough to read, then let the icon go back to idle.
+    if (kindleReset.current !== undefined) window.clearTimeout(kindleReset.current);
+    kindleReset.current = window.setTimeout(() => setKindlePhase(null), 1800);
+  }, []);
+  useEffect(
+    () => () => {
+      if (kindleReset.current !== undefined) window.clearTimeout(kindleReset.current);
+    },
+    [],
+  );
   const exportCsv = useBookCatalogExport();
   const deleteBook = useDeleteBook();
   const setFavorite = useSetFavorite();
@@ -589,9 +611,24 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         }
         onAskDelete={setDeleteTarget}
         onAskExport={setExportTarget}
+        kindlePhase={kindlePhase}
         onSendToKindle={(target) => {
+          if (sendingToKindle.current) return;
+          sendingToKindle.current = true;
+          if (kindleReset.current !== undefined) window.clearTimeout(kindleReset.current);
+          setKindlePhase({ id: target.id, phase: "sending" });
           sendToKindle.mutate(target.id, {
-            onSuccess: () => showToast("success", "已提交到 Kindle，稍后可在 Kindle 库中查看。"),
+            onSettled: () => {
+              sendingToKindle.current = false;
+            },
+            onSuccess: () => {
+              showToast(
+                "success",
+                `《${target.title}》已提交到 Kindle，稍后可在 Kindle 库中查看。`,
+              );
+              settleKindle(target.id, "success");
+            },
+            onError: () => settleKindle(target.id, "error"),
           });
         }}
         // No dialog: a download has nothing to choose. Failures surface

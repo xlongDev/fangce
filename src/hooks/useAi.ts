@@ -48,6 +48,9 @@ export function useSaveAiConfig() {
     // writing that into the cache blanks the form it is meant to refresh.
     onSuccess: (saved) => {
       queryClient.setQueryData(["ai", "config"], saved);
+      // The credential banner spans every sealed row; re-check after a save
+      // so it clears once no row is left sealed by an older master key.
+      void queryClient.invalidateQueries({ queryKey: ["system", "secrets"] });
     },
   });
 }

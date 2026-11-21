@@ -3,8 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { desktopQuery, ipc } from "@/lib/ipc";
 import type { KindleConfig } from "@/lib/bindings";
 
-/** Browser dev mode has no SMTP relay; the settings form still needs a shape. */
-const OFFLINE_CONFIG: KindleConfig = {
+/** Browser dev mode has no SMTP relay; the settings form still needs a shape.
+ *  Also the fallback when a config sealed by another build cannot be opened. */
+export const EMPTY_KINDLE_CONFIG: KindleConfig = {
   smtpHost: "",
   smtpPort: 465,
   username: "",
@@ -16,7 +17,7 @@ const OFFLINE_CONFIG: KindleConfig = {
 export function useKindleConfig() {
   return useQuery<KindleConfig>({
     queryKey: ["kindle", "config"],
-    queryFn: desktopQuery(OFFLINE_CONFIG, () => ipc.kindleGetConfig()),
+    queryFn: desktopQuery(EMPTY_KINDLE_CONFIG, () => ipc.kindleGetConfig()),
     staleTime: Number.POSITIVE_INFINITY,
   });
 }
@@ -29,6 +30,9 @@ export function useSaveKindleConfig() {
     meta: { silent: true },
     onSuccess: (saved) => {
       queryClient.setQueryData(["kindle", "config"], saved);
+      // The banner checks every sealed row, not just this one. Re-check after
+      // replacing a credential so it clears when the last old seal is gone.
+      void queryClient.invalidateQueries({ queryKey: ["system", "secrets"] });
     },
   });
 }

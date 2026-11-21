@@ -4,7 +4,7 @@ import { BookOpen, CaretDown, X } from "@phosphor-icons/react";
 import { EmptyState } from "@/components/common/EmptyState";
 import { QueryError } from "@/components/common/QueryError";
 import { GlassButton } from "@/components/glass/button";
-import { BookCard } from "@/features/library/BookCard";
+import { BookCard, type KindleSendPhase } from "@/features/library/BookCard";
 import { SECTION_HEADER_H, type BookSection } from "@/features/library/group";
 import { ShelfEmptyState } from "@/features/library/ShelfEmptyState";
 import type { useShelfWindow } from "@/hooks/useShelfWindow";
@@ -38,6 +38,7 @@ export function ShelfGrid({
   onAskDelete,
   onAskExport,
   onSendToKindle,
+  kindlePhase,
   onExportFile,
   onEditTags,
   onEditMeta,
@@ -65,6 +66,8 @@ export function ShelfGrid({
   onAskDelete: (book: BookSummary) => void;
   onAskExport: (book: BookSummary) => void;
   onSendToKindle?: (book: BookSummary) => void;
+  /** Which book is in flight, and how it ended. Only that card animates. */
+  kindlePhase?: { id: string; phase: KindleSendPhase } | null;
   onExportFile: (book: BookSummary) => void;
   onEditTags: (book: BookSummary) => void;
   onEditMeta: (book: BookSummary) => void;
@@ -229,6 +232,7 @@ export function ShelfGrid({
                 onAskDelete={onAskDelete}
                 onAskExport={onAskExport}
                 onSendToKindle={onSendToKindle}
+                kindlePhase={kindlePhase?.id === book.id ? kindlePhase.phase : undefined}
                 onExportFile={onExportFile}
                 onEditTags={onEditTags}
                 onEditMeta={onEditMeta}

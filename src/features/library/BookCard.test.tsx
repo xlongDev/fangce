@@ -55,6 +55,7 @@ function renderCard(
   book: Partial<BookSummary> = {},
   onAskExport: (book: BookSummary) => void = () => {},
   onSendToKindle?: (book: BookSummary) => void,
+  kindlePhase?: "sending" | "success" | "error",
 ) {
   return render(
     <BookCard
@@ -64,6 +65,7 @@ function renderCard(
       onAskDelete={() => {}}
       onAskExport={onAskExport}
       onSendToKindle={onSendToKindle}
+      kindlePhase={kindlePhase}
       onExportFile={() => {}}
       onEditTags={() => {}}
       onEditMeta={() => {}}
@@ -162,5 +164,19 @@ describe("BookCard — format / file size row (T2/T3)", () => {
   it("does not show Send to Kindle for non-EPUB formats", () => {
     renderCard({ format: "pdf" }, () => {}, vi.fn());
     expect(screen.queryByRole("button", { name: "发送到 Kindle" })).not.toBeInTheDocument();
+  });
+
+  it("tints the send button to the result while the phase is held", () => {
+    // The glyph crossfade is motion; the durable signal is the button's own
+    // colour, which is what remains readable after the swap settles.
+    const { unmount } = renderCard({}, () => {}, vi.fn(), "success");
+    const send = screen.getByRole("button", { name: "发送到 Kindle" });
+    expect(send.className).toContain("text-accent");
+    unmount();
+
+    renderCard({}, () => {}, vi.fn(), "error");
+    expect(screen.getByRole("button", { name: "发送到 Kindle" }).className).toContain(
+      "text-danger",
+    );
   });
 });
