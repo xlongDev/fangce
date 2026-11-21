@@ -62,6 +62,15 @@ describe("useAiSpeech", () => {
     ]);
   });
 
+  it("passes a cover from an answer that has no reader to inherit from", () => {
+    const tts = fakeTts();
+    const { result } = renderHook(() => useAiSpeech("notes-recap:b1", tts));
+
+    act(() => result.current.toggle("回顾一段。", { title: "批注回顾", coverUrl: "cover.png" }));
+
+    expect(useSpeechSession.getState().coverUrl).toBe("cover.png");
+  });
+
   it("stops its own answer and hands the session back", () => {
     const tts = fakeTts({ status: "playing" });
     useSpeechSession.setState({ origin: "ai", activeId: "guide:b1" });

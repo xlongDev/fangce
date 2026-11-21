@@ -75,6 +75,32 @@ describe("useSpeechSession", () => {
     });
   });
 
+  it("takes an explicit cover from an answer started outside a reader", () => {
+    const state = useSpeechSession.getState();
+    // The notes page never published a book session: there is nothing to
+    // inherit, so its answer has to bring the book's cover with it.
+    expect(state.coverUrl).toBeNull();
+    state.startAi({
+      id: "notes-recap:b1",
+      title: "批注回顾",
+      chapter: "三体",
+      coverUrl: "notes-cover.png",
+      units: ANSWER_UNITS,
+    });
+    expect(useSpeechSession.getState().coverUrl).toBe("notes-cover.png");
+
+    // A reader's answer still inherits — no cover in its patch, so the one in
+    // the session stays put.
+    useSpeechSession.setState({ coverUrl: "reader-cover.png" });
+    useSpeechSession.getState().startAi({
+      id: "guide:b1",
+      title: "AI 导读",
+      chapter: "全书",
+      units: ANSWER_UNITS,
+    });
+    expect(useSpeechSession.getState().coverUrl).toBe("reader-cover.png");
+  });
+
   it("ends only an answer's session, never a book's queue", () => {
     const state = useSpeechSession.getState();
     state.startAi({ id: "guide:b1", title: "AI 导读", chapter: "全书", units: ANSWER_UNITS });

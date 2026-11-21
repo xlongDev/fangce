@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useReaderSettings } from "@/stores/reader";
@@ -28,11 +28,18 @@ vi.mock("@/features/reader/TtsHost", () => ({
   useTtsHostOptional: () => ({ tts: mocks.tts, sleep: {} }),
 }));
 
-const button = (props: { id?: string; text?: string; disabled?: boolean; streaming?: boolean }) => (
+const button = (props: {
+  id?: string;
+  text?: string;
+  disabled?: boolean;
+  streaming?: boolean;
+  coverUrl?: string | null;
+}) => (
   <AiSpeechButton
     id={props.id ?? "guide:b1"}
     text={props.text ?? ""}
     title="AI 导读"
+    coverUrl={props.coverUrl}
     disabled={props.disabled ?? false}
     streaming={props.streaming ?? false}
   />
@@ -72,6 +79,14 @@ describe("AiSpeechButton", () => {
 
     expect(mocks.tts.play).toHaveBeenCalledWith(["一段回答。"], 0);
     expect(useSpeechSession.getState().activeId).toBe("guide:b1");
+  });
+
+  it("hands the book's cover to a voice started off the reader", () => {
+    render(button({ text: "一段回顾。", coverUrl: "cover.png" }));
+
+    fireEvent.click(screen.getByRole("button"));
+
+    expect(useSpeechSession.getState().coverUrl).toBe("cover.png");
   });
 
   it("stays silent for a cached answer that was never streamed", () => {

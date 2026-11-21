@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 import { useNavigate } from "react-router-dom";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, animate, motion, useMotionValue, useReducedMotion } from "motion/react";
 import {
   ArrowSquareOut,
   BookOpen,
@@ -28,9 +28,10 @@ import {
 import { cn } from "@/lib/cn";
 import { demoEnabled } from "@/lib/demo";
 import { isDesktopRuntime } from "@/lib/ipc";
-import { SPRING, useMotion } from "@/lib/motion";
+import { EASE_OUT, SPRING, useMotion } from "@/lib/motion";
 import { displayTitle } from "@/lib/title";
 import { useSettings, type NotesView } from "@/stores/settings";
+import { useSpeechSession } from "@/stores/speech";
 import { useBooks } from "@/hooks/useLibrary";
 import { useAiChat } from "@/hooks/useAi";
 import {
@@ -42,6 +43,7 @@ import {
 } from "@/hooks/useAnnotations";
 import { GlassButton } from "@/components/glass/button";
 import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
+import { AiSpeechText } from "@/components/common/AiSpeechText";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { NoteCell } from "@/features/reader/AnnotationNote";
 import { AiNoteDialog } from "@/features/notes/AiNoteDialog";
@@ -80,6 +82,52 @@ import type { BookQuery } from "@/types/ipc";
 /** Recent-first, which is the order the page groups in: the book you were last
  *  in is the one whose notes you are most likely looking for. */
 const SHELF_QUERY: BookQuery = { filter: "all", sort: "recentlyRead" };
+
+/** One height change for the AI answer's fold, not two: the content swaps
+ *  immediately and the container travels from the old height to the new one.
+ *  Animating `height` rather than scaling keeps the glyphs their own size. */
+const RECAP_FOLD_MS = 0.2;
+
+/**
+ * Measures a folding block before and after its content swaps, so a single
+ * `animate` can carry the old height to the new one. The value returns to
+ * `auto` at rest: a streamed answer keeps growing on its own afterwards, which
+ * a pinned pixel height would freeze.
+ */
+function useFoldHeight(expanded: boolean) {
+  const ref = useRef<HTMLDivElement>(null);
+  const animatedHeight = useMotionValue<number | "auto">("auto");
+  const measured = useRef<number | null>(null);
+  const wasExpanded = useRef(expanded);
+  // The animation outlives unrelated re-renders (a TTS status tick, say). Only
+  // a real switch — or unmount — stops it. Stopping on every effect cleanup
+  // would freeze the height mid-travel.
+  const running = useRef<ReturnType<typeof animate> | null>(null);
+  const reduce = useReducedMotion();
+
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const next = element.scrollHeight;
+    const switched = wasExpanded.current !== expanded;
+    wasExpanded.current = expanded;
+    const previous = measured.current;
+    measured.current = next;
+    if (!switched || previous === null || previous === next) return;
+
+    running.current?.stop();
+    animatedHeight.set(previous);
+    running.current = animate(animatedHeight, next, {
+      duration: reduce ? 0 : RECAP_FOLD_MS,
+      ease: EASE_OUT,
+      onComplete: () => animatedHeight.set("auto"),
+    });
+  });
+
+  useEffect(() => () => running.current?.stop(), []);
+
+  return [ref, animatedHeight] as const;
+}
 
 // `satisfies` so the two cannot drift: a value added here that the store does
 // not know about is a compile error, not a filter that silently resets.
@@ -647,6 +695,19 @@ function BookSection({
    *  A preview that differs from the stored one is the only thing 保存 can write. */
   const review = recap.text || saved.data || "";
   const draft = recap.text.trim() !== "" && recap.text !== saved.data;
+  /** The id the read-aloud button publishes, and the one `AiSpeechText` matches
+   *  to wash the sentence under the voice. Without the same id the highlight
+   *  would have no way to know whose voice is on. */
+  const recapId = `notes-recap:${book.id}`;
+  const recapSpeaking = useSpeechSession(
+    (state) => state.origin === "ai" && state.activeId === recapId,
+  );
+  // A wash inside a four-line clamp is a wash nobody can see. Derived, not
+  // stored: the voice either is on this answer or it is not, so the fold opens
+  // for exactly as long as the wash can be seen and closes when the voice
+  // leaves — no effect copying one piece of state into another.
+  const recapExpanded = recapOpen || recapSpeaking;
+  const [foldRef, foldHeight] = useFoldHeight(recapExpanded);
   // Only a note is the reader saying something; a bare highlight is a passage
   // they marked. An all-highlight book has nothing for the model to arrange.
   const noted = entries.filter((entry) => (entry.annotation.note ?? "").trim() !== "").length;
@@ -713,10 +774,10 @@ function BookSection({
                   {/* ponytail: a character count stands in for measuring rendered
                       lines; below it the text never needs a clamp. Upgrade to a
                       measured height only if the fold has to be exact. */}
-                  {review.length > 160 && (
+                  {review.length > 160 && !recapSpeaking && (
                     <button
                       type="button"
-                      aria-expanded={recapOpen}
+                      aria-expanded={recapExpanded}
                       onClick={() => setRecapOpen((open) => !open)}
                       className="text-text-2 hover:text-text-1 focus-visible:focus-ring text-[11px] transition-colors"
                     >
@@ -726,19 +787,48 @@ function BookSection({
                 </div>
               </div>
               <div className="flex items-start gap-2">
-                <p
-                  className={cn(
-                    "text-text-1 min-w-0 flex-1 text-[12.5px] leading-relaxed whitespace-pre-wrap",
-                    !recapOpen && review.length > 160 && "line-clamp-4",
-                  )}
+                {/* One box whose height travels between the two readings, so
+                    the fold is one change rather than a collapse followed by an
+                    expansion. The inner node swaps synchronously; `useFoldHeight`
+                    measures it before paint and animates the difference. */}
+                <motion.div
+                  ref={foldRef}
+                  style={{ height: foldHeight, overflow: "hidden" }}
+                  className="min-w-0 flex-1"
                 >
-                  {review}
-                </p>
+                  {/* Same ink and leading in both readings, so the swap itself
+                      has nothing to jump: the new content fades in while the
+                      height travels, and the extra lines are revealed by the
+                      clip rather than popping in all at once. */}
+                  <motion.div
+                    key={recapExpanded ? "full" : "short"}
+                    initial={{ opacity: 0.5 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ duration: RECAP_FOLD_MS }}
+                  >
+                    {recapExpanded ? (
+                      // The wash measures the exact string the voice was given,
+                      // so the expanded view must be the layout that marks it
+                      // up — a clamped paragraph has no map back to the units.
+                      <AiSpeechText id={recapId} text={review} />
+                    ) : (
+                      <p
+                        className={cn(
+                          "text-text-1 text-[13px] leading-relaxed",
+                          review.length > 160 && "line-clamp-4",
+                        )}
+                      >
+                        {review}
+                      </p>
+                    )}
+                  </motion.div>
+                </motion.div>
                 <AiSpeechButton
-                  id={`notes-recap:${book.id}`}
+                  id={recapId}
                   text={review}
                   title="批注回顾"
                   chapter={displayTitle(book.title)}
+                  coverUrl={book.coverUrl}
                   disabled={recap.streaming}
                   streaming={recap.streaming}
                   label="朗读这段回顾"

@@ -34,6 +34,13 @@ export interface AiSessionPatch {
   title: string;
   chapter: string;
   units: readonly SpeechUnit[];
+  /**
+   * Cover to show in the player when the answer starts away from a reader —
+   * the notes page knows its book but never published a book session. Omitted
+   * means inherit the current cover, which is what an answer inside a reader
+   * wants. Explicit `null` means this answer has no cover at all.
+   */
+  coverUrl?: string | null;
 }
 
 interface SpeechSessionState {
@@ -112,11 +119,12 @@ export const useSpeechSession = create<SpeechSessionState>()((set) => ({
       // No book to go back to by chapter: 「回到阅读」 is a promise this
       // session cannot keep. The cover *is* the book's though — an answer is
       // about the book on screen, and a player that drops its artwork the
-      // moment the voice changes subject looks broken. Inherited rather than
-      // looked up: a second answer starts while the first one's session is
-      // still the current one, whose cover is already the right one.
+      // moment the voice changes subject looks broken. An answer started in a
+      // reader inherits the cover already in the session; one started on the
+      // notes page brings its own, because that page never published a book
+      // session to inherit from.
       bookId: null,
-      coverUrl: state.coverUrl,
+      coverUrl: patch.coverUrl !== undefined ? patch.coverUrl : state.coverUrl,
       chapterIdx: 0,
       bookLanguage: null,
       // The reader's transport would jump into the *book's* queue. With none

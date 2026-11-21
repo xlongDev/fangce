@@ -8,6 +8,8 @@ import { useSpeechSession } from "@/stores/speech";
 export interface AiSpeechLabel {
   title: string;
   chapter?: string;
+  /** Cover for answers started away from a reader — see `AiSessionPatch`. */
+  coverUrl?: string | null;
 }
 
 /**
@@ -38,7 +40,13 @@ export function useAiSpeech(id: string, tts: Tts) {
       }
       const units = aiSpeechUnits(text);
       if (units.length === 0) return;
-      startAi({ id, title: label.title, chapter: label.chapter ?? "", units });
+      startAi({
+        id,
+        title: label.title,
+        chapter: label.chapter ?? "",
+        coverUrl: label.coverUrl,
+        units,
+      });
       // `play` replaces whatever the engine was saying, book or answer. No
       // `onFinish`: the shell's idle-voice effect ends the session instead, so
       // every way of stopping (player, tray, chapter change) is covered by one

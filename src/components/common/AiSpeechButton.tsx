@@ -16,6 +16,8 @@ interface AiSpeechButtonProps {
   /** What the player calls the session. */
   title: string;
   chapter?: string;
+  /** Cover for a voice started away from a reader (the notes page). */
+  coverUrl?: string | null;
   /** True while the answer is still streaming — the queue is not final yet. */
   disabled?: boolean;
   /**
@@ -54,6 +56,7 @@ function AiSpeechControl({
   text,
   title,
   chapter,
+  coverUrl,
   disabled = false,
   streaming = false,
   label = "朗读这段回答",
@@ -80,8 +83,8 @@ function AiSpeechControl({
     const finished = wasStreaming.current && !streaming;
     wasStreaming.current = streaming;
     if (!finished || !autoPlay || playing) return;
-    toggle(text, { title, chapter });
-  }, [streaming, autoPlay, playing, text, title, chapter, toggle]);
+    toggle(text, { title, chapter, coverUrl });
+  }, [streaming, autoPlay, playing, text, title, chapter, coverUrl, toggle]);
 
   return (
     <button
@@ -90,7 +93,7 @@ function AiSpeechControl({
       aria-pressed={playing}
       title={error ?? undefined}
       disabled={!speakable && !playing}
-      onClick={() => toggle(text, { title, chapter })}
+      onClick={() => toggle(text, { title, chapter, coverUrl })}
       className={cn(
         "focus-visible:focus-ring text-text-3 hover:text-text-1 inline-flex size-7 shrink-0 items-center justify-center rounded-md transition-colors disabled:pointer-events-none disabled:opacity-40",
         playing && "text-accent hover:text-accent",
