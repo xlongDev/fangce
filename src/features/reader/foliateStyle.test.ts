@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { buildStyleSheet, verticalQuotes, type FoliateStyle } from "./foliateStyle";
+import {
+  applyNightBackgrounds,
+  buildStyleSheet,
+  mixHex,
+  verticalQuotes,
+  type FoliateStyle,
+} from "./foliateStyle";
 import { LONE_FIGURE_ATTR } from "./loneFigure";
 
 /** A night page, so each case only states the field it is about. */
@@ -44,16 +50,12 @@ describe("buildStyleSheet", () => {
     expect(css).not.toContain("box-shadow:");
   });
 
-  it("repaints a light box the book painted from its own class, not inline", () => {
-    // 《史蒂夫·乔布斯传》 opens each chapter with div.grey {
-    // background-color: #DCDCDC } and a white .fright circle for the number.
-    // The paginator's resolver only lifts html/body, and the inline-white
-    // override never sees a stylesheet class — so those boxes kept print
-    // paper under the forced light text. Force the night fill on the same
-    // element-level selectors as the text colour.
-    expect(buildStyleSheet(style())).toContain("background-color: #181c23 !important");
-    // The same circle ships a silver box-shadow; with its white fill gone the
-    // shadow alone showed up as a glowing crescent on the dark page.
+  it("strips print-era box shadows but leaves element backgrounds to the brightness pass", () => {
+    // Flattening every background in CSS erased the chapter opener's panel
+    // and badge; CSS also cannot tell a light fill from a dark one.
+    expect(buildStyleSheet(style())).not.toContain("background-color: #181c23 !important");
+    // The same circle ships a silver box-shadow; with its white fill mapped
+    // to a dark panel the shadow alone would be a glowing crescent.
     expect(buildStyleSheet(style())).toContain("box-shadow: none !important");
   });
 
@@ -198,5 +200,67 @@ describe("buildStyleSheet", () => {
     expect(verticalQuotes("don’t")).toBe("don﹄t");
     expect(verticalQuotes("straight \" and ' stay")).toBe("straight \" and ' stay");
     expect(verticalQuotes("无引号")).toBe("无引号");
+  });
+});
+
+/** 《史蒂夫·乔布斯传》: a grey chapter panel holding a white number circle. */
+const makeSection = () => {
+  // A real section iframe has its own window; createHTMLDocument does not,
+  // and getComputedStyle needs one. jsdom also skips stylesheet colours, so
+  // the fixture carries the book's declarations inline — WebKit sees them
+  // from either source.
+  const frame = document.createElement("iframe");
+  document.body.append(frame);
+  const doc = frame.contentDocument!;
+  doc.body.innerHTML =
+    '<div style="background-color:#DCDCDC"><div style="background-color:white;border-radius:50px">1</div><p>第一章</p></div>' +
+    '<div style="background-color:#222831">注释</div>' +
+    '<div style="background-image:url(cover.png)">插图</div><p>正文</p>';
+  return doc;
+};
+
+describe("applyNightBackgrounds", () => {
+  afterEach(() => {
+    document.querySelectorAll("iframe").forEach((frame) => frame.remove());
+  });
+
+  it("marks light flat fills as two panel tones and leaves dark or image fills alone", () => {
+    const doc = makeSection();
+    applyNightBackgrounds(doc, "#c9ced8", "#181c23", true);
+    expect(doc.querySelector("body > div")?.getAttribute("data-foliate-night-bg")).toBe("panel");
+    // A light fill nested in another light fill becomes the slightly brighter
+    // chip — the number badge stays visible on the chapter panel.
+    expect(doc.querySelector("body > div > div")?.getAttribute("data-foliate-night-bg")).toBe(
+      "chip",
+    );
+    expect(
+      doc.querySelector("body > div:nth-of-type(2)")?.hasAttribute("data-foliate-night-bg"),
+    ).toBe(false);
+    expect(
+      doc.querySelector("body > div:nth-of-type(3)")?.hasAttribute("data-foliate-night-bg"),
+    ).toBe(false);
+    expect(doc.querySelector("p:last-child")?.hasAttribute("data-foliate-night-bg")).toBe(false);
+    const sheet = doc.querySelector("style[data-foliate-night-bg-sheet]")?.textContent ?? "";
+    expect(sheet).toContain(
+      `[data-foliate-night-bg="panel"]{background-color:${mixHex("#181c23", "#c9ced8", 0.12)} !important}`,
+    );
+    expect(sheet).toContain(
+      `[data-foliate-night-bg="chip"]{background-color:${mixHex("#181c23", "#c9ced8", 0.22)} !important}`,
+    );
+  });
+
+  it("clears every mark on a light page so the book's own paper comes back", () => {
+    const doc = makeSection();
+    applyNightBackgrounds(doc, "#c9ced8", "#181c23", true);
+    expect(doc.querySelectorAll("[data-foliate-night-bg]").length).toBeGreaterThan(0);
+    applyNightBackgrounds(doc, "#23272e", "#fbfbfd", false);
+    expect(doc.querySelectorAll("[data-foliate-night-bg]")).toHaveLength(0);
+    expect(doc.querySelector("style[data-foliate-night-bg-sheet]")?.textContent).toBe("");
+  });
+
+  it("mixes #rrggbb colours without rounding past a byte", () => {
+    expect(mixHex("#000000", "#ffffff", 0)).toBe("#000000");
+    expect(mixHex("#000000", "#ffffff", 1)).toBe("#ffffff");
+    expect(mixHex("#181c23", "#c9ced8", 0.12)).toMatch(/^#[0-9a-f]{6}$/);
   });
 });

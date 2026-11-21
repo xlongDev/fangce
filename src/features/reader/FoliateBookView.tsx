@@ -23,7 +23,7 @@ import { speechUnits, unitsFromOffset } from "./speech";
 import type { SpeechUnit, Span } from "./speech";
 import { foliateWash } from "./ttsWash";
 import type { TtsWashStyle } from "./ttsWash";
-import { buildStyleSheet, verticalQuotes } from "./foliateStyle";
+import { applyNightBackgrounds, buildStyleSheet, verticalQuotes } from "./foliateStyle";
 import { applySectionText } from "./sectionText";
 import type { TextLayer } from "./sectionText";
 import { loadZhConverter } from "./zhConvert";
@@ -1395,6 +1395,9 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       // black over the `#background` layer. Drop the tag and the scheme is
       // ours again. The `:root { color-scheme }` form is covered by the sheet.
       doc.querySelector('meta[name="color-scheme" i]')?.remove();
+      // One brightness pass at section load: the book's own CSS has applied by
+      // now, and the paginator keeps this document across palette changes.
+      applyNightBackgrounds(doc, styleRef.current.fg, styleRef.current.bg, styleRef.current.dark);
       markLoneFigures(doc);
       doc.addEventListener("keydown", forwardKeyFromSection, true);
       doc.addEventListener("mouseup", () => captureSelection(doc), true);
@@ -1797,6 +1800,12 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     const view = viewRef.current;
     if (!view) return;
     view.renderer?.setStyles?.(buildStyleSheet(style));
+    // setStyles rewrites the mounted sections' stylesheet without reloading
+    // their documents, so a palette flip has to replay the brightness pass on
+    // the already-mounted ones — otherwise a night panel survives into day.
+    for (const { doc } of view.renderer?.getContents() ?? []) {
+      if (doc) applyNightBackgrounds(doc, style.fg, style.bg, style.dark);
+    }
     syncPageInvert(view, style);
     // The sheet alone cannot turn the page sideways: foliate resolves a
     // section's axis once, at load, and caches it. Handing it the page it is

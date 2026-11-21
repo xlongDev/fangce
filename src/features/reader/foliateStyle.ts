@@ -323,18 +323,19 @@ html, body {
    under the forced light text — measured on 《史蒂夫·乔布斯传》, where the
    opener was unreadable at night. The inline-white override below was not
    enough: it only reaches style="background: …", not a stylesheet class.
-   Only the colour is replaced, so an image-bearing background (Kindle paper
-   texture) keeps its artwork; html/body are absent on purpose, so the
-   paginator still owns the page fill.
-   The same boxes often carry a print-era light shadow (that white chapter
-   number circle ships a silver box-shadow). Once its white fill is
-   night-coloured, the silver shadow is all that is left — a glowing crescent
-   on the dark page. Strip shadows with the same repaint. */
+   Backgrounds are NOT flattened here: CSS cannot ask how bright a book's own
+   background is, and    flattening to the page colour erased the chapter opener's
+   panel and number badge. The night background pass reads each section's
+   computed colours once at load and maps light flat fills onto two night
+   panel tones, preserving that hierarchy. Image-bearing fills are left alone,
+   and html/body stay the paginator's business.
+   The boxes the book paints often carry a print-era light shadow (that white
+   chapter number circle ships a silver box-shadow). Once its fill is night
+   coloured the shadow alone is a glowing crescent — strip it here. */
 section, aside, blockquote, article, nav, header, footer, main, figure,
 div, p, font, h1, h2, h3, h4, h5, h6, li, span, td, th, dd, dt, b, i, em,
 strong, small, sup, sub, label, caption, figcaption, pre, code, q, cite {
   color: ${fg} !important;
-  background-color: ${bg} !important;
   box-shadow: none !important;
 }
 a:any-link {
@@ -351,25 +352,101 @@ font[color="rgb(0,0,0)"], font[color="rgb(0, 0, 0)"],
 *[style*="color:#000"], *[style*="color:#000000"], *[style*="color:black"] {
   color: ${fg} !important;
 }
-/* Callout boxes with inline white/light backgrounds (readest's
-   getDarkModeLightBackgroundOverrides). */
-*[style*="background-color: #fff"], *[style*="background-color:#fff"],
-*[style*="background-color: #ffffff"], *[style*="background-color:#ffffff"],
-*[style*="background-color: white"], *[style*="background-color:white"],
-*[style*="background: #fff"], *[style*="background:#fff"],
-*[style*="background: #ffffff"], *[style*="background:#ffffff"],
-*[style*="background: white"], *[style*="background:white"],
-*[style*="background-color: rgb(255"], *[style*="background-color:rgb(255"],
-*[style*="background: rgb(255"], *[style*="background:rgb(255"] {
-  background-color: ${bg} !important;
-}${
-    invertImages
-      ? `
+/* Inline white/light callout backgrounds used to be overridden here by a long
+   list of style*= selectors. They moved to the night background pass: it has
+   to see the book's original colour to decide whether it is light, and a
+   stylesheet override would hide it. */
+${
+  invertImages
+    ? `
 /* Opt-in, and dark-only: a night reader who wants fewer lumens can have the
    book's pictures inverted too. Off by default — see FoliateStyle. */
 img, svg, video, canvas, image {
   filter: invert(1) hue-rotate(180deg);
 }`
-      : ""
-  }`;
+    : ""
+}`;
+};
+
+const NIGHT_BG_ATTR = "data-foliate-night-bg";
+const NIGHT_SHEET_ATTR = "data-foliate-night-bg-sheet";
+
+const hexChannels = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+
+/** Mix two #rrggbb colours; t = 0 keeps a, t = 1 takes b. */
+export const mixHex = (a: string, b: string, t: number): string => {
+  const aChannels = hexChannels(a);
+  const bChannels = hexChannels(b);
+  const ar = aChannels[0] ?? 0;
+  const ag = aChannels[1] ?? 0;
+  const ab = aChannels[2] ?? 0;
+  const br = bChannels[0] ?? 0;
+  const bgG = bChannels[1] ?? 0;
+  const bgB = bChannels[2] ?? 0;
+  const byte = (start: number, end: number) =>
+    Math.round(start + (end - start) * t)
+      .toString(16)
+      .padStart(2, "0");
+  return `#${byte(ar, br)}${byte(ag, bgG)}${byte(ab, bgB)}`;
+};
+
+/** Perceived-ish brightness of a computed rgb()/rgba() colour, 0..1. */
+const lightness = (color: string): number => {
+  const parts = color.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+))?/);
+  if (!parts) return 0;
+  const [r, g, b] = [Number(parts[1]), Number(parts[2]), Number(parts[3])];
+  const alpha = parts[4] === undefined ? 1 : Number(parts[4]);
+  return ((0.2126 * r + 0.7152 * g + 0.0722 * b) / 255) * alpha;
+};
+
+/**
+ * Map a book's light flat fills onto two dark panel tones, so a night page
+ * keeps the chapter opener's panel and its nested number badge instead of
+ * flattening both into the page. CSS cannot branch on a computed colour's
+ * brightness, so this runs once per section at load and again when the
+ * palette changes (setStyles reuses the same documents).
+ *
+ * The marks and their rules live in a dedicated sheet in the section, not in
+ * inline styles: clearing it on a light page restores the book exactly, with
+ * nothing to remember or undo. Transparent fills, dark fills and image-backed
+ * fills are left alone, as are html/body — the paginator owns the page fill.
+ */
+export const applyNightBackgrounds = (
+  doc: Document,
+  fg: string,
+  bg: string,
+  dark: boolean,
+): void => {
+  let sheet = doc.head?.querySelector<HTMLStyleElement>(`style[${NIGHT_SHEET_ATTR}]`);
+  if (!sheet && doc.head) {
+    sheet = doc.createElement("style");
+    sheet.setAttribute(NIGHT_SHEET_ATTR, "");
+    doc.head.append(sheet);
+  }
+  if (!dark) {
+    if (sheet) sheet.textContent = "";
+    doc.querySelectorAll(`[${NIGHT_BG_ATTR}]`).forEach((el) => el.removeAttribute(NIGHT_BG_ATTR));
+    return;
+  }
+  const win = doc.defaultView;
+  if (!win || !doc.body || !sheet) return;
+  const marked = new Set<Element>();
+  for (const el of doc.body.querySelectorAll("*")) {
+    const style = win.getComputedStyle(el);
+    // A picture-backed fill is paper art (Kindle textures), not a flat colour.
+    if (style.backgroundImage !== "none") continue;
+    if (lightness(style.backgroundColor) < 0.45) continue;
+    let nested = false;
+    for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+      if (marked.has(parent)) {
+        nested = true;
+        break;
+      }
+    }
+    el.setAttribute(NIGHT_BG_ATTR, nested ? "chip" : "panel");
+    marked.add(el);
+  }
+  sheet.textContent =
+    `[${NIGHT_BG_ATTR}="panel"]{background-color:${mixHex(bg, fg, 0.12)} !important}` +
+    `[${NIGHT_BG_ATTR}="chip"]{background-color:${mixHex(bg, fg, 0.22)} !important}`;
 };
