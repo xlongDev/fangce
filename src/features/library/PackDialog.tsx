@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Lock, Package } from "@phosphor-icons/react";
 
 import { cn } from "@/lib/cn";
+import { isDesktopRuntime } from "@/lib/ipc";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
@@ -26,6 +27,11 @@ const KINDS = [
     key: "original",
     label: "原文件",
     hint: "导出导入时的原始文件，保留原格式，兼容其他阅读器。",
+  },
+  {
+    key: "enriched",
+    label: "带元信息 EPUB",
+    hint: "把补全后的书名、作者、出版社、封面等写进 EPUB 文件，原书和书库里的副本都不动。其他阅读器和 Send to Kindle 读到的是补全后的信息。",
   },
   { key: "pack", label: "书档", hint: "带上阅读进度、收藏和全部标注，只有本应用认得" },
   { key: "encrypted", label: "加密书档", hint: "同上，再加一个密码" },
@@ -80,13 +86,19 @@ export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: Exp
   const extension =
     kind === "catalog"
       ? "csv"
-      : kind === "original"
-        ? book.format === "markdown"
-          ? "md"
-          : book.format
-        : encrypted
-          ? "ctzx"
-          : "ctz";
+      : kind === "enriched"
+        ? "epub"
+        : kind === "original"
+          ? book.format === "markdown"
+            ? "md"
+            : book.format
+          : encrypted
+            ? "ctzx"
+            : "ctz";
+  const isEpub = book.format === "epub";
+  // The metadata write is a Rust command with no browser implementation; the
+  // original file can still be exported there as a download.
+  const kinds = KINDS.filter((entry) => entry.key !== "enriched" || (isEpub && isDesktopRuntime));
   const chosen = KINDS.find((entry) => entry.key === kind)!;
   const ready = !encrypted || password.length > 0;
 
@@ -94,9 +106,21 @@ export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: Exp
   const message = error ?? panelError;
 
   const choose = async () => {
+    // Send to Kindle sometimes falls back to the file name for the title. An
+    // `作者 - 书名` name makes that fallback correct too — no extra work.
+    const suggested =
+      kind === "enriched"
+        ? `${filename([...book.authors, book.title].filter(Boolean).join(" - "), book.title)}.${extension}`
+        : `${filename(book.title, catalog ? "书目" : chosen.label)}.${extension}`;
     const path = await choosePath({
-      title: catalog ? "导出书目 CSV" : kind === "original" ? "导出书籍文件" : "导出书档",
-      defaultPath: `${filename(book.title, catalog ? "书目" : chosen.label)}.${extension}`,
+      title: catalog
+        ? "导出书目 CSV"
+        : kind === "original"
+          ? "导出书籍文件"
+          : kind === "enriched"
+            ? "导出带元信息 EPUB"
+            : "导出书档",
+      defaultPath: suggested,
       filters: [{ name: chosen.label, extensions: [extension] }],
     });
     if (path === null) return;
@@ -129,7 +153,7 @@ export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: Exp
             is what a screen reader needs — and the linter is right that a
             grouping role here would want a real `fieldset`. */}
         <div className="flex flex-wrap gap-1.5">
-          {KINDS.map(({ key, label }) => (
+          {kinds.map(({ key, label }) => (
             <button
               key={key}
               type="button"

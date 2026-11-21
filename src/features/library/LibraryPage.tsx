@@ -51,6 +51,7 @@ import {
   useDeleteProgress,
   useEmptyTrash,
   useExportBookFile,
+  useExportBookWithMetadata,
   useExportPack,
   useImportBooks,
   useImportFiles,
@@ -303,6 +304,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const migrateEdition = useMigrateEdition();
   const exportPack = useExportPack();
   const exportFile = useExportBookFile();
+  const exportWithMeta = useExportBookWithMetadata();
   const sendToKindle = useSendToKindle();
   // One SMTP message at a time: a second click while the first is in flight
   // would push the same book twice, with no visible way to pull one back. The
@@ -821,25 +823,34 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         <Suspense fallback={null}>
           <ExportPackDialog
             book={exportTarget}
-            busy={exportPack.isPending || exportFile.isPending || exportCsv.isPending}
+            busy={
+              exportPack.isPending ||
+              exportFile.isPending ||
+              exportWithMeta.isPending ||
+              exportCsv.isPending
+            }
             error={
               exportCsv.error
                 ? String(exportCsv.error)
                 : exportPack.error
                   ? String(exportPack.error)
-                  : exportFile.error
-                    ? String(exportFile.error)
-                    : null
+                  : exportWithMeta.error
+                    ? String(exportWithMeta.error)
+                    : exportFile.error
+                      ? String(exportFile.error)
+                      : null
             }
             onCancel={() => {
               setExportTarget(null);
               exportPack.reset();
               exportFile.reset();
+              exportWithMeta.reset();
               exportCsv.reset();
             }}
-            // All four shapes go through this one dialog and its save panel;
-            // only the command behind them differs — the book's own bytes, a
-            // pack that also carries what was read, or one row of shelf CSV.
+            // Every shape goes through this one dialog and its save panel;
+            // only the command behind them differs — the book's own bytes,
+            // those bytes with the metadata rewritten into the OPF, a pack
+            // that also carries what was read, or one row of shelf CSV.
             onConfirm={({ book, path, kind, password, includeAi }) => {
               const done = { onSuccess: () => setExportTarget(null) };
               if (kind === "catalog") {
@@ -854,6 +865,16 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
                 );
               } else if (kind === "original") {
                 exportFile.mutate({ id: book.id, path }, done);
+              } else if (kind === "enriched") {
+                exportWithMeta.mutate(
+                  { id: book.id, path },
+                  {
+                    onSuccess: () => {
+                      setExportTarget(null);
+                      showToast("success", "已导出带补全元信息的 EPUB，原书未改动。");
+                    },
+                  },
+                );
               } else {
                 exportPack.mutate({ id: book.id, path, password, includeAi }, done);
               }

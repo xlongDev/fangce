@@ -394,6 +394,18 @@ export const commands = {
   bookExport: (id: string, path: string, options?: InvokeOptions) =>
     __TAURI_INVOKE<null>("book_export", { id, path }, options),
   /**
+   *  `book.exportWithMetadata` — saves a copy of an EPUB with the shelf's
+   *  supplemented metadata written into its OPF. The source file and the library's
+   *  own copy are untouched; so is `content_hash`, the book's identity. The bytes
+   *  are the book's, with the Dublin Core fields replaced — an EPUB another
+   *  reader can open with the right title, author and publisher on the shelf.
+   *
+   *  EPUB only: the other six formats have no OPF to write, and pretending to
+   *  patch a PDF's Info dictionary would be a different feature.
+   */
+  bookExportWithMetadata: (id: string, path: string, options?: InvokeOptions) =>
+    __TAURI_INVOKE<null>("book_export_with_metadata", { id, path }, options),
+  /**
    *  `pack.export` — writes one book to a `.ctz` or `.ctzx` file.
    *
    *  The destination extension picks the format: `.ctzx` requires `password` and

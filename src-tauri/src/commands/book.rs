@@ -11,6 +11,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::db::Library;
+use crate::document::{self, CoverImage, epub::EpubMetaPatch};
 use crate::error::{AppError, AppResult};
 use crate::library::chapters;
 use crate::library::import::{self, ImportOutcome};
@@ -246,6 +247,72 @@ pub async fn book_export(state: State<'_, AppState>, id: String, path: String) -
     })
     .await
     .map_err(|err| AppError::Message(format!("导出书籍文件被中断：{err}")))?
+}
+
+/// `book.exportWithMetadata` — saves a copy of an EPUB with the shelf's
+/// supplemented metadata written into its OPF. The source file and the library's
+/// own copy are untouched; so is `content_hash`, the book's identity. The bytes
+/// are the book's, with the Dublin Core fields replaced — an EPUB another
+/// reader can open with the right title, author and publisher on the shelf.
+///
+/// EPUB only: the other six formats have no OPF to write, and pretending to
+/// patch a PDF's Info dictionary would be a different feature.
+#[tauri::command]
+#[specta::specta]
+pub async fn book_export_with_metadata(
+    state: State<'_, AppState>,
+    id: String,
+    path: String,
+) -> AppResult<()> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (source, format) = library.with(|conn| repository::source(conn, &id))?;
+        if format != document::BookFormat::Epub {
+            return Err(AppError::UnsupportedFormat("写入元数据只支持 EPUB".into()));
+        }
+        let book = library
+            .with(|conn| repository::get(conn, &id))?
+            .ok_or_else(|| AppError::NotFound(id.clone()))?;
+        let patch = EpubMetaPatch {
+            title: Some(book.title),
+            authors: book.authors,
+            language: book.language,
+            publisher: book.publisher,
+            description: book.description,
+            published_year: book.published_year,
+            cover: shelf_cover(&library, &id)?,
+        };
+        let bytes = std::fs::read(&source).map_err(|err| {
+            AppError::missing_source(PathBuf::from(&source).as_path(), err.into())
+        })?;
+        let rewritten = document::epub::write_metadata(&bytes, &patch)?;
+        std::fs::write(&path, rewritten)?;
+        Ok(())
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("导出任务被中断：{err}")))?
+}
+
+/// Reads the shelf's replacement cover for a book, if it has one.
+///
+/// Both metadata export paths need this: the picture a reader downloaded or
+/// drew lives in `covers_dir`, not in the EPUB, so without it the write-back
+/// keeps the book's old cover. A missing or unreadable file degrades to "no
+/// replacement" rather than failing the export — the shelf entry can be
+/// cleared while the file is being tidied up.
+pub(crate) fn shelf_cover(library: &Library, id: &str) -> AppResult<Option<CoverImage>> {
+    let Some(path) = library.with(|conn| repository::cover_path(conn, id))? else {
+        return Ok(None);
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Ok(None);
+    };
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(document::safe_image_extension)
+        .unwrap_or_else(|| "png".to_string());
+    Ok(Some(CoverImage { extension, bytes }))
 }
 
 /// `book.source_url` — the protocol URL the reader streams the source file

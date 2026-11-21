@@ -7,7 +7,9 @@
 //! supplies their own relay and an app password; both are sealed by `secrets`.
 //!
 //! Only EPUB goes out. Amazon converts it on its side, and this command does
-//! not pretend to do that conversion locally.
+//! not pretend to do that conversion locally. What it does do is write the
+//! shelf's metadata into the OPF before sending: the补全 the reader made in
+//! 方册 would otherwise never reach Kindle, which reads the file, not our DB.
 
 use std::time::Duration;
 
@@ -17,7 +19,9 @@ use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::document::BookFormat;
+use crate::commands::book::shelf_cover;
+use crate::document::epub::EpubMetaPatch;
+use crate::document::{self, BookFormat};
 use crate::error::{AppError, AppResult};
 use crate::library::repository;
 use crate::secrets;
@@ -213,6 +217,16 @@ pub async fn book_send_to_kindle(state: State<'_, AppState>, id: String) -> AppR
     }
     let bytes =
         tokio::fs::read(file).await.map_err(|err| AppError::missing_source(file, err.into()))?;
+    let patch = EpubMetaPatch {
+        title: Some(book.title.clone()),
+        authors: book.authors.clone(),
+        language: book.language.clone(),
+        publisher: book.publisher.clone(),
+        description: book.description.clone(),
+        published_year: book.published_year,
+        cover: shelf_cover(&library, &id)?,
+    };
+    let bytes = document::epub::write_metadata(&bytes, &patch)?;
     let message = build_message(&config, &book.title, bytes)?;
     deliver(&config, message).await
 }

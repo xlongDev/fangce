@@ -14,6 +14,7 @@ const { save } = vi.hoisted(() => ({
   save: vi.fn(async (): Promise<string | null> => "/tmp/导出"),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save }));
+vi.mock("@/lib/ipc", () => ({ isDesktopRuntime: true }));
 
 import { ExportPackDialog } from "@/features/library/PackDialog";
 
@@ -156,6 +157,27 @@ describe("the export dialog", () => {
       password: "pw",
       includeAi: true,
     });
+  });
+
+  it("offers the metadata-rewritten copy for EPUB with an author-title file name", async () => {
+    const user = userEvent.setup();
+    save.mockResolvedValueOnce("/tmp/张三 - 测试书.epub");
+    const { onConfirm } = renderDialog();
+
+    await user.click(chip("带元信息 EPUB"));
+    await user.click(screen.getByRole("button", { name: "选择保存位置" }));
+
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultPath: "张三 - 测试书.epub" }),
+    );
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "enriched", path: "/tmp/张三 - 测试书.epub" }),
+    );
+  });
+
+  it("hides the metadata rewrite for other formats", () => {
+    renderDialog({ format: "pdf" });
+    expect(screen.queryByRole("button", { name: "带元信息 EPUB" })).toBeNull();
   });
 
   it("carries no password for the shapes that have none", async () => {

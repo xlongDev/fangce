@@ -298,6 +298,15 @@ export function useExportBookFile() {
   });
 }
 
+/** Saves an EPUB copy with the shelf's metadata written into its OPF. Desktop
+ *  only — the browser has no Rust writer and no path to write to. */
+export function useExportBookWithMetadata() {
+  return useMutation({
+    mutationFn: ({ id, path }: { id: string; path: string }) =>
+      ipc.bookExportWithMetadata(id, path),
+  });
+}
+
 /** Writes one book to a `.ctz` / `.ctzx` pack. Nothing to invalidate: the
  * shelf is untouched, the file lands wherever the save dialog pointed.
  */
