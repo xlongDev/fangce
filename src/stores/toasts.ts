@@ -3,11 +3,19 @@ import { create } from "zustand";
 import { AI_SETTINGS } from "@/lib/routes";
 
 export type ToastTone = "error" | "success";
+/**
+ * Let one message borrow another surface's ink so the two read as one result.
+ * Send to Kindle's card lights its check in `accent`, not the usual success
+ * green — the toast that follows should say the same thing.
+ */
+export type ToastEmphasis = "accent";
 
 export interface Toast {
   id: number;
   tone: ToastTone;
   message: string;
+  /** Optional ink borrowed from the surface that triggered this message. */
+  emphasis?: ToastEmphasis;
   /** Where to send the reader when the message is about something they can fix. */
   action?: { label: string; to: string };
 }
@@ -60,10 +68,10 @@ export const useToasts = create<ToastState>()((set, get) => ({
 const AI_SETTINGS_HINT = /API ?Key|模型|接口地址|鉴权|密钥/i;
 
 /** The non-React entry point — the query cache reports failures from outside a component. */
-export function showToast(tone: ToastTone, message: string): void {
+export function showToast(tone: ToastTone, message: string, emphasis?: ToastEmphasis): void {
   const action =
     tone === "error" && AI_SETTINGS_HINT.test(message)
       ? { label: "去设置", to: AI_SETTINGS }
       : undefined;
-  useToasts.getState().push({ tone, message, action });
+  useToasts.getState().push({ tone, message, emphasis, action });
 }

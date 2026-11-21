@@ -32,6 +32,11 @@ export function Toaster() {
       <AnimatePresence initial={false}>
         {toasts.map((toast) => {
           const { icon: Icon, accent } = TONE[toast.tone];
+          // A message can borrow the ink of the surface it came from, so a
+          // Kindle card's accent check and its toast read as one result. The
+          // glyph still says what happened (success/error); only the colour is
+          // borrowed.
+          const ink = toast.emphasis === "accent" ? "text-accent" : accent;
           const action = toast.action;
           return (
             <motion.div
@@ -45,7 +50,7 @@ export function Toaster() {
               aria-live={toast.tone === "error" ? "assertive" : "polite"}
               className="glass-liquid pointer-events-auto flex items-start gap-2.5 rounded-lg p-3"
             >
-              <Icon size={18} className={cn("mt-px shrink-0", accent)} aria-hidden />
+              <Icon size={18} className={cn("mt-px shrink-0", ink)} aria-hidden />
               <div className="min-w-0 flex-1">
                 <p className="text-text-1 text-[13px] leading-relaxed break-words">
                   {toast.message}

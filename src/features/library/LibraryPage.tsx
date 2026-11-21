@@ -625,6 +625,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
               showToast(
                 "success",
                 `《${target.title}》已提交到 Kindle，稍后可在 Kindle 库中查看。`,
+                "accent",
               );
               settleKindle(target.id, "success");
             },

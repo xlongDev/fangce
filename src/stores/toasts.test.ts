@@ -53,4 +53,13 @@ describe("showToast", () => {
 
     expect(latest()?.action).toBeUndefined();
   });
+
+  it("carries a borrowed ink through to the view", () => {
+    // Kindle's card lights its check in accent; its toast has to say the same
+    // thing or the two halves of one result read as different outcomes.
+    showToast("success", "《书》已提交到 Kindle", "accent");
+
+    expect(latest()?.tone).toBe("success");
+    expect(latest()?.emphasis).toBe("accent");
+  });
 });
