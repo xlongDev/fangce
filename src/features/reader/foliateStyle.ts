@@ -315,14 +315,27 @@ html, body {
    night fill — measured on a converted EPUB, where the paragraph colour
    stayed rgb(0, 0, 0) while only the headings that happened to use the
    accent colour survived. These selectors carry !important so they also beat
-   an inline style="color: …", which is the whole point. background-color is
-   deliberately NOT forced here: the section's own backgrounds go through the
-   paginator's --override-color resolver, which keeps image-bearing paper
-   (Kindle textures) in its original colours. */
+   an inline style="color: …", which is the whole point.
+   background-color travels with the colour repaint: the paginator's
+   --override-color resolver only lifts the *page* background off html/body,
+   so a light box painted by the book's own class (e.g. .grey {
+   background-color: #DCDCDC } around a chapter opener) kept its print paper
+   under the forced light text — measured on 《史蒂夫·乔布斯传》, where the
+   opener was unreadable at night. The inline-white override below was not
+   enough: it only reaches style="background: …", not a stylesheet class.
+   Only the colour is replaced, so an image-bearing background (Kindle paper
+   texture) keeps its artwork; html/body are absent on purpose, so the
+   paginator still owns the page fill.
+   The same boxes often carry a print-era light shadow (that white chapter
+   number circle ships a silver box-shadow). Once its white fill is
+   night-coloured, the silver shadow is all that is left — a glowing crescent
+   on the dark page. Strip shadows with the same repaint. */
 section, aside, blockquote, article, nav, header, footer, main, figure,
 div, p, font, h1, h2, h3, h4, h5, h6, li, span, td, th, dd, dt, b, i, em,
 strong, small, sup, sub, label, caption, figcaption, pre, code, q, cite {
   color: ${fg} !important;
+  background-color: ${bg} !important;
+  box-shadow: none !important;
 }
 a:any-link {
   color: lightblue;

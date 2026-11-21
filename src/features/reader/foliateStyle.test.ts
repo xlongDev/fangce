@@ -40,6 +40,21 @@ describe("buildStyleSheet", () => {
     expect(css).not.toContain("--theme-bg-color");
     expect(css).not.toContain("--override-color");
     expect(css).not.toContain("invert(1)");
+    expect(css).not.toContain("background-color:");
+    expect(css).not.toContain("box-shadow:");
+  });
+
+  it("repaints a light box the book painted from its own class, not inline", () => {
+    // 《史蒂夫·乔布斯传》 opens each chapter with div.grey {
+    // background-color: #DCDCDC } and a white .fright circle for the number.
+    // The paginator's resolver only lifts html/body, and the inline-white
+    // override never sees a stylesheet class — so those boxes kept print
+    // paper under the forced light text. Force the night fill on the same
+    // element-level selectors as the text colour.
+    expect(buildStyleSheet(style())).toContain("background-color: #181c23 !important");
+    // The same circle ships a silver box-shadow; with its white fill gone the
+    // shadow alone showed up as a glowing crescent on the dark page.
+    expect(buildStyleSheet(style())).toContain("box-shadow: none !important");
   });
 
   it("pins the colour scheme to normal in both palettes", () => {
