@@ -179,6 +179,15 @@ html, body {
   /* !important: KF8 books ship their own body typography for print paper;
      the reader always owns the body size. */
   font-size: ${fontSize}px !important;
+}
+/* Some publishers bake the body size into every paragraph's span as an inline
+   style (measured: 1983 spans at 16px in one Digital Lab EPUB). An inherited
+   !important on html/body loses to that direct declaration, so the size
+   stepper does nothing while the em-based gap moves. Reach only spans that
+   carry such a declaration inside body-text containers — headings repeat the
+   trick at a larger size and must keep their hierarchy. */
+:is(p, li, blockquote, dd, dt, td, th) > span[style*="font-size" i] {
+  font-size: ${fontSize}px !important;
 }${
     forced
       ? `

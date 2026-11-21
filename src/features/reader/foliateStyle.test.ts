@@ -157,6 +157,31 @@ describe("buildStyleSheet", () => {
     expect(buildStyleSheet(style({ dark: false }))).toContain("div, span {");
   });
 
+  it("overrides an inline body size without flattening the book's headings", () => {
+    // 《世上为什么要有图书馆》 bakes font-size:16px into 1983 paragraph spans.
+    // An inherited !important on html/body loses to that direct declaration,
+    // so the size buttons did nothing while the em-based gap kept moving.
+    // The same book puts 22px on its <h1> spans — those must stay untouched.
+    const css = buildStyleSheet(style({ dark: false }));
+    expect(css).toContain('> span[style*="font-size" i] {');
+    // The stepper still owns the size even under 使用书籍排版.
+    expect(buildStyleSheet(style({ dark: false, bookTypography: true }))).toContain(
+      '> span[style*="font-size" i] {\n  font-size: 18px !important;',
+    );
+
+    // Selector scope, checked against the book's own markup shape: body text
+    // matches, a heading span in an <h1> does not.
+    const doc = document.implementation.createHTMLDocument();
+    doc.body.innerHTML =
+      '<p><span style="font-size:16px">正文</span></p>' +
+      '<h1><span style="font-size:22px">标题</span></h1>';
+    const hit = doc.querySelectorAll(
+      ':is(p, li, blockquote, dd, dt, td, th) > span[style*="font-size" i]',
+    );
+    expect(hit).toHaveLength(1);
+    expect(hit[0]?.textContent).toBe("正文");
+  });
+
   it("carries the imported faces into the section, which is its own document", () => {
     // A book section is a document: the app's own @font-face never reaches it,
     // so the sheet has to bring the declaration along with the family name.
