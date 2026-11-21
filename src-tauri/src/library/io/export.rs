@@ -98,6 +98,25 @@ fn link(book_id: &str, annotation_id: &str) -> String {
     format!("{SCHEME}://book/{book_id}?annotation={annotation_id}")
 }
 
+/// The link home, with the highlight's ink folded into an HTML comment on the
+/// same line. Markdown has no colour vocabulary of its own; the comment is
+/// invisible when the page is read and rides on the line the importer already
+/// reads to close the entry, so that side needs no new parser state.
+fn markdown_link(book_id: &str, entry: &Entry) -> String {
+    let mut out = format!("[在 方册 中打开]({})", link(book_id, &entry.id));
+    let mut ink = Vec::new();
+    if let Some(color) = entry.color.as_deref() {
+        ink.push(format!("color={color}"));
+    }
+    if let Some(style) = entry.style.as_deref() {
+        ink.push(format!("style={style}"));
+    }
+    if !ink.is_empty() {
+        out.push_str(&format!(" <!-- ink:{} -->", ink.join(";")));
+    }
+    out
+}
+
 /// Which flavour of Markdown a file is written in.
 ///
 /// Two, because there are two audiences: a renderer that displays what it is
@@ -328,7 +347,9 @@ fn markdown_body(notes: &Notes, heading: &str, dialect: Dialect, blocks: &mut Ve
         }
         // The way back in. A link rather than a bare URL: note apps render the
         // one and leave the other as text that has to be copied out by hand.
-        blocks.push(format!("[在 方册 中打开]({})", link(&notes.id, &entry.id)));
+        // The ink rides in a comment on this line, which is where the importer
+        // reads it back (see `clippings::parse_markdown`).
+        blocks.push(markdown_link(&notes.id, entry));
     }
 }
 
@@ -1011,22 +1032,14 @@ mod tests {
                 "{name}"
             );
 
-            // Ink is the one thing the two shapes disagree about: the CSV has a
-            // column for it and the Markdown is written to be read as a page.
+            // Ink round-trips through both shapes: a CSV column, or the comment
+            // on a Markdown link line that a page reader never sees.
             let colours: Vec<Option<&str>> =
                 back.iter().map(|annotation| annotation.color.as_deref()).collect();
             let styles: Vec<Option<&str>> =
                 back.iter().map(|annotation| annotation.style.as_deref()).collect();
-            match name {
-                "notes.csv" => {
-                    assert_eq!(colours, vec![Some("#ffd12e"), None, None], "{name}");
-                    assert_eq!(styles, vec![None, Some("squiggly"), None], "{name}");
-                }
-                _ => {
-                    assert_eq!(colours, vec![None, None, None], "{name}");
-                    assert_eq!(styles, vec![None, None, None], "{name}");
-                }
-            }
+            assert_eq!(colours, vec![Some("#ffd12e"), None, None], "{name}");
+            assert_eq!(styles, vec![None, Some("squiggly"), None], "{name}");
         }
     }
 }

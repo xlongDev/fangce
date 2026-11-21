@@ -43,6 +43,8 @@ describe("a round trip through Markdown", () => {
     expect(parsed.highlights.map((entry) => entry.bookId)).toEqual(["b1", "b1", "b1"]);
     expect(parsed.highlights.map((entry) => entry.chapterIdx)).toEqual([0, 0, 2]);
     expect(parsed.highlights.map((entry) => entry.note)).toEqual(["我的批注", null, "记一笔"]);
+    // Ink rides in the link-line comment, so Markdown now keeps it too.
+    expect(parsed.highlights.map((entry) => entry.color)).toEqual(["#ffd12e", null, null]);
     expect(parsed.highlights[0]?.title).toBe("三体");
   });
 });

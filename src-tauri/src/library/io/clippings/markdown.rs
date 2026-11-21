@@ -18,9 +18,32 @@ use super::{Clipping, Parsed, carries_link, linked_book_id};
 ///   with the links dropped, and a highlight without its link is still a
 ///   highlight — a heading ends the entry just as well.
 ///
-/// Ink and shape are not in the Markdown at all; only the CSV carries them. So
-/// a Markdown import brings back what was read and what was written about it,
-/// and a CSV import also brings back the colour.
+/// Ink and shape ride in an HTML comment on the link line, where the page
+/// reader ignores them but this parser does not — so both exports bring back
+/// what was read, what was written about it, and the colour it was written in.
+/// Ink the exporter folded into a link line, as `<!-- ink:color=#ffd12e;style=underline -->`.
+///
+/// Absent is absent: an older export, or an entry with no colour chosen, has no
+/// comment and gets `None` — which is a different fact from a chosen yellow.
+fn linked_ink(line: &str) -> (Option<String>, Option<String>) {
+    let Some(rest) = line.split_once("<!-- ink:").map(|(_, rest)| rest) else {
+        return (None, None);
+    };
+    let Some(body) = rest.split_once("-->").map(|(body, _)| body) else {
+        return (None, None);
+    };
+    let mut color = None;
+    let mut style = None;
+    for pair in body.split(';') {
+        if let Some(value) = pair.trim().strip_prefix("color=") {
+            color = (!value.is_empty()).then(|| value.to_string());
+        } else if let Some(value) = pair.trim().strip_prefix("style=") {
+            style = (!value.is_empty()).then(|| value.to_string());
+        }
+    }
+    (color, style)
+}
+
 pub fn parse_markdown(source: &str) -> Parsed {
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let normalised = source.replace("\r\n", "\n").replace('\r', "\n");
@@ -87,12 +110,16 @@ pub fn parse_markdown(source: &str) -> Parsed {
         if carries_link(line) {
             let before = parsed.highlights.len();
             flush(&mut passage, &mut note, &mut in_note, &title, chapter, &mut parsed);
-            // The link closes the entry above it, so it is stamped onto the
-            // highlight `flush` just pushed — and only when it pushed one. An
-            // entry that ended at a heading instead would otherwise hand its id
-            // to its predecessor.
+            // The link closes the entry above it, so it and the ink in its
+            // comment are stamped onto the highlight `flush` just pushed — and
+            // only when it pushed one. An entry that ended at a heading instead
+            // would otherwise hand its id and colour to its predecessor.
             if parsed.highlights.len() > before {
-                parsed.highlights.last_mut().expect("just pushed").book_id = linked_book_id(line);
+                let last = parsed.highlights.last_mut().expect("just pushed");
+                last.book_id = linked_book_id(line);
+                let (color, style) = linked_ink(line);
+                last.color = color;
+                last.style = style;
             }
             continue;
         }
@@ -237,6 +264,28 @@ mod tests {
         assert_eq!(parsed.highlights.len(), 1);
         assert_eq!(parsed.highlights[0].text, "The Beauty of the House.");
         assert_eq!(parsed.highlights[0].chapter_idx, Some(0));
+    }
+
+    #[test]
+    fn markdown_reads_ink_from_the_link_comment() {
+        let source = blocks(&[
+            "# 《Piranesi》标注与笔记",
+            "## 第 1 章",
+            "> The Beauty of the House.",
+            &format!("[在 方册 中打开]({LINK}) <!-- ink:color=#ffd12e;style=squiggly -->"),
+        ]);
+        let parsed = parse_markdown(&source);
+        assert_eq!(parsed.highlights[0].color.as_deref(), Some("#ffd12e"));
+        assert_eq!(parsed.highlights[0].style.as_deref(), Some("squiggly"));
+
+        // No comment — an older export, or no colour chosen — is not yellow.
+        let plain = blocks(&[
+            "# 《Piranesi》标注与笔记",
+            "## 第 1 章",
+            "> The Beauty of the House.",
+            &format!("[在 方册 中打开]({LINK})"),
+        ]);
+        assert_eq!(parse_markdown(&plain).highlights[0].color, None);
     }
 
     /// The link is the exact half of the file, and both shapes carry it.

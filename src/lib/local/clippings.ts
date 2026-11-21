@@ -62,6 +62,24 @@ const linkedBookId = (line: string): string | null => {
   return id.length > 0 ? id : null;
 };
 
+/** Ink the exporter folded into a link line, as `<!-- ink:color=#ffd12e;style=underline -->`.
+ *  No comment means "never chose", not yellow. */
+const linkedInk = (line: string): { color: string | null; style: string | null } => {
+  const at = line.indexOf("<!-- ink:");
+  const end = line.indexOf("-->", at);
+  if (at < 0 || end < 0) return { color: null, style: null };
+  let color: string | null = null;
+  let style: string | null = null;
+  for (const pair of line.slice(at + "<!-- ink:".length, end).split(";")) {
+    const [key, ...rest] = pair.trim().split("=");
+    const value = rest.join("=").trim();
+    if (value.length === 0) continue;
+    if (key === "color") color = value;
+    if (key === "style") style = value;
+  }
+  return { color, style };
+};
+
 /** Whether a line carries one of this app's links. */
 const carriesLink = (line: string): boolean => linkedBookId(line) !== null;
 
@@ -138,11 +156,16 @@ export function parseMarkdown(source: string): Parsed {
     if (carriesLink(line)) {
       const before = parsed.highlights.length;
       flush();
-      // The link closes the entry above it, so it is stamped onto the highlight
-      // `flush` just pushed — and only when it pushed one. An entry that ended
-      // at a heading instead would otherwise hand its id to its predecessor.
+      // The link closes the entry above it, so it and its ink are stamped onto
+      // the highlight `flush` just pushed — and only when it pushed one. An
+      // entry that ended at a heading would hand its id and colour to its
+      // predecessor.
       if (parsed.highlights.length > before) {
-        parsed.highlights[parsed.highlights.length - 1]!.bookId = linkedBookId(line);
+        const last = parsed.highlights[parsed.highlights.length - 1]!;
+        last.bookId = linkedBookId(line);
+        const ink = linkedInk(line);
+        last.color = ink.color;
+        last.style = ink.style;
       }
       continue;
     }

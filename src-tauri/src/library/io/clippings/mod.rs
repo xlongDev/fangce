@@ -10,8 +10,8 @@
 //! Kindle entry is a title, an author and a passage. An export adds the reader's
 //! own note, the ink and the chapter the highlight sits in — which turns the
 //! search from "every chapter" into "the one it names" — and the CSV adds the
-//! paint style as well. The Markdown has no colour in it at all, because it is
-//! written to be read as a page rather than parsed.
+//! paint style as well — the Markdown carries both in a comment on its link
+//! line, so it stays readable as a page and still round-trips.
 //!
 //! An export also links back to the book it came from, and that link is the
 //! strongest thing either source carries: it names the book by id, so a renamed

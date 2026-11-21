@@ -49,6 +49,16 @@ export interface Notes {
 export const link = (bookId: string, annotationId: string): string =>
   `${SCHEME}://book/${bookId}?annotation=${annotationId}`;
 
+/** The link home, with the highlight's ink folded into an HTML comment on the
+ *  same line — invisible to a page reader, read back by `clippings.ts`. */
+const markdownLink = (entry: NoteEntry, bookId: string): string => {
+  const ink: string[] = [];
+  if (entry.color !== null) ink.push(`color=${entry.color}`);
+  if (entry.style !== null) ink.push(`style=${entry.style}`);
+  const comment = ink.length > 0 ? ` <!-- ink:${ink.join(";")} -->` : "";
+  return `[在 方册 中打开](${link(bookId, entry.id)})${comment}`;
+};
+
 /** One blockquote. Every line gets its own `>`, so a highlight spanning
  *  paragraphs stays a single quote instead of nesting its second half. */
 const quote = (text: string): string =>
@@ -122,8 +132,9 @@ function body(notes: Notes, heading: string, dialect: Dialect, blocks: string[])
     blocks.push(dialect === "obsidian" ? `> [!quote]\n${quote(entry.text)}` : quote(entry.text));
     if (entry.note !== null) blocks.push(entry.note);
     // The way back in. A link rather than a bare URL: note apps render the one
-    // and leave the other as text that has to be copied out by hand.
-    blocks.push(`[在 方册 中打开](${link(notes.id, entry.id)})`);
+    // and leave the other as text that has to be copied out by hand. The ink
+    // rides in a comment on this line, where the importer reads it back.
+    blocks.push(markdownLink(entry, notes.id));
   }
 }
 

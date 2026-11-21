@@ -97,6 +97,19 @@ describe("renderMarkdownMany", () => {
   });
 });
 
+describe("ink in a Markdown link", () => {
+  it("rides in a comment beside the link, and only when chosen", () => {
+    const inked = renderMarkdown(
+      notes([{ ...entry("a1", 0, "你好"), color: "#ffd12e", style: "underline" }]),
+    );
+    expect(inked).toContain(
+      "[在 方册 中打开](fangce://book/b1?annotation=a1) " +
+        "<!-- ink:color=#ffd12e;style=underline -->",
+    );
+    expect(renderMarkdown(notes([entry("a1", 0, "你好")]))).not.toContain("ink:");
+  });
+});
+
 describe("the link format", () => {
   it("is the one the frontend parses", () => {
     // The other end of this contract is `parseDeepLink`, and the desktop pins
