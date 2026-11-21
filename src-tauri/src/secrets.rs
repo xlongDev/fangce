@@ -465,6 +465,17 @@ pub fn seal_existing(library: &Library) -> AppResult<usize> {
 /// cannot be saved, rather than after. It mints nothing: a store with no key
 /// yet is fine, because the first save will create one.
 pub fn check(library: &Library) -> Result<(), String> {
+    // A debug build seals with the fixed dev key and never opens the OS store.
+    // It therefore has no keychain to lose, and a row sealed by a release
+    // build is unopenable here by design — not a broken credential store. The
+    // banner's own sentence ("主密钥已不在系统钥匙串里") would be false in a
+    // build that does not use a keychain at all, and telling the reader to
+    // retype a key only seals it under yet another key the release cannot
+    // open. Each build opens the rows it wrote; the release keeps the check.
+    if cfg!(debug_assertions) {
+        return Ok(());
+    }
+
     if let Err(err) = Entry::store_status() {
         return Err(format!("{}，凭据只能以明文保存在本机", store_reason(err)));
     }
@@ -483,10 +494,15 @@ pub fn check(library: &Library) -> Result<(), String> {
     if sealed.is_empty() {
         return Ok(());
     }
+    check_openable(&sealed, &master_key().map_err(|err| err.to_string())?)
+}
 
-    let key = master_key().map_err(|err| err.to_string())?;
+/// The release half of [`check`], with the key passed in so it is testable
+/// without a credential store. A row this key cannot open is the one real
+/// reason to tell the reader their credentials are unusable.
+fn check_openable(sealed: &[(&str, Value)], key: &[u8; KEY_BYTES]) -> Result<(), String> {
     for (row, value) in sealed {
-        open_fields(row, &value, &key).map_err(|err| err.to_string())?;
+        open_fields(row, value, key).map_err(|err| err.to_string())?;
     }
     Ok(())
 }
@@ -523,6 +539,48 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(open("ai.config:apiKey", &first, &key()).expect("open"), "same");
         assert_eq!(open("ai.config:apiKey", &second, &key()).expect("open"), "same");
+    }
+
+    #[test]
+    fn a_row_sealed_by_another_key_is_not_openable() {
+        // The release banner exists for this: a stored credential the current
+        // master key cannot open must fail the check rather than pass as empty.
+        let stored = seal_fields("ai.config", &json!({ "apiKey": "sk-旧" }), &key()).expect("seal");
+        assert!(check_openable(&[("ai.config", stored.clone())], &key()).is_ok());
+        assert!(
+            check_openable(&[("ai.config", stored)], &other_key()).is_err(),
+            "换个密钥封的行不该算凭据可用"
+        );
+    }
+
+    #[test]
+    fn a_dev_build_does_not_call_a_foreign_seal_a_broken_store() {
+        // Under cargo test, cfg!(debug_assertions) is true — the exact branch a
+        // dev build takes. A row sealed by another build's key used to make the
+        // global banner claim the keychain had lost its key, which is false in
+        // a build that never opens the keychain. The whole check is skipped.
+        let dir = std::env::temp_dir().join("fangce-secrets-check-dev");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let library = crate::db::Library::open(&dir).expect("open library");
+        let foreign = seal_fields("ai.config", &json!({ "apiKey": "sk-别构建封的" }), &other_key())
+            .expect("seal");
+        let raw = serde_json::to_string(&foreign).expect("json");
+        library
+            .with(|conn| {
+                conn.execute(
+                    "INSERT INTO settings (key, value, updated_at) VALUES ('ai.config', ?1, 0)",
+                    rusqlite::params![raw],
+                )?;
+                Ok(())
+            })
+            .expect("seed row");
+
+        // The raw row really is unopenable with the dev key — the state that
+        // produced the false banner — yet check() stays quiet in a dev build.
+        assert!(check_openable(&[("ai.config", foreign)], &key()).is_err());
+        assert!(check(&library).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
