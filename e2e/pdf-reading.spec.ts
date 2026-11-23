@@ -87,6 +87,10 @@ async function openPdf(page: Page, layout: "单页" | "双页") {
 
   await page.getByRole("button", { name: "阅读设置" }).first().click();
   await page.getByRole("button", { name: layout, exact: true }).click();
+  // PDF now ships with no page-turn animation. These tests exercise the
+  // animation machinery, so pick an animation explicitly instead of relying
+  // on the old default; a later setTransition() still overrides this.
+  await page.getByRole("button", { name: "左右平移", exact: true }).click();
   await page.keyboard.press("Escape");
 
   await expect(pageView(page, 1)).toHaveAttribute("data-pdf-raster", /^(cached|rendered)$/, {

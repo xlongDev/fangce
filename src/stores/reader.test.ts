@@ -4,6 +4,7 @@ import {
   DEFAULT_READER_SETTINGS,
   foldScrollDelta,
   pageIsNight,
+  pdfDefaults,
   updateReadingSpeed,
   useReaderSettings,
 } from "@/stores/reader";
@@ -289,6 +290,35 @@ describe("v14 indent and wash-granularity migration", () => {
     // The two the reader could have picked deliberately stay put.
     expect(v14({ speechGranularity: "paragraph" }).speechGranularity).toBe("paragraph");
     expect(v14({ speechGranularity: "word" }).speechGranularity).toBe("word");
+  });
+});
+
+describe("pdfDefaults", () => {
+  it("opens a PDF as a two-page spread with no page-turn animation", () => {
+    expect(pdfDefaults("pdf", undefined)).toEqual({
+      layoutMode: "double",
+      pageTransition: "none",
+    });
+    // An empty own-slot is the same as a fresh book.
+    expect(pdfDefaults("pdf", {})).toEqual({
+      layoutMode: "double",
+      pageTransition: "none",
+    });
+  });
+
+  it("leaves every other format on the app-wide default", () => {
+    for (const format of ["epub", "mobi", "azw3", "txt", "cbz", null, undefined]) {
+      expect(pdfDefaults(format, undefined)).toBeNull();
+    }
+  });
+
+  it("never overwrites a key the book already carries, even a falsy one", () => {
+    // A reader who set 单页 back, or picked an animation, keeps it on reopen.
+    // Presence — not truthiness — is the guard: "none"/"single" are real
+    // values, not "unset".
+    expect(pdfDefaults("pdf", { layoutMode: "single" })).toEqual({ pageTransition: "none" });
+    expect(pdfDefaults("pdf", { pageTransition: "pan" })).toEqual({ layoutMode: "double" });
+    expect(pdfDefaults("pdf", { layoutMode: "single", pageTransition: "flip" })).toBeNull();
   });
 });
 

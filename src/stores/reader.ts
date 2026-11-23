@@ -14,10 +14,13 @@ import type {
 import type { SpeechGranularity, SpeechPlayerStyle } from "@/features/reader/speech";
 import type { TtsWashStyle } from "@/features/reader/ttsWash";
 import type { ZhConvertMode } from "@/features/reader/zhConvert";
-import type { AnnotationStyle } from "@/types/ipc";
+import type { AnnotationStyle, BookFormat } from "@/types/ipc";
 
 /**
- * The settings a book may keep for itself: its page's typography and paper.
+ * The settings a book may keep for itself: its page's typography, paper and
+ * page turn. `layoutMode` and `pageTransition` are both here so a PDF can open
+ * as a two-page spread with no animation while an EPUB keeps the shipped
+ * single-page + pan default (see `pdfDefaults`).
  *
  * 对照阅读 puts two books side by side, and a reader who enlarges one of them
  * is talking about that book, not about the app. Everything *not* in this list
@@ -35,6 +38,7 @@ export const BOOK_SETTINGS = [
   "marginY",
   "bodyBold",
   "layoutMode",
+  "pageTransition",
   "zhConvert",
   "readingRuler",
   "pageTheme",
@@ -47,6 +51,30 @@ export type BookSetting = (typeof BOOK_SETTINGS)[number];
 export type BookSettings = Partial<Pick<ReaderState, BookSetting>>;
 
 const BOOK_SET: ReadonlySet<string> = new Set(BOOK_SETTINGS);
+
+/**
+ * Defaults a freshly opened book gets by format, seedable into its own slot.
+ *
+ * PDF ships as a two-page spread with no page-turn animation: a PDF is a fixed
+ * document, and the reader's first look at one should be two facing pages that
+ * do not fly across the screen. Every other format keeps the app-wide default
+ * (`single` + `pan`) — the EPUB first-launch decision is untouched.
+ *
+ * A key that is *present* in the book's own settings wins: the reader changed
+ * it (or an earlier seed already set it), so it is never overwritten. Checking
+ * key presence rather than truthiness matters here — `"none"` and `"single"`
+ * are legitimate values that must survive a re-open.
+ */
+export function pdfDefaults(
+  format: BookFormat | string | null | undefined,
+  own: BookSettings | undefined,
+): BookSettings | null {
+  if (format !== "pdf") return null;
+  const patch: BookSettings = {};
+  if (!own || !("layoutMode" in own)) patch.layoutMode = "double";
+  if (!own || !("pageTransition" in own)) patch.pageTransition = "none";
+  return Object.keys(patch).length > 0 ? patch : null;
+}
 
 /** Reading typography and viewing preferences, persisted across sessions. */
 interface ReaderState {

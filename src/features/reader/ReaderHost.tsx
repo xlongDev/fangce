@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useLayoutEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { BookOpen } from "@phosphor-icons/react";
 
@@ -7,6 +7,7 @@ import { GlassButton } from "@/components/glass/button";
 import { useAnnotations } from "@/hooks/useAnnotations";
 import { useBook, useReaderToc } from "@/hooks/useReader";
 import { useChrome } from "@/stores/chrome";
+import { pdfDefaults, useReaderSettings } from "@/stores/reader";
 // The ReaderView import closes a cycle with ReaderPage (which renders
 // SplitReader, which renders this). Both sides only call the other's function
 // declarations at render time, so the live bindings resolve; the alternative
@@ -85,6 +86,18 @@ export function ReaderHost({
 
   const book = useBook(bookId);
   const toc = useReaderToc(bookId);
+  // A freshly opened PDF starts as a two-page spread with no page-turn
+  // animation. Seed into its own slot before the surface mounts so the first
+  // frame is already double-page — a layout effect, not a passive one, or the
+  // reader sees one frame of the app-wide single-page default first. Keys the
+  // book already carries (a past seed or a reader's own change) win.
+  const format = book.data?.format;
+  useLayoutEffect(() => {
+    if (!bookId) return;
+    const own = useReaderSettings.getState().byBook[bookId];
+    const patch = pdfDefaults(format, own);
+    if (patch) useReaderSettings.getState().setBook(bookId, patch);
+  }, [bookId, format]);
   // Only when a link named a highlight: the row carries the position, and the
   // reader has to be arranged around it *before* it mounts. Resolving it later
   // would mean opening the book in the wrong place and then jumping — a scroll
