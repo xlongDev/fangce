@@ -188,6 +188,15 @@ html, body {
    trick at a larger size and must keep their hierarchy. */
 :is(p, li, blockquote, dd, dt, td, th) > span[style*="font-size" i] {
   font-size: ${fontSize}px !important;
+}
+/* The other shape: the book's own class puts an em multiplier on body
+   paragraphs (measured: p.calibre6 = 1.33333em in 《你的第一本哲学书》, so
+   the 15px minimum rendered at 20px). An !important on html/body only fixes
+   the inherited value — it cannot beat the paragraph's own relative
+   declaration, and the size stepper looks dead. Pin body-level blocks only;
+   headings and inline spans keep the book's hierarchy and its small print. */
+:is(p, li, blockquote, dd, dt, td, th) {
+  font-size: ${fontSize}px !important;
 }${
     forced
       ? `

@@ -182,6 +182,28 @@ describe("buildStyleSheet", () => {
     expect(hit[0]?.textContent).toBe("正文");
   });
 
+  it("pins the body size when the book bakes an em multiplier into its paragraph class", () => {
+    // 《你的第一本哲学书》 sets p.calibre6 { font-size: 1.33333em }, so even at
+    // the 15px minimum the body rendered at 20px — the inherited !important on
+    // html/body loses to the paragraph's own relative declaration. The rule
+    // must reach body blocks but leave headings and inline spans alone.
+    const css = buildStyleSheet(style({ fontSize: 15, dark: false }));
+    expect(css).toContain(
+      ":is(p, li, blockquote, dd, dt, td, th) {\n  font-size: 15px !important;",
+    );
+
+    const doc = document.implementation.createHTMLDocument();
+    doc.body.innerHTML =
+      '<h1 class="calibre5">第一章</h1>' +
+      '<p class="calibre6">正文<span class="footnote">注</span></p>';
+    const bodySelector = ":is(p, li, blockquote, dd, dt, td, th)";
+    const hit = doc.querySelectorAll(bodySelector);
+    expect(hit).toHaveLength(1);
+    expect(hit[0]?.tagName).toBe("P");
+    expect(doc.querySelector("h1")?.matches(bodySelector)).toBe(false);
+    expect(doc.querySelector("span")?.matches(bodySelector)).toBe(false);
+  });
+
   it("carries the imported faces into the section, which is its own document", () => {
     // A book section is a document: the app's own @font-face never reaches it,
     // so the sheet has to bring the declaration along with the family name.
