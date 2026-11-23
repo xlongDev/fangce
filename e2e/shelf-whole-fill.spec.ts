@@ -54,8 +54,13 @@ test("后台运行关掉弹窗后进度仍在", async ({ page }) => {
   const pill = page.locator("[data-fill-run-pill]");
   await expect(pill).toBeVisible();
   await expect(pill).toContainText("120 / 120", { timeout: 10_000 });
-  // The pill stays expanded through the run (only an explicit user fold sets
-  // `collapsed`), so the completion summary is already visible — no "expand"
-  // click to make, and no toggle that only exists in the folded state.
-  await expect(pill).toContainText("已补全");
+  // The shell strip is one line: status + count + buttons. The written/skipped
+  // breakdown belongs to the dialog, not to a second copy under the strip.
+  await expect(pill).not.toContainText("已补全");
+
+  // 「返回界面」 brings back the full run dialog (with the breakdown and its
+  // retry control) even though the run was started from a dialog we closed.
+  await pill.getByRole("button", { name: "返回界面" }).click();
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toContainText(/已补全 \d+ 本 · 跳过 \d+ 本/);
 });

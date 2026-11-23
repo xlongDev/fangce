@@ -5,7 +5,8 @@ import { CaretRight, MagicWand } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { OverlayPortal } from "@/components/glass/overlay";
-import { FillRunStatus } from "@/features/library/FillRunStatus";
+import { navigateTo } from "@/features/command/registerCoreCommands";
+import { runPillBottom, useRunPillSlot } from "@/features/library/runPillSlots";
 import { cn } from "@/lib/cn";
 import { DURATION, EASE_OUT, useMotion } from "@/lib/motion";
 import { useFillRun, type FillRun } from "@/stores/fillRun";
@@ -18,11 +19,10 @@ import { showToast } from "@/stores/toasts";
  * 停得下来。书架刷新和结束提示也放在这里而不是弹窗：弹窗常被关掉，
  * 而「跑完了书架没更新」正是关掉弹窗之后才会发生的问题。
  *
- * 🔴 只有**一个**玻璃面：头部胶囊与详情区同属一只容器，中间只隔一条 hairline。
- * 两个独立的玻璃块会在右下角叠成两条通知条（读者明确不要）。折叠时整面缩进
- * `rounded-full` 徽章，详情区随高度动画收走；计数常驻，状态文字与按钮各在
- * `1fr → 0fr` 的 grid 列里收起。纯 CSS 宽度过渡，不用 motion 的 layout FLIP
- * —— 重新采样 backdrop-filter 会读成抖动。折叠后的徽章本身是按钮，点它展开。
+ * 🔴 胶囊只在横向展开/折叠：状态文字与按钮各在 `1fr → 0fr` 的 grid 列里收起，
+ * 计数常驻。纯 CSS 宽度过渡，不用 motion 的 layout FLIP —— 重新采样
+ * backdrop-filter 会读成抖动。底部不再放详情：完整界面由「返回界面」打开
+ * （要先回书架，因为弹窗挂在 `ShelfBatchBar`）。
  */
 function describe(state: FillRun): string {
   const head = state.stopped
@@ -40,6 +40,12 @@ function describe(state: FillRun): string {
   return extra ? `${head}：${counts}，${extra}。` : `${head}：${counts}。`;
 }
 
+// 同 TagRunPill：对话框挂在书架页，后台跑时读者可能在任何页面。
+function openSheet() {
+  navigateTo("/");
+  useFillRun.getState().openSheet();
+}
+
 export function FillRunPill() {
   const m = useMotion();
   const queryClient = useQueryClient();
@@ -53,6 +59,7 @@ export function FillRunPill() {
   const collapsed = useFillRun((s) => s.collapsed);
   const setCollapsed = useFillRun((s) => s.setCollapsed);
   const wasRunning = useRef(false);
+  const slot = useRunPillSlot("fill", total > 0);
 
   useEffect(() => {
     const was = wasRunning.current;
@@ -86,7 +93,12 @@ export function FillRunPill() {
     m.reduce
       ? "none"
       : properties.map((property) => `${property} ${DURATION.base}s ${ease}`).join(", ");
-  const fold = transition(["grid-template-columns", "margin-left", "opacity"]);
+  const fold = transition([
+    "grid-template-columns",
+    "grid-template-rows",
+    "margin-left",
+    "opacity",
+  ]);
   const surface = transition(["padding", "gap", "border-radius"]);
 
   return (
@@ -99,10 +111,10 @@ export function FillRunPill() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: m.reduce ? 0 : 12 }}
             transition={m.panel}
-            // Above the guide pill (`bottom-24`) and the batch bar (`bottom-6`).
-            className="fixed right-6 bottom-40 z-40 flex max-w-[min(80vw,380px)] flex-col items-end"
+            // 与其他后台通知条共用一列，贴在批量管理栏上方（见 runPillSlots）。
+            className="fixed right-6 z-40 flex max-w-[min(80vw,380px)] flex-col items-end"
+            style={{ bottom: runPillBottom(slot) }}
           >
-            {/* 一只容器 = 一条通知条。头部与详情同面，只隔一条 hairline。 */}
             {/* oxlint-disable-next-line jsx-a11y/no-static-element-interactions -- role/tabIndex/onClick/onKeyDown 全部随 collapsed 一起出现 */}
             <div
               data-fill-run-surface
@@ -130,13 +142,13 @@ export function FillRunPill() {
               <div
                 className="flex items-center"
                 style={{
-                  padding: collapsed ? "5px 10px" : "8px 12px 8px 14px",
-                  gap: collapsed ? "6px" : "10px",
+                  padding: collapsed ? "4px 8px" : "8px 12px 8px 14px",
+                  gap: collapsed ? "5px" : "10px",
                   transition: surface,
                 }}
               >
                 <MagicWand
-                  size={collapsed ? 12 : 14}
+                  size={collapsed ? 11 : 14}
                   className="text-accent shrink-0"
                   aria-hidden
                 />
@@ -146,13 +158,15 @@ export function FillRunPill() {
                   className="grid min-w-0"
                   style={{
                     gridTemplateColumns: collapsed ? "0fr" : "1fr",
-                    marginLeft: collapsed ? "-6px" : "0px",
+                    // 也要收行：否则隐藏的按钮仍把徽章撑到 ~44px 高。
+                    gridTemplateRows: collapsed ? "0fr" : "1fr",
+                    marginLeft: collapsed ? "-5px" : "0px",
                     transition: fold,
                   }}
                 >
                   <div
                     className={cn(
-                      "min-w-0 overflow-hidden whitespace-nowrap",
+                      "min-h-0 min-w-0 overflow-hidden whitespace-nowrap",
                       collapsed && "pointer-events-none opacity-0",
                     )}
                     style={{ transition: fold }}
@@ -164,7 +178,7 @@ export function FillRunPill() {
                 <span
                   className={cn(
                     "text-text-2 shrink-0 tabular-nums",
-                    collapsed ? "text-[11px]" : "text-[12.5px]",
+                    collapsed ? "text-[10px] leading-[14px]" : "text-[12.5px]",
                   )}
                 >
                   {done} / {total}
@@ -175,17 +189,26 @@ export function FillRunPill() {
                   className="grid shrink-0"
                   style={{
                     gridTemplateColumns: collapsed ? "0fr" : "1fr",
-                    marginLeft: collapsed ? "-6px" : "0px",
+                    gridTemplateRows: collapsed ? "0fr" : "1fr",
+                    marginLeft: collapsed ? "-5px" : "0px",
                     transition: fold,
                   }}
                 >
                   <div
                     className={cn(
-                      "flex min-w-0 items-center gap-1 overflow-hidden",
+                      "flex min-h-0 min-w-0 items-center gap-1 overflow-hidden",
                       collapsed && "pointer-events-none opacity-0",
                     )}
                     style={{ transition: fold }}
                   >
+                    <GlassButton
+                      size="sm"
+                      variant="subtle"
+                      style={{ boxShadow: "none" }}
+                      onClick={openSheet}
+                    >
+                      返回界面
+                    </GlassButton>
                     {running ? (
                       <GlassButton
                         size="sm"
@@ -218,23 +241,6 @@ export function FillRunPill() {
                   </div>
                 </div>
               </div>
-
-              {/* 详情与头部同一只玻璃面，不是第二条浮层。 */}
-              <AnimatePresence initial={false}>
-                {!collapsed && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: "auto", opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={m.panel}
-                    className="border-hairline overflow-hidden border-t"
-                  >
-                    <div className="w-[min(80vw,380px)] p-4">
-                      <FillRunStatus />
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
             </div>
           </motion.div>
         )}

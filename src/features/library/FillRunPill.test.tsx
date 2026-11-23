@@ -6,6 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/ipc", () => ({
   ipc: { metadataPropose: vi.fn(), metadataApply: vi.fn() },
 }));
+const navigateTo = vi.fn();
+vi.mock("@/features/command/registerCoreCommands", () => ({
+  navigateTo: (to: string) => navigateTo(to),
+}));
 
 import { FillRunPill } from "@/features/library/FillRunPill";
 import { useFillRun } from "@/stores/fillRun";
@@ -40,6 +44,7 @@ function show(client = new QueryClient({ defaultOptions: { queries: { retry: fal
 beforeEach(() => {
   useFillRun.getState().reset();
   useToasts.setState({ toasts: [] });
+  navigateTo.mockClear();
 });
 
 describe("整架补全的常驻胶囊", () => {
@@ -68,18 +73,18 @@ describe("整架补全的常驻胶囊", () => {
     show();
 
     await userEvent.click(screen.getByRole("button", { name: "停止" }));
-    // 胶囊和详情面板各有一处「正在停止…」，两处都要立刻跟上。
-    expect(screen.getAllByText("正在停止…").length).toBeGreaterThan(0);
+    expect(screen.getByText("正在停止…")).toBeTruthy();
     expect(screen.getByRole("button", { name: "停止中" })).toBeTruthy();
   });
 
-  it("详情默认可见，折叠成小徽章后计数仍在，点徽章恢复", async () => {
+  it("横向折叠成小徽章后计数仍在，点徽章恢复；底部没有详情", async () => {
     act(() => {
       useFillRun.setState({
         running: false,
         total: 2,
         done: 2,
         written: 1,
+        skipped: 1,
         failed: 1,
         failures: [failure],
         stopped: null,
@@ -88,18 +93,35 @@ describe("整架补全的常驻胶囊", () => {
     });
     show();
 
-    expect(await screen.findByText(/失败明细/)).toBeTruthy();
-    expect(screen.getByText("书本甲")).toBeTruthy();
-    expect(screen.getByText("查询失败：目录没有回应")).toBeTruthy();
-
+    const surface = document.querySelector("[data-fill-run-surface]");
+    expect(surface?.textContent).toContain("补全完成");
+    expect(surface?.textContent).toContain("2 / 2");
+    expect(screen.getByRole("button", { name: "返回界面" })).toBeTruthy();
+    // 进度明细与失败清单只在弹窗里，不在这条通知条上再画一遍。
+    expect(surface?.textContent).not.toContain("已补全");
+    expect(surface?.textContent).not.toContain("失败明细");
+    // 折叠只是横向收起，详情面板不回来。
     await userEvent.click(screen.getByRole("button", { name: "折叠补全进度" }));
     expect(useFillRun.getState().collapsed).toBe(true);
-    // 折叠后只剩图标 + 计数，计数还在。
     expect(screen.getAllByText("2 / 2").length).toBeGreaterThan(0);
+    expect(document.querySelector("[data-fill-run-surface]")?.textContent).not.toContain(
+      "失败明细",
+    );
 
     await userEvent.click(screen.getByRole("button", { name: "展开补全进度" }));
     expect(useFillRun.getState().collapsed).toBe(false);
     expect(screen.getByRole("button", { name: "折叠补全进度" })).toBeTruthy();
+  });
+
+  it("返回界面先回书架，再打开完整补全界面", async () => {
+    act(() => {
+      useFillRun.setState({ running: true, total: 10, done: 4 });
+    });
+    show();
+
+    await userEvent.click(screen.getByRole("button", { name: "返回界面" }));
+    expect(navigateTo).toHaveBeenCalledWith("/");
+    expect(useFillRun.getState().sheetOpen).toBe(true);
   });
 
   it("结束时刷新书架并报一次结果", async () => {
@@ -129,7 +151,7 @@ describe("整架补全的常驻胶囊", () => {
     );
   });
 
-  it("进度与详情合在同一条浮层里，不再叠成两条通知条", async () => {
+  it("只有一只玻璃面，不再叠成两条通知条", () => {
     act(() => {
       useFillRun.setState({ running: true, total: 10, done: 4, written: 3, skipped: 1 });
     });
@@ -139,6 +161,7 @@ describe("整架补全的常驻胶囊", () => {
     expect(surfaces.length).toBe(1);
     const text = surfaces[0]?.textContent ?? "";
     expect(text).toContain("补全中");
-    expect(text).toContain("已补全 3 本");
+    expect(text).toContain("4 / 10");
+    expect(text).not.toContain("已补全 3 本");
   });
 });

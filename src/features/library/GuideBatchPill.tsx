@@ -5,6 +5,7 @@ import { GlassButton } from "@/components/glass/button";
 import { OverlayPortal } from "@/components/glass/overlay";
 import { cn } from "@/lib/cn";
 import { DURATION, EASE_OUT, useMotion } from "@/lib/motion";
+import { runPillBottom, useRunPillSlot } from "@/features/library/runPillSlots";
 import { useGuideBatch } from "@/stores/guideBatch";
 
 /**
@@ -53,22 +54,25 @@ export function GuideBatchPill() {
   // the length would spring while the height and spacing snapped.
   const surface = transition(["padding", "gap"]);
   const hasNews = run !== null && (run.failed.length > 0 || run.status === "stopping");
+  const visible = run !== null && run.status !== "done";
+  const slot = useRunPillSlot("guide", visible);
 
   return (
     <OverlayPortal>
       <AnimatePresence>
-        {run && run.status !== "done" && (
+        {visible && (
           <motion.div
             initial={{ opacity: 0, y: m.reduce ? 0 : 12 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: m.reduce ? 0 : 12 }}
             transition={m.panel}
-            // Above the batch bar's own bottom edge (`bottom-6` + ~48px), so
-            // the two can never overlap however wide the selection grows.
+            // Shared stack with the other run pills: the visible ones sit just
+            // above the batch bar, never over it or over each other.
             // Named for `useShelfSelection`'s empty-space exit: pressing the
             // pill or badge is not pressing empty shelf.
             data-guide-batch-pill
-            className="fixed right-6 bottom-24 z-40"
+            className="fixed right-6 z-40"
+            style={{ bottom: runPillBottom(slot) }}
           >
             {/* The role is only absent when the pill is unfolded, and then
                 there is no onClick either — the static rule cannot see the

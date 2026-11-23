@@ -442,10 +442,15 @@ export function ShelfBatchBar({
         </div>
       </GlassDialog>
 
+      {/* The shell pill can reopen this dialog from any page; it navigates to
+          the shelf first, because this is where the dialog is mounted. */}
       <BatchFillDialog
-        open={fillIds !== null}
+        open={fillIds !== null || fillRun.sheetOpen}
         ids={fillIds ?? []}
-        onClose={() => setFillIds(null)}
+        onClose={() => {
+          setFillIds(null);
+          useFillRun.getState().closeSheet();
+        }}
       />
 
       <AiTagDialog

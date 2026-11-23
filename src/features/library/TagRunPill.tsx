@@ -6,6 +6,7 @@ import { CaretRight, Tag } from "@phosphor-icons/react";
 import { GlassButton } from "@/components/glass/button";
 import { OverlayPortal } from "@/components/glass/overlay";
 import { navigateTo } from "@/features/command/registerCoreCommands";
+import { runPillBottom, useRunPillSlot } from "@/features/library/runPillSlots";
 import { cn } from "@/lib/cn";
 import { DURATION, EASE_OUT, useMotion } from "@/lib/motion";
 import { describeTagReview, describeTagRun, useTagRun } from "@/stores/tagRun";
@@ -71,6 +72,7 @@ export function TagRunPill() {
   const reviewRunning = review?.running ?? false;
   const showWrite = total > 0 && !review;
   const showReview = review !== null;
+  const slot = useRunPillSlot("tag", showWrite || showReview);
 
   // 「返回界面」要先回书架：对话框挂在 ShelfBatchBar（书架页），后台跑时
   // 读者可能已在阅读器或设置页。只置 reviewSheetOpen 不导航，对话框没挂载。
@@ -128,8 +130,9 @@ export function TagRunPill() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: m.reduce ? 0 : 12 }}
             transition={m.panel}
-            // Above the fill pill (`bottom-40`), guide (`bottom-24`) and batch bar (`bottom-6`).
-            className="fixed right-6 bottom-52 z-40"
+            // 与其他后台通知条共用一列，贴在批量管理栏上方（见 runPillSlots）。
+            className="fixed right-6 z-40"
+            style={{ bottom: runPillBottom(slot) }}
           >
             {/* oxlint-disable-next-line jsx-a11y/no-static-element-interactions -- role/tabIndex/onClick/collected keys are all conditional on `collapsed` */}
             <div

@@ -49,9 +49,13 @@ export interface FillRun {
   retryPending: () => void;
   /** Why it stopped before the end, or `null` when it ran to completion. */
   stopped: string | null;
-  /** 胶囊折成小徽章（照 GuideBatchPill）；纯展示态，循环照跑。 */
+  /** 胶囊横向折叠成小徽章；纯展示态，循环照跑。 */
   collapsed: boolean;
   setCollapsed: (collapsed: boolean) => void;
+  /** 通知条上的「返回界面」：完整补全界面挂在书架的 ShelfBatchBar 上。 */
+  sheetOpen: boolean;
+  openSheet: () => void;
+  closeSheet: () => void;
   start: (ids: string[], replaceCovers?: boolean) => void;
   cancel: () => void;
   reset: () => void;
@@ -102,6 +106,7 @@ const idle = {
   replaceCovers: false,
   stopped: null as string | null,
   collapsed: false,
+  sheetOpen: false,
 };
 
 export const useFillRun = create<FillRun>((set, get) => ({
@@ -111,6 +116,8 @@ export const useFillRun = create<FillRun>((set, get) => ({
     set(idle);
   },
   setCollapsed: (collapsed) => set({ collapsed }),
+  openSheet: () => set({ sheetOpen: true }),
+  closeSheet: () => set({ sheetOpen: false }),
   cancel: () => {
     set({ cancelled: true });
     // Shown by every surface reading the store: the press is acknowledged now,
