@@ -55,6 +55,29 @@ jobs:
         with:
           path: dist
 
+      # upload-pages-artifact reports success and hands back an artifact ID,
+      # but the list endpoint deploy-pages queries can still return 0 for a
+      # beat (seen 2026-11-23: ID 14832738630 uploaded at :11.221, deploy at
+      # :11.861 found none). deploy-pages@v4 does not retry, so the whole
+      # deployment failed on an artifact that was there all along. Probe the
+      # same endpoint it uses until the artifact shows up before handing over.
+      - name: Wait for the Pages artifact to become visible
+        run: |
+          for attempt in $(seq 1 12); do
+            count=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+              --jq '[.artifacts[] | select(.name == "github-pages")] | length')
+            if [ "$count" -ge 1 ]; then
+              echo "Pages artifact visible after ${attempt} attempt(s)"
+              exit 0
+            fi
+            echo "Attempt ${attempt}: artifact not listed yet, retrying in 5s"
+            sleep 5
+          done
+          echo "Pages artifact was uploaded but never became visible" >&2
+          exit 1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
