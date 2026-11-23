@@ -457,10 +457,14 @@ test("手柄翻页：肩键、方向键、摇杆三者都驱动阅读，滚动�
   await page.waitForTimeout(500);
   await page.keyboard.press("Escape");
   await page.waitForTimeout(800);
-  const beforeBack = await progress(page);
+  // 🔴 这里仍是双页布局：R1 翻的是章内的列，全书百分比可以一步不动——本文件
+  // 上面的双页断言就实测过 33 → 33（第 405–410 行）。用页脚进度当 witness 会
+  // 在「恰好没跨章」时假失败（CI 上 66 → 66，两次重试都红）。读列位置，和
+  // 上面双页那段用同一个证人。
+  const beforeBack = await spreadColumn(page);
   await press(page, 5);
   await page.waitForTimeout(900);
-  expect(await progress(page), "重新开启之后手柄还是不动").toBeGreaterThan(beforeBack);
+  expect(await spreadColumn(page), "重新开启之后手柄还是不动").not.toBe(beforeBack);
 });
 
 /**
