@@ -142,14 +142,14 @@ const QuoteCardDialog = lazy(() =>
 /**
  * How long the page has to stand still before the reading ruler re-measures.
  *
- * Longer than the longest page-turn animation (450 ms, `flipPage`'s slide):
- * that animation is a *transform* on the scroller, and the lines' measured
+ * Longer than the longest page-turn animation (500 ms, the PDF curl and fold):
+ * a paged turn is a *transform* on the moving sheet, and the lines' measured
  * positions include it, so a measure taken while one is running reads a page in
  * flight and parks the band on whatever block a half-slid page put under it.
  * The animation starts after the jump's own scroll event, so the settle has to
  * outlast it rather than the event.
  */
-const RULER_SETTLE_MS = 520;
+const RULER_SETTLE_MS = 570;
 
 /** Gutter between the two columns of a spread: the page margin itself, so the
  * centre gap matches the outer margins and both paged modes share one rhythm. */
@@ -1195,8 +1195,8 @@ export function ReaderView({
       // The same dead turn as the foliate branch above, one level down: at the
       // last column of the last chapter `goTo` clamps and nothing moves, so a
       // turn announced here would take the ruler with it and never bring it
-      // back. (PDF steps its own pages and reverts at the ends — see
-      // `pdfTurn` — so it is left alone.)
+      // back. PDF's own edges are checked in the branch below, where its step
+      // (one page, or two in a spread) is known.
       const atBookEdge = dir === 1 ? chapterIdx >= chapters.length - 1 : chapterIdx <= 0;
       if (!isPdf && atColumnEdge && atBookEdge) return null;
       // A prose page turn is a page the reader arrives on: the ruler is told the
@@ -1214,6 +1214,7 @@ export function ReaderView({
           dir,
           scrub,
           chapterIdx,
+          chapterCount: chapters.length,
           revert: () => goTo(chapterIdx),
           goTo,
           pageTransition,

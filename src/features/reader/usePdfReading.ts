@@ -1,11 +1,11 @@
-import { useCallback, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 import type { PdfOutlineItem } from "@/lib/pdf";
 import { usePdfOutline } from "@/hooks/useReader";
 import type { Annotation, ChapterMeta } from "@/types/ipc";
 import { applyPosition } from "@/features/reader/paging";
 import type { CurlTurn } from "@/features/reader/pdfCurl";
-import { snapshotPdfTurn } from "@/features/reader/pdfTurn";
+import { cancelPdfTurn, snapshotPdfTurn } from "@/features/reader/pdfTurn";
 import { globalProgress } from "@/features/reader/progress";
 import { relayRulerLayout } from "@/features/reader/rulerPointer";
 import type { PendingSelection, TextRange } from "@/features/reader/selection";
@@ -83,6 +83,8 @@ export interface PdfReading {
     scrub: boolean;
     /** The page the turn starts from (its chapter index). */
     chapterIdx: number;
+    /** Total pages — a turn past either end has nowhere to arrive. */
+    chapterCount: number;
     /** Puts the reader back where the turn began, while the sheet still covers. */
     revert: () => void;
     goTo: (idx: number) => void;
@@ -220,16 +222,25 @@ export function usePdfReading({
   );
 
   const turn = useCallback<PdfReading["turn"]>(
-    ({ dir, scrub, chapterIdx, revert, goTo, pageTransition, reduce }) => {
-      // A PDF page fills the viewport exactly — there is no column to slide,
-      // so a flip is a page step (two at a time in the spread).
+    ({ dir, scrub, chapterIdx, chapterCount, revert, goTo, pageTransition, reduce }) => {
+      // One page per turn in both layouts. A spread shows two pages, but it
+      // turns like a book: the outer page crosses the spine and becomes the
+      // next spread's inner page. Stepping two used to shove both halves at
+      // once, which read as two sheets sliding past each other rather than a
+      // page being turned (see `pdfTurn.ts` for the travel and the outer page).
       //
       // The page being left has to be copied out before the step: it lives in
       // the canvas pdf.js is about to redraw, so once the number changes there
       // is nothing left to animate. The copy rides over the incoming page
-      // until the turn is done (see `pdfTurn.ts`). Scroll layout skips it —
-      // there the step is a scroll through a continuous strip.
-      const step = layoutModeRef.current === "double" ? 2 : 1;
+      // until the turn is done. Scroll layout skips it — there the step is a
+      // scroll through a continuous strip.
+      const step = 1;
+      // `goTo` clamps the index, so a turn past the last page (or before the
+      // first) would leave the reader showing the same page — but only *after*
+      // the snapshot had already played a full turn over it. Refuse at the
+      // edge, before there is anything to animate. This is the check the
+      // shared `flip` preamble skips for PDF.
+      if (chapterIdx + dir * step < 0 || chapterIdx + dir * step >= chapterCount) return null;
       const sheet =
         layoutModeRef.current !== "scroll"
           ? snapshotPdfTurn(viewportRef.current, dir, pageTransition, reduce)
@@ -251,6 +262,32 @@ export function usePdfReading({
     },
     [layoutModeRef, viewportRef],
   );
+
+  // A sheet is pinned in pixels to the page boxes measured at turn start. A
+  // pane resize in the middle of a turn — the sidebar spring, or the width pin
+  // releasing after it — moves those boxes underneath the sheet, so the sheet
+  // ends up covering only part of the new page and exposes a strip of another
+  // one. Watch both widths: the viewport changes as soon as the sidebar moves,
+  // the pinned content when the pin releases. Either way the page has already
+  // landed, so dropping the decoration is all the recovery a resize needs.
+  useEffect(() => {
+    if (!isPdf || !paged) return;
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const content = viewport.querySelector<HTMLElement>("[data-reading-content]");
+    const widths = () =>
+      `${Math.round(viewport.clientWidth)}:${content ? Math.round(content.clientWidth) : 0}`;
+    let last = widths();
+    const observer = new ResizeObserver(() => {
+      const now = widths();
+      if (now === last) return;
+      last = now;
+      cancelPdfTurn(viewport);
+    });
+    observer.observe(viewport);
+    if (content) observer.observe(content);
+    return () => observer.disconnect();
+  }, [isPdf, paged, viewportRef]);
 
   return {
     zoom,

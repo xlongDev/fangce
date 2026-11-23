@@ -14,8 +14,9 @@ import type { ChapterMeta } from "@/types/ipc";
  * reload. That translation is what this hook keeps, and three of its promises
  * fail silently: a slot height of 0 puts the book back on its first page with
  * nothing on screen to say so, a suppress notice consumed twice re-applies
- * fraction 0 over a jump that already landed, and a spread turn that steps one
- * page leaves the reader a page short of where the arrow key pointed.
+ * fraction 0 over a jump that already landed, and a turn at either end that
+ * animates the page it never leaves. A spread turns one page at a time, like a
+ * book: the outer page crosses to the inner side of the next spread.
  */
 
 const CHAPTERS: ChapterMeta[] = [
@@ -117,13 +118,14 @@ describe("usePdfReading", () => {
     expect(el.scrollTop).toBe(1000);
   });
 
-  it("turns a spread two pages at a time, and one page in the single layout", () => {
+  it("turns one page at a time in both the single and spread layouts", () => {
     const goTo = vi.fn();
     const single = renderReading({ layoutModeRef: layout("single") }).result.current;
     single.turn({
       dir: 1,
       scrub: false,
       chapterIdx: 1,
+      chapterCount: CHAPTERS.length,
       revert: () => {},
       goTo,
       pageTransition: "none",
@@ -136,12 +138,55 @@ describe("usePdfReading", () => {
       dir: -1,
       scrub: false,
       chapterIdx: 3,
+      chapterCount: CHAPTERS.length,
       revert: () => {},
       goTo,
       pageTransition: "none",
       reduce: null,
     });
-    expect(goTo).toHaveBeenLastCalledWith(1);
+    // A spread turns its outer page, not both halves: page 4's left neighbour
+    // becomes page 3's right neighbour, so the turn lands on page 3.
+    expect(goTo).toHaveBeenLastCalledWith(2);
+  });
+
+  it("refuses a turn past either end without animating the page it stays on", () => {
+    const goTo = vi.fn();
+    const single = renderReading({ layoutModeRef: layout("single") }).result.current;
+    for (const [dir, chapterIdx] of [
+      [1, CHAPTERS.length - 1],
+      [-1, 0],
+    ] as const) {
+      expect(
+        single.turn({
+          dir,
+          scrub: false,
+          chapterIdx,
+          chapterCount: CHAPTERS.length,
+          revert: () => {},
+          goTo,
+          pageTransition: "pan",
+          reduce: null,
+        }),
+      ).toBeNull();
+    }
+    expect(goTo).not.toHaveBeenCalled();
+
+    // The spread steps one page too: its last page has no next page to arrive
+    // at, even though the screen still shows a pair.
+    const spread = renderReading({ layoutModeRef: layout("double") }).result.current;
+    expect(
+      spread.turn({
+        dir: 1,
+        scrub: false,
+        chapterIdx: CHAPTERS.length - 1,
+        chapterCount: CHAPTERS.length,
+        revert: () => {},
+        goTo,
+        pageTransition: "pan",
+        reduce: null,
+      }),
+    ).toBeNull();
+    expect(goTo).not.toHaveBeenCalled();
   });
 
   it("opens the pill on a PDF text-layer selection, page-local", () => {

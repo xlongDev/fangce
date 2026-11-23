@@ -48,8 +48,16 @@ export interface CurlShot {
   h: number;
 }
 
+/** The box a curl may paint into, in host coordinates. */
+export interface CurlClip {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface CurlHandle {
-  /** The overlay: sized to the viewport, transparent where the sheet is not. */
+  /** The overlay: sized to the clip box, transparent where the sheet is not. */
   canvas: HTMLCanvasElement;
   /** Draws the sheet at `progress`, 0 flat through 1 fully turned. */
   draw(progress: number): void;
@@ -58,7 +66,7 @@ export interface CurlHandle {
 }
 
 /** The box the shots cover together — the sheet the curl bends. */
-function bounds(shots: CurlShot[]) {
+export function bounds(shots: CurlShot[]) {
   let x0 = Infinity;
   let y0 = Infinity;
   let x1 = -Infinity;
@@ -78,11 +86,17 @@ function bounds(shots: CurlShot[]) {
  * that is the colour a turned sheet has to show on its far side. A night-mode
  * page therefore turns to night paper, not to white.
  */
-function paperInk(shot: CurlShot): [number, number, number] {
+export function paperInk(shot: CurlShot): [number, number, number] {
   try {
     const context = shot.canvas.getContext("2d");
-    const data = context?.getImageData(2, 2, 1, 1).data;
-    if (data) return [data[0]! / 255, data[1]! / 255, data[2]! / 255];
+    // Not the corner: the turn's own snapshot has its rounded corners cut out
+    // of the bitmap, so (2, 2) is transparent black there — sampling it painted
+    // the folded-over back of the sheet black. The top edge halfway across is
+    // paper in every layout and outside every corner cut.
+    const data = context?.getImageData(Math.floor(shot.canvas.width / 2), 2, 1, 1).data;
+    if (data && (data[3] ?? 0) > 0) {
+      return [data[0]! / 255, data[1]! / 255, data[2]! / 255];
+    }
   } catch {
     // A zero-sized canvas throws; the default below is the answer anyway.
   }
@@ -289,10 +303,11 @@ export function curlGeometry(
  * unavailable, so the caller can fall back to the flat fold.
  */
 export function createCurl(
-  host: HTMLElement,
   shots: CurlShot[],
   /** 1 forward, -1 back: which edge the sheet lifts from. */
   dir: 1 | -1,
+  /** The book box the turn is allowed to paint into, in host coordinates. */
+  clip: CurlClip,
 ): CurlHandle | null {
   if (shots.length === 0) return null;
   const rect = bounds(shots);
@@ -321,8 +336,11 @@ export function createCurl(
   // Marks which of the two turn renderers ran, for the browser test that has
   // to tell a bent sheet from a folded one.
   canvas.dataset.pdfCurl = "";
-  const width = Math.max(1, Math.round(host.clientWidth * dpr));
-  const height = Math.max(1, Math.round(host.clientHeight * dpr));
+  // The shader's clip space is the book box, not the reading viewport: a curled
+  // page that swings past the paper's edge must disappear there rather than
+  // travel across the margin the reader added around the book.
+  const width = Math.max(1, Math.round(clip.w * dpr));
+  const height = Math.max(1, Math.round(clip.h * dpr));
   canvas.width = width;
   canvas.height = height;
   const gl = canvas.getContext("webgl", {
@@ -407,8 +425,8 @@ export function createCurl(
   const uRadius = at("uRadius");
   const uBack = at("uBack");
 
-  gl.uniform4f(uRect, rect.x, rect.y, rect.w, rect.h);
-  gl.uniform2f(uSize, host.clientWidth, host.clientHeight);
+  gl.uniform4f(uRect, rect.x - clip.x, rect.y - clip.y, rect.w, rect.h);
+  gl.uniform2f(uSize, clip.w, clip.h);
   gl.uniform1f(at("uFlipV"), uploadsTopDown() ? 0 : 1);
   // Forward lifts the outer (right) edge and drives the fold leftward, so the
   // turned-away side grows to the right of it; backward is the mirror.
@@ -425,7 +443,7 @@ export function createCurl(
     draw(progress: number) {
       const { radius, offset } = curlGeometry(rect.w, progress, dir);
       gl.uniform1f(uRadius, radius);
-      gl.uniform2f(uFold, rect.x + offset, rect.y);
+      gl.uniform2f(uFold, rect.x - clip.x + offset, rect.y - clip.y);
       gl.viewport(0, 0, width, height);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
