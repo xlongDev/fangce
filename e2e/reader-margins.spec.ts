@@ -62,6 +62,16 @@ test("页边距越宽，正文越窄", async ({ page }) => {
   }
   // 而且幅度得是真的：两端至少差出一行的几分之一，不是浮点噪声。
   expect(narrow - wide, `两端只差 ${narrow - wide}px：${widths.join(" → ")}`).toBeGreaterThan(60);
+
+  // 滑块越过最宽预设（224）后还得继续收窄正文：若被 240px 页宽地板吃掉，
+  // 放宽上限就只是读数变大、排版没动。
+  const horizontal = page.locator('input[type="range"]').first();
+  await horizontal.focus();
+  await page.keyboard.press("End");
+  await expect(horizontal).toHaveValue("288");
+  await page.waitForTimeout(900);
+  const atMax = await page.evaluate(TEXT_WIDTH);
+  expect(atMax, `上限没有比「特宽」更窄：${wide} → ${atMax}`).toBeLessThan(wide);
 });
 
 /**

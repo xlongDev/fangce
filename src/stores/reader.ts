@@ -447,9 +447,11 @@ export const PARA_GAPS = [0.6, 0.9, 1.2, 1.6] as const;
  * 所以这里的 px 现在是「真的会变窄的 px」，宽的那一端才值得给足。 */
 export const MARGIN_X_PRESETS = [32, 86, 160, 224] as const;
 
-/** Bounds for the continuous side/top/bottom margin sliders, and defaults. */
+/** Bounds for the continuous side/top/bottom margin sliders, and defaults.
+ *  2026-11-23: 左右上限 224 → 288；foliate 的页宽在 marginX=356 才碰到
+ *  240px 地板，288 时仍是 316px，所以这段新增区间真的会把正文继续收窄。 */
 export const MIN_MARGIN_X = 1;
-export const MAX_MARGIN_X = 224;
+export const MAX_MARGIN_X = 288;
 export const MIN_MARGIN_Y = 1;
 export const MAX_MARGIN_Y = 160;
 export const DEFAULT_MARGIN_X = 86;
