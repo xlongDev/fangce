@@ -108,6 +108,16 @@ describe("整架补全的常驻胶囊", () => {
       "失败明细",
     );
 
+    // 折叠态默认只剩图标；指针进来才把计数横向弹出，离开又收回去。
+    const badge = screen.getByRole("button", { name: "展开补全进度" });
+    const count = document.querySelector<HTMLElement>("[data-fill-run-count]");
+    await userEvent.unhover(badge);
+    expect(count?.style.gridTemplateColumns).toBe("0fr");
+    await userEvent.hover(badge);
+    expect(count?.style.gridTemplateColumns).toBe("1fr");
+    await userEvent.unhover(badge);
+    expect(count?.style.gridTemplateColumns).toBe("0fr");
+
     await userEvent.click(screen.getByRole("button", { name: "展开补全进度" }));
     expect(useFillRun.getState().collapsed).toBe(false);
     expect(screen.getByRole("button", { name: "折叠补全进度" })).toBeTruthy();

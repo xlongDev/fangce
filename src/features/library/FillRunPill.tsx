@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
 import { CaretRight, MagicWand } from "@phosphor-icons/react";
@@ -19,10 +19,11 @@ import { showToast } from "@/stores/toasts";
  * 停得下来。书架刷新和结束提示也放在这里而不是弹窗：弹窗常被关掉，
  * 而「跑完了书架没更新」正是关掉弹窗之后才会发生的问题。
  *
- * 🔴 胶囊只在横向展开/折叠：状态文字与按钮各在 `1fr → 0fr` 的 grid 列里收起，
- * 计数常驻。纯 CSS 宽度过渡，不用 motion 的 layout FLIP —— 重新采样
- * backdrop-filter 会读成抖动。底部不再放详情：完整界面由「返回界面」打开
- * （要先回书架，因为弹窗挂在 `ShelfBatchBar`）。
+ * 🔴 胶囊只在横向展开/折叠：状态文字与按钮各在 `1fr → 0fr` 的 grid 列里收起。
+ * 折叠态默认只剩图标；hover/键盘聚焦时计数在 `0fr → 1fr` 的列里弹出，指针
+ * 未移入时不占宽度。纯 CSS 宽度过渡，不用 motion 的 layout FLIP —— 重新
+ * 采样 backdrop-filter 会读成抖动。底部不再放详情：完整界面由「返回界面」
+ * 打开（要先回书架，因为弹窗挂在 `ShelfBatchBar`）。
  */
 function describe(state: FillRun): string {
   const head = state.stopped
@@ -58,6 +59,7 @@ export function FillRunPill() {
   const reset = useFillRun((s) => s.reset);
   const collapsed = useFillRun((s) => s.collapsed);
   const setCollapsed = useFillRun((s) => s.setCollapsed);
+  const [peek, setPeek] = useState(false);
   const wasRunning = useRef(false);
   const slot = useRunPillSlot("fill", total > 0);
 
@@ -100,6 +102,8 @@ export function FillRunPill() {
     "opacity",
   ]);
   const surface = transition(["padding", "gap", "border-radius"]);
+  // 折叠态：指针/焦点进来才把计数从 0 宽弹出；展开态始终可见。
+  const countHidden = collapsed && !peek;
 
   return (
     <OverlayPortal>
@@ -115,13 +119,17 @@ export function FillRunPill() {
             className="fixed right-6 z-40 flex max-w-[min(80vw,380px)] flex-col items-end"
             style={{ bottom: runPillBottom(slot) }}
           >
-            {/* oxlint-disable-next-line jsx-a11y/no-static-element-interactions -- role/tabIndex/onClick/onKeyDown 全部随 collapsed 一起出现 */}
+            {/* oxlint-disable-next-line jsx-a11y/no-static-element-interactions -- role/tabIndex/交互事件全部随 collapsed 一起出现 */}
             <div
               data-fill-run-surface
               role={collapsed ? "button" : undefined}
               tabIndex={collapsed ? 0 : undefined}
               aria-label={collapsed ? "展开补全进度" : undefined}
               onClick={collapsed ? () => setCollapsed(false) : undefined}
+              onMouseEnter={collapsed ? () => setPeek(true) : undefined}
+              onMouseLeave={collapsed ? () => setPeek(false) : undefined}
+              onFocus={collapsed ? () => setPeek(true) : undefined}
+              onBlur={collapsed ? () => setPeek(false) : undefined}
               onKeyDown={
                 collapsed
                   ? (event) => {
@@ -175,14 +183,32 @@ export function FillRunPill() {
                   </div>
                 </div>
 
-                <span
-                  className={cn(
-                    "text-text-2 shrink-0 tabular-nums",
-                    collapsed ? "text-[10px] leading-[14px]" : "text-[12.5px]",
-                  )}
+                <div
+                  data-fill-run-count
+                  className="grid shrink-0"
+                  style={{
+                    gridTemplateColumns: countHidden ? "0fr" : "1fr",
+                    marginLeft: countHidden ? "-5px" : "0px",
+                    transition: fold,
+                  }}
                 >
-                  {done} / {total}
-                </span>
+                  <div
+                    className={cn(
+                      "min-h-0 min-w-0 overflow-hidden",
+                      countHidden && "pointer-events-none opacity-0",
+                    )}
+                    style={{ transition: fold }}
+                  >
+                    <span
+                      className={cn(
+                        "text-text-2 block whitespace-nowrap tabular-nums",
+                        collapsed ? "text-[10px] leading-[14px]" : "text-[12.5px]",
+                      )}
+                    >
+                      {done} / {total}
+                    </span>
+                  </div>
+                </div>
 
                 {/* 按钮区：折叠时收起。 */}
                 <div
@@ -233,7 +259,11 @@ export function FillRunPill() {
                       type="button"
                       aria-label="折叠补全进度"
                       title="折叠通知条"
-                      onClick={() => setCollapsed(true)}
+                      onClick={() => {
+                        // 指针还停在上面：折起来后直接保持弹出计数，不要闪一下空徽章。
+                        setPeek(true);
+                        setCollapsed(true);
+                      }}
                       className="focus-visible:focus-ring text-text-3 hover:text-text-1 hover:bg-surface-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors"
                     >
                       <CaretRight size={13} />
