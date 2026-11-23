@@ -120,24 +120,53 @@ test("the palette cursor glides between rows as one element", async ({ page }) =
   const rows = dialog.locator("li[data-row]");
   await expect(cursor).toHaveCount(1);
 
-  // Settle on the first row, then jump to a row three down and sample the
+  // Settle on the first row, then jump to a row three down and watch the whole
   // journey. A visible glide has a frame strictly between the two positions;
   // the old expo-out was already at the target by the first sample.
+  //
+  // 🔴 Sample every frame, do not read once after a fixed wait. CI WebKit runs
+  // rAF at roughly a fifth of Chromium's rate, so a 90ms probe lands wherever
+  // the spring happens to be then: it read 327 on 2026-11-23 — already past a
+  // target at 324 — and failed a test that was really gliding. The contract is
+  // that a mid-flight frame exists at all, which a full trace sees regardless
+  // of when any single frame arrived (and regardless of the spring's overshoot).
   await rows.nth(0).hover();
   const fromY = (await cursor.boundingBox())!.y;
   const target = (await rows.nth(3).boundingBox())!;
+  await page.evaluate(() => {
+    const w = window as unknown as { paletteTrail?: number[] };
+    const el = document.querySelector("[data-palette-cursor]");
+    w.paletteTrail = [];
+    let stop = false;
+    const tick = () => {
+      if (stop) return;
+      if (el) w.paletteTrail!.push(el.getBoundingClientRect().y);
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    (window as unknown as { stopPaletteTrail?: () => void }).stopPaletteTrail = () => {
+      stop = true;
+    };
+  });
   await rows.nth(3).hover();
-  await page.waitForTimeout(90);
-  const midY = (await cursor.boundingBox())!.y;
-  expect(midY).toBeGreaterThan(fromY + 8);
-  expect(midY).toBeLessThan(target.y - 8);
-
-  // It lands on the row, keeps its own height (rows differ), and stays one
-  // node under both pointer and keyboard moves. The spring curve is shared
-  // with the tag rail's highlight.
+  // Let the spring finish before reading the trace — expect.poll, never a
+  // fixed timeout that could stop sampling before the glide is over.
   await expect
     .poll(async () => Math.abs((await cursor.boundingBox())!.y - target.y))
     .toBeLessThan(3);
+  const trail = await page.evaluate(() => {
+    const w = window as unknown as { paletteTrail: number[] };
+    (window as unknown as { stopPaletteTrail: () => void }).stopPaletteTrail();
+    return w.paletteTrail;
+  });
+  expect(
+    trail.some((y) => y > fromY + 8 && y < target.y - 8),
+    `没有严格位于起终点之间的滑行帧：${fromY} → ${target.y}，采样 ${trail.length} 帧`,
+  ).toBe(true);
+
+  // It lands on the row (settled above), keeps its own height (rows differ),
+  // and stays one node under both pointer and keyboard moves. The spring curve
+  // is shared with the tag rail's highlight.
   expect(Math.abs((await cursor.boundingBox())!.height - target.height)).toBeLessThan(3);
   await expect(cursor).toHaveCount(1);
   expect(await cursor.evaluate((el) => getComputedStyle(el).transitionDuration)).toBe("0.34s");
