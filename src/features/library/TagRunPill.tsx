@@ -6,9 +6,13 @@ import { CaretRight, Tag } from "@phosphor-icons/react";
 import { GlassButton } from "@/components/glass/button";
 import { OverlayPortal } from "@/components/glass/overlay";
 import { navigateTo } from "@/features/command/registerCoreCommands";
-import { runPillBottom, useRunPillSlot } from "@/features/library/runPillSlots";
+import {
+  runPillBottom,
+  useRunPillMotion,
+  useRunPillPeek,
+  useRunPillSlot,
+} from "@/features/library/runPillSlots";
 import { cn } from "@/lib/cn";
-import { DURATION, EASE_OUT, useMotion } from "@/lib/motion";
 import { describeTagReview, describeTagRun, useTagRun } from "@/stores/tagRun";
 import { showToast } from "@/stores/toasts";
 
@@ -17,12 +21,13 @@ import { showToast } from "@/stores/toasts";
  * 书架刷新、结束提示和「审阅」入口也放这里 —— 对话框常被关掉，而「跑完了
  * 书架没更新 / 建议没地方看」正是关掉之后才会发生的问题。与 `FillRunPill` 同一套约定。
  *
- * 折叠照 `GuideBatchPill`：一个胶囊改长度，计数常驻、状态文字与按钮各在
- * `1fr → 0fr` 的 grid 列里收起。纯 CSS 宽度过渡，不用 motion 的 layout FLIP
- * —— 重新采样 backdrop-filter 会读成抖动。折叠后的徽章本身是按钮，点它展开。
+ * 与 `FillRunPill` 同一套折叠约定：状态文字与按钮各在 `1fr → 0fr` 的 grid
+ * 列里收起；折叠态默认只剩图标，hover / 键盘聚焦才把计数弹出。纯 CSS 宽度
+ * 过渡，不用 motion 的 layout FLIP —— 重新采样 backdrop-filter 会读成抖动。
+ * 折叠后的徽章本身是按钮，点它展开。
  */
 export function TagRunPill() {
-  const m = useMotion();
+  const { fold, surface, entrance } = useRunPillMotion();
   const queryClient = useQueryClient();
   const running = useTagRun((s) => s.running);
   const cancelled = useTagRun((s) => s.cancelled);
@@ -39,6 +44,7 @@ export function TagRunPill() {
   const clearReview = useTagRun((s) => s.dismissReview);
   const collapsed = useTagRun((s) => s.collapsed);
   const setCollapsed = useTagRun((s) => s.setCollapsed);
+  const { countHidden, peekHandlers, keepPeek } = useRunPillPeek(collapsed);
   const wasRunning = useRef(false);
   const wasReviewRunning = useRef(false);
 
@@ -81,14 +87,6 @@ export function TagRunPill() {
     requestReview();
   };
 
-  const ease = `cubic-bezier(${EASE_OUT.join(", ")})`;
-  const transition = (properties: string[]) =>
-    m.reduce
-      ? "none"
-      : properties.map((property) => `${property} ${DURATION.base}s ${ease}`).join(", ");
-  const fold = transition(["grid-template-columns", "margin-left", "opacity"]);
-  const surface = transition(["padding", "gap"]);
-
   // 展开态的状态文字与补充；计数常驻，折叠后仍看得见进度。
   const label = review
     ? reviewRunning
@@ -126,20 +124,19 @@ export function TagRunPill() {
         {(showWrite || showReview) && (
           <motion.div
             data-tag-run-pill
-            initial={{ opacity: 0, y: m.reduce ? 0 : 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: m.reduce ? 0 : 12 }}
-            transition={m.panel}
+            {...entrance}
             // 与其他后台通知条共用一列，贴在批量管理栏上方（见 runPillSlots）。
-            className="fixed right-6 z-40"
+            className="fixed right-6 z-40 flex max-w-[min(80vw,420px)] flex-col items-end"
             style={{ bottom: runPillBottom(slot) }}
           >
-            {/* oxlint-disable-next-line jsx-a11y/no-static-element-interactions -- role/tabIndex/onClick/collected keys are all conditional on `collapsed` */}
+            {/* oxlint-disable-next-line jsx-a11y/no-static-element-interactions -- role/tabIndex/交互事件全部随 collapsed 一起出现 */}
             <div
+              data-tag-run-surface
               role={collapsed ? "button" : undefined}
               tabIndex={collapsed ? 0 : undefined}
               aria-label={collapsed ? "展开打标签进度" : undefined}
               onClick={collapsed ? () => setCollapsed(false) : undefined}
+              {...peekHandlers}
               onKeyDown={
                 collapsed
                   ? (event) => {
@@ -152,134 +149,163 @@ export function TagRunPill() {
               }
               title={collapsed ? "展开打标签进度" : undefined}
               className={cn(
-                "glass-2 shadow-panel text-text-1 flex max-w-[min(80vw,420px)] items-center overflow-hidden rounded-full",
+                "glass-2 shadow-panel text-text-1 overflow-hidden",
+                collapsed ? "rounded-full" : "rounded-2xl",
                 collapsed && "focus-visible:focus-ring cursor-default",
               )}
-              style={{
-                padding: collapsed ? "5px 10px" : "8px 12px 8px 14px",
-                gap: collapsed ? "6px" : "10px",
-                transition: surface,
-              }}
             >
-              <Tag size={collapsed ? 12 : 14} className="text-accent shrink-0" aria-hidden />
-
-              {/* 状态文字：折叠时收起。计数在它外面，两个形态都在。 */}
               <div
-                className="grid min-w-0"
+                className="flex items-center"
                 style={{
-                  gridTemplateColumns: collapsed ? "0fr" : "1fr",
-                  marginLeft: collapsed ? "-6px" : "0px",
-                  transition: fold,
+                  padding: collapsed ? "4px 8px" : "8px 12px 8px 14px",
+                  gap: collapsed ? "5px" : "10px",
+                  transition: surface,
                 }}
               >
-                <div
-                  className={cn(
-                    "min-w-0 overflow-hidden whitespace-nowrap",
-                    collapsed && "pointer-events-none opacity-0",
-                  )}
-                  style={{ transition: fold }}
-                >
-                  <p className="text-text-3 text-[12.5px] leading-snug">{label}</p>
-                </div>
-              </div>
+                <Tag size={collapsed ? 11 : 14} className="text-accent shrink-0" aria-hidden />
 
-              <span
-                className={cn(
-                  "text-text-2 shrink-0 tabular-nums",
-                  collapsed ? "text-[11px]" : "text-[12.5px]",
-                )}
-              >
-                {counter}
-                {!collapsed && detail && <span className="text-text-3"> · {detail}</span>}
-              </span>
-
-              {/* 按钮区：折叠时收起。 */}
-              <div
-                className="grid shrink-0"
-                style={{
-                  gridTemplateColumns: collapsed ? "0fr" : "1fr",
-                  marginLeft: collapsed ? "-6px" : "0px",
-                  transition: fold,
-                }}
-              >
+                {/* 状态文字：折叠时收起。计数在它外面，两个形态都在。 */}
                 <div
-                  className={cn(
-                    "flex min-w-0 items-center gap-1 overflow-hidden",
-                    collapsed && "pointer-events-none opacity-0",
-                  )}
-                  style={{ transition: fold }}
+                  className="grid min-w-0"
+                  style={{
+                    gridTemplateColumns: collapsed ? "0fr" : "1fr",
+                    // 也要收行：否则隐藏的按钮仍把徽章撑高。
+                    gridTemplateRows: collapsed ? "0fr" : "1fr",
+                    marginLeft: collapsed ? "-5px" : "0px",
+                    transition: fold,
+                  }}
                 >
-                  {review ? (
-                    reviewRunning ? (
-                      <>
-                        <GlassButton
-                          size="sm"
-                          variant="subtle"
-                          style={{ boxShadow: "none" }}
-                          onClick={openReviewSheet}
-                        >
-                          返回界面
-                        </GlassButton>
-                        <GlassButton
-                          size="sm"
-                          variant="subtle"
-                          style={{ boxShadow: "none" }}
-                          disabled={review.cancelled}
-                          onClick={cancelReview}
-                        >
-                          {review.cancelled ? "停止中" : "停止"}
-                        </GlassButton>
-                      </>
-                    ) : (
-                      <>
-                        <GlassButton
-                          size="sm"
-                          variant="subtle"
-                          style={{ boxShadow: "none" }}
-                          disabled={review.rows.length === 0}
-                          onClick={openReviewSheet}
-                        >
-                          审阅
-                        </GlassButton>
-                        <GlassButton
-                          size="sm"
-                          variant="subtle"
-                          style={{ boxShadow: "none" }}
-                          onClick={clearReview}
-                        >
-                          关闭
-                        </GlassButton>
-                      </>
-                    )
-                  ) : running ? (
-                    <GlassButton
-                      size="sm"
-                      variant="subtle"
-                      style={{ boxShadow: "none" }}
-                      disabled={cancelled}
-                      onClick={cancel}
-                    >
-                      {cancelled ? "停止中" : "停止"}
-                    </GlassButton>
-                  ) : (
-                    <GlassButton
-                      size="sm"
-                      variant="subtle"
-                      style={{ boxShadow: "none" }}
-                      onClick={reset}
-                    >
-                      关闭
-                    </GlassButton>
-                  )}
-                  <button
-                    type="button"
-                    aria-label="折叠打标签进度"
-                    title="折叠通知条"
-                    onClick={() => setCollapsed(true)}
-                    className="focus-visible:focus-ring text-text-3 hover:text-text-1 hover:bg-surface-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors"
+                  <div
+                    className={cn(
+                      "min-h-0 min-w-0 overflow-hidden whitespace-nowrap",
+                      collapsed && "pointer-events-none opacity-0",
+                    )}
+                    style={{ transition: fold }}
                   >
-                    <CaretRight size={13} />
-                  </button>
+                    <p className="text-text-3 text-[12.5px] leading-snug">{label}</p>
+                  </div>
+                </div>
+
+                <div
+                  data-tag-run-count
+                  className="grid shrink-0"
+                  style={{
+                    gridTemplateColumns: countHidden ? "0fr" : "1fr",
+                    marginLeft: countHidden ? "-5px" : "0px",
+                    transition: fold,
+                  }}
+                >
+                  <div
+                    className={cn(
+                      "min-h-0 min-w-0 overflow-hidden",
+                      countHidden && "pointer-events-none opacity-0",
+                    )}
+                    style={{ transition: fold }}
+                  >
+                    <span
+                      className={cn(
+                        "text-text-2 block whitespace-nowrap tabular-nums",
+                        collapsed ? "text-[10px] leading-[14px]" : "text-[12.5px]",
+                      )}
+                    >
+                      {counter}
+                      {!collapsed && detail && <span className="text-text-3"> · {detail}</span>}
+                    </span>
+                  </div>
+                </div>
+
+                {/* 按钮区：折叠时收起。 */}
+                <div
+                  className="grid shrink-0"
+                  style={{
+                    gridTemplateColumns: collapsed ? "0fr" : "1fr",
+                    gridTemplateRows: collapsed ? "0fr" : "1fr",
+                    marginLeft: collapsed ? "-5px" : "0px",
+                    transition: fold,
+                  }}
+                >
+                  <div
+                    className={cn(
+                      "flex min-h-0 min-w-0 items-center gap-1 overflow-hidden",
+                      collapsed && "pointer-events-none opacity-0",
+                    )}
+                    style={{ transition: fold }}
+                  >
+                    {review ? (
+                      reviewRunning ? (
+                        <>
+                          <GlassButton
+                            size="sm"
+                            variant="subtle"
+                            style={{ boxShadow: "none" }}
+                            onClick={openReviewSheet}
+                          >
+                            返回界面
+                          </GlassButton>
+                          <GlassButton
+                            size="sm"
+                            variant="subtle"
+                            style={{ boxShadow: "none" }}
+                            disabled={review.cancelled}
+                            onClick={cancelReview}
+                          >
+                            {review.cancelled ? "停止中" : "停止"}
+                          </GlassButton>
+                        </>
+                      ) : (
+                        <>
+                          <GlassButton
+                            size="sm"
+                            variant="subtle"
+                            style={{ boxShadow: "none" }}
+                            disabled={review.rows.length === 0}
+                            onClick={openReviewSheet}
+                          >
+                            审阅
+                          </GlassButton>
+                          <GlassButton
+                            size="sm"
+                            variant="subtle"
+                            style={{ boxShadow: "none" }}
+                            onClick={clearReview}
+                          >
+                            关闭
+                          </GlassButton>
+                        </>
+                      )
+                    ) : running ? (
+                      <GlassButton
+                        size="sm"
+                        variant="subtle"
+                        style={{ boxShadow: "none" }}
+                        disabled={cancelled}
+                        onClick={cancel}
+                      >
+                        {cancelled ? "停止中" : "停止"}
+                      </GlassButton>
+                    ) : (
+                      <GlassButton
+                        size="sm"
+                        variant="subtle"
+                        style={{ boxShadow: "none" }}
+                        onClick={reset}
+                      >
+                        关闭
+                      </GlassButton>
+                    )}
+                    <button
+                      type="button"
+                      aria-label="折叠打标签进度"
+                      title="折叠通知条"
+                      onClick={() => {
+                        keepPeek();
+                        setCollapsed(true);
+                      }}
+                      className="focus-visible:focus-ring text-text-3 hover:text-text-1 hover:bg-surface-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors"
+                    >
+                      <CaretRight size={13} />
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

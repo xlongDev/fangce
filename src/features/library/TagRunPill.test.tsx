@@ -61,14 +61,21 @@ describe("批量打标签的常驻胶囊", () => {
     expect(useTagRun.getState().review!.running).toBe(false);
   });
 
-  it("折叠成小徽章后仍显示进度，点它展开", async () => {
+  it("折叠成纯图标徽章，hover 弹出计数，点它展开", async () => {
     act(() => reviewState({ done: 1 }));
     show();
 
     await userEvent.click(screen.getByRole("button", { name: "折叠打标签进度" }));
     expect(useTagRun.getState().collapsed).toBe(true);
-    // 折叠后只剩图标 + 计数，计数还在。
+    // 与补全徽章一致：默认只剩图标，指针进来才把计数横向弹出。
+    const badge = screen.getByRole("button", { name: "展开打标签进度" });
+    const count = document.querySelector<HTMLElement>("[data-tag-run-count]");
+    await userEvent.unhover(badge);
+    expect(count?.style.gridTemplateColumns).toBe("0fr");
+    await userEvent.hover(badge);
+    expect(count?.style.gridTemplateColumns).toBe("1fr");
     expect(screen.getByText("1/40 批")).toBeTruthy();
+
     // 折叠的徽章本身是按钮，点它展开。
     await userEvent.click(screen.getByRole("button", { name: "展开打标签进度" }));
     expect(useTagRun.getState().collapsed).toBe(false);

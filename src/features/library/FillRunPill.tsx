@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
 import { CaretRight, MagicWand } from "@phosphor-icons/react";
@@ -6,9 +6,13 @@ import { CaretRight, MagicWand } from "@phosphor-icons/react";
 import { GlassButton } from "@/components/glass/button";
 import { OverlayPortal } from "@/components/glass/overlay";
 import { navigateTo } from "@/features/command/registerCoreCommands";
-import { runPillBottom, useRunPillSlot } from "@/features/library/runPillSlots";
+import {
+  runPillBottom,
+  useRunPillMotion,
+  useRunPillPeek,
+  useRunPillSlot,
+} from "@/features/library/runPillSlots";
 import { cn } from "@/lib/cn";
-import { DURATION, EASE_OUT, useMotion } from "@/lib/motion";
 import { useFillRun, type FillRun } from "@/stores/fillRun";
 import { showToast } from "@/stores/toasts";
 
@@ -48,7 +52,7 @@ function openSheet() {
 }
 
 export function FillRunPill() {
-  const m = useMotion();
+  const { fold, surface, entrance } = useRunPillMotion();
   const queryClient = useQueryClient();
   const cancelled = useFillRun((s) => s.cancelled);
   const running = useFillRun((s) => s.running);
@@ -59,7 +63,7 @@ export function FillRunPill() {
   const reset = useFillRun((s) => s.reset);
   const collapsed = useFillRun((s) => s.collapsed);
   const setCollapsed = useFillRun((s) => s.setCollapsed);
-  const [peek, setPeek] = useState(false);
+  const { countHidden, peekHandlers, keepPeek } = useRunPillPeek(collapsed);
   const wasRunning = useRef(false);
   const slot = useRunPillSlot("fill", total > 0);
 
@@ -90,31 +94,13 @@ export function FillRunPill() {
         ? "已停止"
         : "补全完成";
 
-  const ease = `cubic-bezier(${EASE_OUT.join(", ")})`;
-  const transition = (properties: string[]) =>
-    m.reduce
-      ? "none"
-      : properties.map((property) => `${property} ${DURATION.base}s ${ease}`).join(", ");
-  const fold = transition([
-    "grid-template-columns",
-    "grid-template-rows",
-    "margin-left",
-    "opacity",
-  ]);
-  const surface = transition(["padding", "gap", "border-radius"]);
-  // 折叠态：指针/焦点进来才把计数从 0 宽弹出；展开态始终可见。
-  const countHidden = collapsed && !peek;
-
   return (
     <OverlayPortal>
       <AnimatePresence>
         {total > 0 && (
           <motion.div
             data-fill-run-pill
-            initial={{ opacity: 0, y: m.reduce ? 0 : 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: m.reduce ? 0 : 12 }}
-            transition={m.panel}
+            {...entrance}
             // 与其他后台通知条共用一列，贴在批量管理栏上方（见 runPillSlots）。
             className="fixed right-6 z-40 flex max-w-[min(80vw,380px)] flex-col items-end"
             style={{ bottom: runPillBottom(slot) }}
@@ -126,10 +112,7 @@ export function FillRunPill() {
               tabIndex={collapsed ? 0 : undefined}
               aria-label={collapsed ? "展开补全进度" : undefined}
               onClick={collapsed ? () => setCollapsed(false) : undefined}
-              onMouseEnter={collapsed ? () => setPeek(true) : undefined}
-              onMouseLeave={collapsed ? () => setPeek(false) : undefined}
-              onFocus={collapsed ? () => setPeek(true) : undefined}
-              onBlur={collapsed ? () => setPeek(false) : undefined}
+              {...peekHandlers}
               onKeyDown={
                 collapsed
                   ? (event) => {
@@ -260,8 +243,7 @@ export function FillRunPill() {
                       aria-label="折叠补全进度"
                       title="折叠通知条"
                       onClick={() => {
-                        // 指针还停在上面：折起来后直接保持弹出计数，不要闪一下空徽章。
-                        setPeek(true);
+                        keepPeek();
                         setCollapsed(true);
                       }}
                       className="focus-visible:focus-ring text-text-3 hover:text-text-1 hover:bg-surface-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors"
