@@ -10,7 +10,9 @@ use tauri::State;
 
 use crate::error::{AppError, AppResult};
 use crate::library::custom_source::{self, CustomProvider, CustomSourceDef, CustomSourceEntry};
-use crate::library::metadata::{self, Candidate, Lookup, MetadataProvider, Proposal, Target};
+use crate::library::metadata::{
+    self, Candidate, Lookup, MIN_SCORE, MetadataProvider, Proposal, Target,
+};
 use crate::library::{ops, repository};
 use crate::state::AppState;
 
@@ -192,6 +194,200 @@ pub async fn metadata_propose(
     Ok(proposals)
 }
 
+/// One book's title choices for the explicit batch rename sheet.
+///
+/// Not a fill: a fill only writes empty fields, and a book always has a title.
+/// This is a separate action because renaming forty books on the strength of a
+/// heuristic is a different decision from filling in what is missing — the
+/// reader sees each old title against each candidate and ticks the ones to take.
+#[derive(specta::Type, Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TitleProposal {
+    pub book_id: String,
+    /// The title on the shelf right now, shown beside the candidate.
+    pub book_title: String,
+    /// Catalogue titles, best first. Never the title already on the shelf.
+    pub candidates: Vec<Candidate>,
+    /// Whether the first candidate clears the normal match bar. A weak answer
+    /// is still shown, but nothing is ticked by default: this sheet asks the
+    /// reader, it does not vote by proxy.
+    pub confident: bool,
+    /// Why there is nothing to choose from. Distinct from a weak match.
+    pub skipped: Option<String>,
+}
+
+/// How many choices one book shows. `depth` opens that many records from the
+/// first answer; it is not another request to somebody else's server.
+const TITLE_DEPTH: usize = 3;
+
+/// `metadata.proposeTitles` — what the catalogues would call these books.
+#[tauri::command]
+#[specta::specta]
+pub async fn metadata_propose_titles(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> AppResult<Vec<TitleProposal>> {
+    let targets: Vec<(String, String, Vec<String>, bool)> = state.library.with(|conn| {
+        let mut out = Vec::new();
+        for id in &ids {
+            if let Some(book) = repository::get(conn, id)? {
+                out.push((id.clone(), book.title, book.authors, book.isbn.is_none()));
+            }
+        }
+        Ok(out)
+    })?;
+
+    let client = metadata::client();
+    let customs = std::sync::Arc::new(
+        state
+            .library
+            .with(custom_source::list)?
+            .into_iter()
+            .map(|entry| CustomProvider::new(entry.id, entry.def))
+            .collect::<Vec<_>>(),
+    );
+    let attempts = std::sync::Arc::new(metadata::Attempts::new());
+
+    let mut proposals: Vec<(usize, TitleProposal)> = futures_util::stream::iter(
+        targets.into_iter().enumerate().map(|(position, (id, title, authors, no_isbn))| {
+            let client = client.clone();
+            let attempts = attempts.clone();
+            let customs = customs.clone();
+            async move {
+                let lookup = Lookup::new(&title, &authors, no_isbn);
+                let mut chain = metadata::PROVIDERS.to_vec();
+                chain.extend(customs.iter().map(|provider| provider as &dyn MetadataProvider));
+                let (candidates, skipped) =
+                    match metadata::find_with(&client, &chain, &lookup, TITLE_DEPTH, &attempts)
+                        .await
+                    {
+                        Ok(found) => {
+                            let candidates: Vec<Candidate> = found
+                                .into_iter()
+                                .filter(|candidate| {
+                                    !candidate.title.trim().is_empty()
+                                        && candidate.title.trim() != title.trim()
+                                })
+                                .take(TITLE_DEPTH)
+                                .collect();
+                            let skipped =
+                                candidates.is_empty().then(|| "目录里没有别的书名".to_string());
+                            (candidates, skipped)
+                        }
+                        Err(err) => (Vec::new(), Some(format!("查询失败：{err}"))),
+                    };
+                let confident =
+                    candidates.first().is_some_and(|candidate| candidate.match_score >= MIN_SCORE);
+                (
+                    position,
+                    TitleProposal {
+                        book_id: id,
+                        book_title: title,
+                        candidates,
+                        confident,
+                        skipped,
+                    },
+                )
+            }
+        }),
+    )
+    .buffer_unordered(4)
+    .collect()
+    .await;
+    // The network decides when answers arrive; the reader reads in shelf order.
+    proposals.sort_by_key(|(position, _)| *position);
+    Ok(proposals.into_iter().map(|(_, proposal)| proposal).collect())
+}
+
+/// One accepted rename, as the preview sends it.
+#[derive(specta::Type, Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TitleRename {
+    pub id: String,
+    pub title: String,
+}
+
+/// `metadata.applyTitles` — writes only the titles the reader ticked.
+#[tauri::command]
+#[specta::specta]
+pub fn metadata_apply_titles(
+    state: State<'_, AppState>,
+    items: Vec<TitleRename>,
+) -> AppResult<usize> {
+    apply_title_renames(&state.library, &items)
+}
+
+fn apply_title_renames(library: &crate::db::Library, items: &[TitleRename]) -> AppResult<usize> {
+    if items.is_empty() {
+        return Ok(0);
+    }
+    library.with_tx(|tx| {
+        let mut rows = Vec::new();
+        let mut written = 0;
+        for item in items {
+            let Some(book) = repository::get(tx, &item.id)? else {
+                continue;
+            };
+            let title = item.title.trim();
+            if title.is_empty() || title == book.title.trim() {
+                continue;
+            }
+            let before = ops::snapshot(tx, &book)?;
+            rows.push((item.id.clone(), title_before(&book, &before)));
+            repository::update_metadata(tx, &item.id, &rename_patch(&book, title))?;
+            written += 1;
+        }
+        let summary = format!("从目录改了 {written} 本书名");
+        ops::record_details(tx, ops::Source::Ui, "rename_titles", &summary, &rows)?;
+        Ok(written)
+    })
+}
+
+/// A whole record with only the title changed: `update_metadata` writes every
+/// column, and a rename has no business clearing a blurb or a rating.
+fn rename_patch(book: &repository::BookSummary, title: &str) -> repository::BookMetadataPatch {
+    repository::BookMetadataPatch {
+        title: title.to_string(),
+        subtitle: book.subtitle.clone(),
+        description: book.description.clone(),
+        language: book.language.clone(),
+        publisher: book.publisher.clone(),
+        isbn: book.isbn.clone(),
+        published_year: book.published_year,
+        rating: book.rating,
+        rating_count: book.rating_count,
+        rating_source: book.rating_source.clone(),
+        douban_url: book.douban_url.clone(),
+        authors: book.authors.clone(),
+    }
+}
+
+/// A v3 before-image with one extra key: `ops::restore` already reads `title`
+/// when present and orders ordinary fills to carry theirs through. Writing that
+/// key only for renames keeps an undo of an unrelated fill from clobbering a
+/// title the reader edited afterwards.
+fn title_before(book: &repository::BookSummary, before: &ops::Before) -> serde_json::Value {
+    serde_json::json!({
+        "v": 3,
+        "before": {
+            "title": book.title,
+            "authors": before.authors,
+            "subtitle": before.subtitle,
+            "publisher": before.publisher,
+            "language": before.language,
+            "isbn": before.isbn,
+            "published_year": before.published_year,
+            "description": before.description,
+            "rating": before.rating,
+            "rating_count": before.rating_count,
+            "rating_source": before.rating_source,
+            "douban_url": before.douban_url,
+            "cover_path": before.cover_path,
+            "cover_previous": before.cover_previous,
+        }
+    })
+}
+
 /// `metadata.apply` — writes the proposals the reader accepted.
 ///
 /// **Covers are downloaded before the transaction opens.** The library has one
@@ -351,4 +547,94 @@ pub fn metadata_source_save(
 #[specta::specta]
 pub fn metadata_source_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     custom_source::delete(&state.library, &id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::db::Library;
+    use crate::document::BookFormat;
+    use crate::library::repository::NewBook;
+
+    fn seeded(tag: &str) -> (std::path::PathBuf, Library) {
+        let dir = crate::document::fixture::temp_dir(tag);
+        let library = Library::open(&dir).expect("open");
+        library
+            .with_tx(|tx| {
+                repository::insert(
+                    tx,
+                    &NewBook {
+                        id: "b1",
+                        title: "理想国译丛009 · 零年：1945现代世界诞生的时刻",
+                        subtitle: Some("现代世界诞生的时刻"),
+                        description: Some("一段简介"),
+                        language: Some("zh"),
+                        publisher: Some("广西师范大学出版社"),
+                        identifier: None,
+                        format: BookFormat::Epub,
+                        content_hash: "b1",
+                        file_path: "/books/x.epub",
+                        file_size: 1,
+                        cover_path: None,
+                        authors: &["伊恩·布鲁玛".to_string()],
+                    },
+                )
+            })
+            .expect("seed");
+        (dir, library)
+    }
+
+    #[test]
+    fn a_rename_changes_the_title_only_and_the_log_can_put_it_back() {
+        let (dir, library) = seeded("title-rename");
+        let written = apply_title_renames(
+            &library,
+            &[TitleRename { id: "b1".into(), title: "  零年：1945  ".into() }],
+        )
+        .expect("apply");
+        assert_eq!(written, 1);
+
+        library
+            .with(|conn| {
+                let book = repository::get(conn, "b1").expect("get").expect("book");
+                assert_eq!(book.title, "零年：1945");
+                assert_eq!(book.subtitle.as_deref(), Some("现代世界诞生的时刻"));
+                assert_eq!(book.publisher.as_deref(), Some("广西师范大学出版社"));
+                assert_eq!(book.description.as_deref(), Some("一段简介"));
+                assert_eq!(book.authors, ["伊恩·布鲁玛".to_string()]);
+                Ok(())
+            })
+            .expect("read back");
+
+        let rows = library.with(|conn| ops::list(conn, 10)).expect("log");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].action, "rename_titles");
+        library.with_tx(|tx| ops::undo(tx, &rows[0].call_id, &dir.join("covers"))).expect("undo");
+
+        library
+            .with(|conn| {
+                let book = repository::get(conn, "b1").expect("get").expect("book");
+                assert_eq!(book.title, "理想国译丛009 · 零年：1945现代世界诞生的时刻");
+                Ok(())
+            })
+            .expect("read after undo");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_rename_to_the_title_already_on_the_shelf_is_not_written() {
+        let (dir, library) = seeded("title-noop");
+        let written = apply_title_renames(
+            &library,
+            &[TitleRename {
+                id: "b1".into(),
+                title: "理想国译丛009 · 零年：1945现代世界诞生的时刻".into(),
+            }],
+        )
+        .expect("apply");
+        assert_eq!(written, 0, "a no-op must not leave an undo button behind");
+        assert!(library.with(|conn| ops::list(conn, 10)).expect("log").is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

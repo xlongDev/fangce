@@ -491,7 +491,7 @@ pub struct Proposal {
 /// the shelf that it is wrong, and the whole point of a fill is that nobody
 /// reads it. 0.6 is a title that mostly matches — the same book in another
 /// language lands under 0.5, which is the case this line exists to exclude.
-const MIN_SCORE: f64 = 0.6;
+pub const MIN_SCORE: f64 = 0.6;
 
 /// What this candidate would add to this book.
 ///

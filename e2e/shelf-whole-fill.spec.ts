@@ -34,8 +34,8 @@ test("a whole-shelf run reports progress and finishes", async ({ page }) => {
   // Two thirds of the demo rows have something to write.
   await expect(sheet).toContainText(/已补全 \d+ 本 · 跳过 \d+ 本/);
   await expect(sheet.getByRole("button", { name: "关闭" })).toBeVisible();
-  // The shell keeps the same run in view after the dialog is gone.
-  await expect(page.locator("[data-fill-run-pill]")).toContainText("60 / 60");
+  // Watching the run in its dialog never pops up the background pill.
+  await expect(page.locator("[data-fill-run-pill]")).toHaveCount(0);
 });
 
 test("后台运行关掉弹窗后进度仍在", async ({ page }) => {

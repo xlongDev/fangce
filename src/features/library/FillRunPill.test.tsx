@@ -43,11 +43,23 @@ function show(client = new QueryClient({ defaultOptions: { queries: { retry: fal
 
 beforeEach(() => {
   useFillRun.getState().reset();
+  // These tests drive the pill directly, i.e. the reader chose 后台运行.
+  useFillRun.setState({ background: true });
   useToasts.setState({ toasts: [] });
   navigateTo.mockClear();
 });
 
 describe("整架补全的常驻胶囊", () => {
+  it("没点后台运行时不显示：进度留在补全弹窗里", () => {
+    act(() => {
+      useFillRun.setState({ background: false, running: true, total: 10, done: 4 });
+    });
+    show();
+
+    expect(document.querySelector("[data-fill-run-pill]")).toBeNull();
+    expect(document.querySelector("[data-fill-run-surface]")).toBeNull();
+  });
+
   it("弹窗关掉后仍显示进度，停止仍可用", async () => {
     act(() => {
       useFillRun.setState({ running: true, total: 10, done: 4, written: 3, skipped: 1 });
@@ -132,6 +144,7 @@ describe("整架补全的常驻胶囊", () => {
     await userEvent.click(screen.getByRole("button", { name: "返回界面" }));
     expect(navigateTo).toHaveBeenCalledWith("/");
     expect(useFillRun.getState().sheetOpen).toBe(true);
+    expect(useFillRun.getState().background).toBe(false);
   });
 
   it("结束时刷新书架并报一次结果", async () => {

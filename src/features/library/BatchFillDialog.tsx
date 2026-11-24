@@ -6,12 +6,25 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
 import { CoverThumb } from "@/features/library/CoverThumb";
 import { FillRunStatus } from "@/features/library/FillRunStatus";
-import { useMetadataApply, useMetadataPropose, useMetadataSources } from "@/hooks/useMetadata";
+import {
+  useMetadataApply,
+  useMetadataPropose,
+  useMetadataSources,
+  useTitleApply,
+  useTitleProposals,
+} from "@/hooks/useMetadata";
 import { CHUNK, useFillRun } from "@/stores/fillRun";
 import { cn } from "@/lib/cn";
+import { isDesktopRuntime } from "@/lib/ipc";
 import { FIELD_LABELS, existingHint, hasSomething, sourceLabel, toFill } from "@/lib/metadata";
 import { EASE_OUT, useMotion } from "@/lib/motion";
-import type { Fill, Proposal } from "@/types/ipc";
+import {
+  acceptedTitles,
+  TitleCandidates,
+  type TitleChoices,
+  type TitleTicks,
+} from "@/features/library/TitleCandidates";
+import type { Fill, Proposal, TitleProposal, TitleRename } from "@/types/ipc";
 
 /**
  * 批量补全：what the catalogue would add to a selection, before anything is
@@ -54,14 +67,35 @@ export function BatchFillDialog({
   /** 替换已有封面. Shared by the preview and the whole-shelf run: one
    *  decision, two paths, and turning it on must re-ask the catalogue. */
   const [replaceCovers, setReplaceCovers] = useState(false);
+  /** 改书名 is opt-in, like replacing a cover: it is a decision, not a fill.
+   *  Turning it on asks the catalogue a second question and shows the titles
+   *  before anything is written. */
+  const [renameTitles, setRenameTitles] = useState(false);
+  /** Opening the sheet must not spend a batch of catalogue requests before the
+   *  reader has chosen the options. The lookup starts only at 开始查询, and a
+   *  change of options sends us back here rather than quietly re-querying. */
+  const [confirmedFor, setConfirmedFor] = useState<string | null>(null);
+  const batchKey = ids.join(",");
+  const confirmed = confirmedFor === batchKey;
   // A run outlives this dialog — the reader can close it and watch the shelf —
   // so an open dialog shows the run it would otherwise be starting a second of.
   const showingRun = run.running || run.total > 0;
   const whole = ids.length > MAX_BATCH;
 
   const close = () => {
+    setConfirmedFor(null);
     // A finished run is dismissed here; a running one keeps going.
     if (!run.running) run.reset();
+    onClose();
+  };
+
+  /** Switch a previewed batch to a background run. It re-asks the sources,
+   *  but keeps the book selection and the exact titles ticked in the preview.
+   *  Read the store fresh: the dialog closes and must not reset the new run. */
+  const background = (books: string[], titles: TitleRename[]) => {
+    const state = useFillRun.getState();
+    state.start(books, replaceCovers, renameTitles, titles);
+    state.setBackground(true);
     onClose();
   };
 
@@ -76,24 +110,74 @@ export function BatchFillDialog({
           ? "整架补全"
           : whole
             ? `整架补全 ${ids.length} 本`
-            : `从目录补全 ${Math.min(ids.length, MAX_BATCH)} 本`
+            : `补全书籍信息 ${Math.min(ids.length, MAX_BATCH)} 本`
       }
-      description={showingRun ? undefined : "仅填充空白字段，不覆盖已有内容。"}
+      description={
+        showingRun
+          ? undefined
+          : renameTitles
+            ? "字段仅填空；书名只改写勾选的行。"
+            : "仅填充空白字段，不覆盖已有内容。"
+      }
       widthClass="w-[min(92vw,560px)]"
+      // Two preview lists plus their rows can outgrow the window. Keep the
+      // whole surface inside it and scroll the content rather than letting a
+      // centred pane lose its title above and its buttons below the screen.
+      contentClassName="max-h-[80vh] overflow-y-auto"
     >
       <div className="space-y-3">
         {/* Outside the two bodies so the switch stays visible while a new
             answer is being fetched — a control that vanishes exactly when it
             was just used reads as a broken click. */}
-        {!showingRun && <ReplaceCoversToggle checked={replaceCovers} onChange={setReplaceCovers} />}
+        {!showingRun && (
+          <div className="space-y-2">
+            <ReplaceCoversToggle
+              checked={replaceCovers}
+              onChange={setReplaceCovers}
+              disabled={confirmed}
+            />
+            {isDesktopRuntime && (
+              <RenameTitlesToggle
+                checked={renameTitles}
+                onChange={setRenameTitles}
+                disabled={confirmed}
+              />
+            )}
+            {confirmed && (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setConfirmedFor(null)}
+                  className="text-accent focus-visible:focus-ring rounded text-[11px] hover:underline"
+                >
+                  重新选择
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         {showingRun ? (
           <RunBody onClose={close} />
         ) : whole ? (
-          <WholeBody ids={ids} onClose={close} replaceCovers={replaceCovers} />
+          <WholeBody
+            ids={ids}
+            onClose={close}
+            replaceCovers={replaceCovers}
+            renameTitles={renameTitles}
+          />
+        ) : !confirmed ? (
+          <StartBody ids={ids} onClose={close} onConfirm={() => setConfirmedFor(batchKey)} />
         ) : (
           /* Keyed by the selection: opening a different batch must not show the
              previous one's proposals for a frame. */
-          <FillBody key={ids.join(",")} ids={ids} onClose={close} replaceCovers={replaceCovers} />
+          <FillBody
+            key={batchKey}
+            ids={ids}
+            onClose={close}
+            onBackground={background}
+            replaceCovers={replaceCovers}
+            renameTitles={renameTitles}
+          />
         )}
       </div>
     </GlassDialog>
@@ -110,25 +194,104 @@ export function BatchFillDialog({
 function ReplaceCoversToggle({
   checked,
   onChange,
+  disabled = false,
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
-    <label className="flex w-full cursor-pointer items-start gap-2 rounded text-left">
+    <label
+      className={cn(
+        "flex w-full items-start gap-2 rounded text-left",
+        disabled ? "cursor-default opacity-70" : "cursor-pointer",
+      )}
+    >
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
         className="border-hairline accent-accent focus-visible:focus-ring mt-0.5 h-4 w-4 shrink-0 rounded"
       />
       <span className="text-text-2 text-xs leading-relaxed">
         替换已有封面
         <span className="text-text-3 block">
-          默认仅补全缺失封面。开启后，目录封面将覆盖书架封面；每次替换均可在操作记录中撤销。
+          默认仅补全缺失封面。开启后，来源封面将覆盖书架封面；每次替换均可在操作记录中撤销。
         </span>
       </span>
     </label>
+  );
+}
+
+/** The switch that lets a fill also rewrite titles from the catalogue.
+ *
+ * Off by default: a book always has a title, so replacing one is never a
+ * "fill the blank" decision. On, each book gets its old title beside the
+ * catalogue's answers, and only the rows the reader accepts are written.
+ */
+function RenameTitlesToggle({
+  checked,
+  onChange,
+  disabled = false,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label
+      className={cn(
+        "flex w-full items-start gap-2 rounded text-left",
+        disabled ? "cursor-default opacity-70" : "cursor-pointer",
+      )}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        className="border-hairline accent-accent focus-visible:focus-ring mt-0.5 h-4 w-4 shrink-0 rounded"
+      />
+      <span className="text-text-2 text-xs leading-relaxed">
+        按来源改书名
+        <span className="text-text-3 block">
+          同时预览来源里的书名，只改写勾选的行；默认只取匹配度高的，每次改名均可在操作记录中撤销。
+        </span>
+      </span>
+    </label>
+  );
+}
+
+/**
+ * The gate before a previewed fill. Opening the sheet is not a request to
+ * query a catalogue: the reader may want to turn on a cover replacement or a
+ * rename first, and those options change what gets asked. Nothing is fetched
+ * until this button is pressed.
+ */
+function StartBody({
+  ids,
+  onClose,
+  onConfirm,
+}: {
+  ids: string[];
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <p className="text-text-2 text-[13px] leading-relaxed">
+        将从豆瓣、NeoDB 及已配置的自定义来源查询。结果逐本列出，仅写入勾选项；下列选项可保持默认。
+      </p>
+      <div className="flex items-center justify-end gap-2">
+        <GlassButton variant="subtle" onClick={onClose}>
+          取消
+        </GlassButton>
+        <GlassButton variant="primary" onClick={onConfirm}>
+          开始查询 {ids.length} 本
+        </GlassButton>
+      </div>
+    </div>
   );
 }
 
@@ -137,10 +300,12 @@ function WholeBody({
   ids,
   onClose,
   replaceCovers,
+  renameTitles,
 }: {
   ids: string[];
   onClose: () => void;
   replaceCovers: boolean;
+  renameTitles: boolean;
 }) {
   const run = useFillRun();
   const batches = Math.ceil(ids.length / MAX_BATCH);
@@ -168,14 +333,15 @@ function WholeBody({
         </div>
       </dl>
       <p className="text-text-3 text-xs leading-relaxed">
-        整架补全不提供逐本预览：生成预览需先查询全部书目，会重复请求目录。如需先确认结果，请单次选择不超过{" "}
-        {MAX_BATCH} 本。开始后可以关闭此窗口，补全会继续运行，进度显示在右下角。
+        整架补全不提供逐本预览：生成预览需先查询全部书目，会重复请求书目来源。如需先确认结果，请单次选择不超过{" "}
+        {MAX_BATCH} 本。开始后可以点「后台运行」关掉窗口，补全会继续跑，进度显示在右下角。
+        {renameTitles && " 书名一并改写时，只取匹配度高的候选。"}
       </p>
-      <div className="flex justify-end gap-2">
+      <div className="flex items-center justify-end gap-2">
         <GlassButton variant="subtle" onClick={onClose}>
           取消
         </GlassButton>
-        <GlassButton variant="primary" onClick={() => run.start(ids, replaceCovers)}>
+        <GlassButton variant="primary" onClick={() => run.start(ids, replaceCovers, renameTitles)}>
           开始补全 {ids.length} 本
         </GlassButton>
       </div>
@@ -193,10 +359,18 @@ function RunBody({ onClose }: { onClose: () => void }) {
     <div className="space-y-4">
       <FillRunStatus />
 
-      <div className="flex justify-end gap-2">
+      <div className="flex items-center justify-end gap-2">
         {run.running ? (
           <>
-            <GlassButton variant="subtle" onClick={onClose}>
+            <GlassButton
+              variant="subtle"
+              onClick={() => {
+                // Only this button asks for a background pill. Closing the
+                // dialog any other way leaves the progress in the dialog.
+                run.setBackground(true);
+                onClose();
+              }}
+            >
               后台运行
             </GlassButton>
             <GlassButton variant="subtle" disabled={run.cancelled} onClick={run.cancel}>
@@ -223,21 +397,31 @@ function RunBody({ onClose }: { onClose: () => void }) {
 function FillBody({
   ids,
   onClose,
+  onBackground,
   replaceCovers,
+  renameTitles,
 }: {
   ids: string[];
   onClose: () => void;
+  onBackground: (books: string[], titles: TitleRename[]) => void;
   replaceCovers: boolean;
+  renameTitles: boolean;
 }) {
   const propose = useMetadataPropose(ids, true, replaceCovers);
+  const titles = useTitleProposals(ids, renameTitles);
   const customSources = useMetadataSources();
   const customNames = Object.fromEntries(
     (customSources.data ?? []).map((entry) => [entry.id, entry.name]),
   );
   const apply = useMetadataApply();
+  const titleApply = useTitleApply();
   /** Ticked book ids. `null` until the first answer, then "everything with a
    *  fill" — the reader can untick, and an unticked row stays unticked. */
   const [unticked, setUnticked] = useState<ReadonlySet<string>>(() => new Set());
+  /** Renames have their own ticks: a book can gain a publisher but keep its
+   *  title, or the other way round. `TitleCandidates` supplies the defaults. */
+  const [titleTicks, setTitleTicks] = useState<TitleTicks>({});
+  const [titleChoices, setTitleChoices] = useState<TitleChoices>({});
 
   const proposals = propose.data ?? [];
   // A row can carry nothing but a rating and a Douban link — a book whose
@@ -245,6 +429,22 @@ function FillBody({
   const fillable = proposals.filter(hasSomething);
   const chosen = fillable.filter((proposal) => !unticked.has(proposal.bookId));
   const skipped = proposals.length - fillable.length;
+  const titleRows = renameTitles ? (titles.data ?? []) : [];
+  const renames = acceptedTitles(titleRows, titleTicks, titleChoices);
+  const affected = new Set([...chosen.map((row) => row.bookId), ...renames.map((row) => row.id)]);
+  const busy = apply.isPending || titleApply.isPending;
+
+  const toggleTitle = (proposal: TitleProposal) =>
+    setTitleTicks((current) => ({
+      ...current,
+      [proposal.bookId]: !(current[proposal.bookId] ?? proposal.confident),
+    }));
+
+  const chooseTitle = (bookId: string, index: number) => {
+    setTitleChoices((current) => ({ ...current, [bookId]: index }));
+    // Picking a specific title is itself the decision to use it.
+    setTitleTicks((current) => ({ ...current, [bookId]: true }));
+  };
 
   const toggle = (bookId: string) =>
     setUnticked((current) => {
@@ -254,16 +454,29 @@ function FillBody({
       return next;
     });
 
-  if (propose.isPending) {
+  if (propose.isPending || (renameTitles && titles.isPending)) {
     return (
-      <p className="text-text-2 py-6 text-center text-[13px]">正在查目录…（{ids.length} 本）</p>
+      <div className="space-y-3">
+        <p className="text-text-2 py-4 text-center text-[13px]">
+          正在查询书目来源…（{ids.length} 本）
+        </p>
+        <div className="flex items-center justify-end gap-2">
+          <GlassButton variant="subtle" onClick={onClose}>
+            取消
+          </GlassButton>
+          <GlassButton variant="subtle" onClick={() => onBackground(ids, [])}>
+            后台运行
+          </GlassButton>
+        </div>
+      </div>
     );
   }
 
-  if (propose.isError) {
+  const error = propose.error ?? (renameTitles ? titles.error : null);
+  if (error) {
     return (
       <div className="space-y-3">
-        <p className="text-danger text-[13px] leading-relaxed">{propose.error.message}</p>
+        <p className="text-danger text-[13px] leading-relaxed">{error.message}</p>
         <div className="flex justify-end">
           <GlassButton variant="subtle" onClick={onClose}>
             关闭
@@ -273,29 +486,72 @@ function FillBody({
     );
   }
 
+  const titleCandidates = titleRows.filter((row) => row.candidates.length > 0);
+  const nothingToDo = fillable.length === 0 && (!renameTitles || titleCandidates.length === 0);
+  /** Two transactions, not one: a fill's undo must not carry a rename's
+   *  before-image, or undoing a publisher would also put the old title back. */
+  const save = () => {
+    void (async () => {
+      try {
+        if (chosen.length > 0) await apply.mutateAsync(chosen.map(toFill));
+        if (renames.length > 0) await titleApply.mutateAsync(renames);
+        onClose();
+      } catch {
+        // The mutation cache reports the failure. Keep the preview so the
+        // reader can retry, or untick the book the catalogue refused.
+      }
+    })();
+  };
+
   return (
     <div className="space-y-3">
-      {fillable.length === 0 ? (
+      {nothingToDo ? (
         <p className="text-text-2 py-4 text-[13px] leading-relaxed">
-          这 {ids.length} 本都没有可补的字段。可能是目录里没有，也可能是出版社和语言本来就有。
+          {renameTitles
+            ? `这 ${ids.length} 本都没有可补的字段或可替换的书名。可能是来源里没有，也可能是信息本来就是全的。`
+            : `这 ${ids.length} 本都没有可补的字段。可能是来源里没有，也可能是出版社和语言本来就有。`}
         </p>
       ) : (
-        // The sheet is centred on the window and has no height cap of its own
-        // (`GlassDialog` centres, it does not constrain). Twelve rows of six
-        // fills ran off both edges of a 700px window — the title above the top
-        // edge and the buttons below the bottom. The list scrolls itself, and
-        // the buttons stay outside it so they are always reachable.
-        <ul className="divide-hairline max-h-[50vh] divide-y overflow-y-auto">
-          {proposals.map((proposal) => (
-            <Row
-              key={proposal.bookId}
-              proposal={proposal}
-              ticked={!unticked.has(proposal.bookId)}
-              onToggle={() => toggle(proposal.bookId)}
-              customNames={customNames}
-            />
-          ))}
-        </ul>
+        <div className="space-y-3">
+          {fillable.length > 0 && (
+            // The sheet is centred on the window and has no height cap of its
+            // own (`GlassDialog` centres, it does not constrain). Twelve rows
+            // of six fills ran off both edges of a 700px window — the title
+            // above the top edge and the buttons below the bottom. Each list
+            // scrolls itself, and the buttons stay outside so they are always
+            // reachable; with renames on, both lists share the height.
+            <ul
+              className={cn(
+                "divide-hairline divide-y overflow-y-auto",
+                renameTitles ? "max-h-[20vh]" : "max-h-[50vh]",
+              )}
+            >
+              {proposals.map((proposal) => (
+                <Row
+                  key={proposal.bookId}
+                  proposal={proposal}
+                  ticked={!unticked.has(proposal.bookId)}
+                  onToggle={() => toggle(proposal.bookId)}
+                  customNames={customNames}
+                />
+              ))}
+            </ul>
+          )}
+
+          {renameTitles && titleCandidates.length > 0 && (
+            <div className="border-hairline border-t pt-3">
+              <p className="text-text-3 mb-1 text-[11px]">书名（只改写勾选的行）</p>
+              <TitleCandidates
+                rows={titleRows}
+                ticks={titleTicks}
+                choices={titleChoices}
+                onToggle={toggleTitle}
+                onChoose={chooseTitle}
+                maxHeightClass="max-h-[20vh]"
+              />
+            </div>
+          )}
+        </div>
       )}
 
       {skipped > 0 && fillable.length > 0 && (
@@ -304,20 +560,19 @@ function FillBody({
         </p>
       )}
 
-      <div className="flex items-center justify-end gap-2 pt-1">
-        <GlassButton variant="subtle" onClick={onClose} disabled={apply.isPending}>
+      <div className="flex items-center justify-end gap-2">
+        <GlassButton variant="subtle" onClick={onClose} disabled={busy}>
           取消
         </GlassButton>
         <GlassButton
-          variant="primary"
-          disabled={chosen.length === 0 || apply.isPending}
-          onClick={() =>
-            apply.mutate(chosen.map(toFill), {
-              onSuccess: onClose,
-            })
-          }
+          variant="subtle"
+          disabled={affected.size === 0 || busy}
+          onClick={() => onBackground([...affected], renames)}
         >
-          补全 {chosen.length} 本
+          后台运行
+        </GlassButton>
+        <GlassButton variant="primary" disabled={affected.size === 0 || busy} onClick={save}>
+          {renames.length > 0 ? `补全并改名 ${affected.size} 本` : `补全 ${chosen.length} 本`}
         </GlassButton>
       </div>
     </div>

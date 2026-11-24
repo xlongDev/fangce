@@ -26,6 +26,8 @@ test("the fill sheet fits the window and its list scrolls", async ({ page }) => 
   const sheet = page.getByRole("dialog");
   await expect(sheet).toBeVisible();
   await expect(sheet).toContainText("仅填充空白字段，不覆盖已有内容。");
+  // Opening the sheet is not a lookup: the reader confirms the options first.
+  await sheet.getByRole("button", { name: "开始查询 24 本" }).click();
 
   const box = await sheet.boundingBox();
   expect(box, "dialog has a box").not.toBeNull();

@@ -45,8 +45,8 @@ export function FillRunStatus() {
       </div>
 
       <p className="text-text-2 text-[13px]">
-        已补全 {run.written} 本 · 跳过 {run.skipped} 本
-        {run.failed > 0 && ` · 失败 ${run.failed} 本`}
+        已补全 {run.written} 本{run.renamed > 0 && ` · 改名 ${run.renamed} 本`} · 跳过 {run.skipped}{" "}
+        本{run.failed > 0 && ` · 失败 ${run.failed} 本`}
         {run.deferred > 0 && ` · 待重试 ${run.deferred} 本`}
         {finished && run.pending.length > 0 && ` · 待补全 ${run.pending.length} 本`}
       </p>

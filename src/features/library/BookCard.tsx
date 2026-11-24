@@ -107,6 +107,21 @@ export function BookCard({
   variant = "grid",
 }: BookCardProps) {
   const authors = authorLine(book);
+  /** The grid paints the raw title and lets the slot truncate it; hover then
+   *  slides the whole string into view. The tooltip always names the subtitle,
+   *  whether it lives in its own field or inside the title. */
+  const fullTitle =
+    book.subtitle && !book.title.includes(book.subtitle)
+      ? `${book.title}：${book.subtitle}`
+      : book.title;
+  /** Some records keep the subtitle inside `title`; the list view still needs
+   *  it on its own line, so split at the same colon `displayTitle` uses. */
+  const colon = book.title.search(/[:：]/);
+  const inlineSubtitle = colon >= 2 ? book.title.slice(colon + 1).trim() : "";
+  const subtitleLine = book.subtitle?.trim() || inlineSubtitle || null;
+  // The grid paints the whole string so hover can reveal it. The list has a
+  // separate subtitle line, so its title keeps only the main part.
+  const paintedTitle = variant === "list" ? displayTitle(book.title) : book.title;
   const canSend = isDesktopRuntime && book.format === "epub" && !!onSendToKindle;
   const m = useMotion();
   const star = useAnimationControls();
@@ -320,9 +335,22 @@ export function BookCard({
           )}
         </span>
         <span className={cn("block min-w-0", variant === "list" && "flex-1")}>
-          <p className="text-text-1 mt-2 truncate text-sm font-medium" title={book.title}>
-            {displayTitle(book.title)}
-          </p>
+          <MarqueeText
+            kind="title"
+            title={fullTitle}
+            className="text-text-1 mt-2 block min-w-0 text-sm font-medium"
+          >
+            {paintedTitle}
+          </MarqueeText>
+          {variant === "list" && subtitleLine && (
+            <MarqueeText
+              kind="subtitle"
+              title={subtitleLine}
+              className="text-text-3 mt-0.5 block min-w-0 text-[11px]"
+            >
+              {subtitleLine}
+            </MarqueeText>
+          )}
           {/* Author truncates; format and size never do — a long author name
               used to push the size out of the line entirely, and the format was
               only ever shown for a book with no author at all. The author now
@@ -341,7 +369,9 @@ export function BookCard({
               // actually shrink the slot — without it the inner span would
               // measure wider than its parent and the marquee would never
               // see overflow.
-              <MarqueeText className="min-w-0 flex-1">{authors}</MarqueeText>
+              <MarqueeText kind="author" className="min-w-0 flex-1">
+                {authors}
+              </MarqueeText>
             ) : (
               <span className="min-w-0 flex-1" aria-hidden="true" />
             )}

@@ -497,6 +497,12 @@ export const commands = {
    */
   metadataApply: (items: MetadataFill_Deserialize[], options?: InvokeOptions) =>
     __TAURI_INVOKE<number>("metadata_apply", { items }, options),
+  /**  `metadata.proposeTitles` — what the catalogues would call these books. */
+  metadataProposeTitles: (ids: string[], options?: InvokeOptions) =>
+    __TAURI_INVOKE<TitleProposal_Serialize[]>("metadata_propose_titles", { ids }, options),
+  /**  `metadata.applyTitles` — writes only the titles the reader ticked. */
+  metadataApplyTitles: (items: TitleRename[], options?: InvokeOptions) =>
+    __TAURI_INVOKE<number>("metadata_apply_titles", { items }, options),
   /**
    *  `metadata.cover_preview` — the picture a catalogue offers, as a data URL.
    *
@@ -4069,6 +4075,70 @@ export type Tally = {
   uploaded: number;
   downloaded: number;
   deleted: number;
+};
+
+/**
+ *  One book's title choices for the explicit batch rename sheet.
+ *
+ *  Not a fill: a fill only writes empty fields, and a book always has a title.
+ *  This is a separate action because renaming forty books on the strength of a
+ *  heuristic is a different decision from filling in what is missing — the
+ *  reader sees each old title against each candidate and ticks the ones to take.
+ */
+export type TitleProposal = TitleProposal_Serialize | TitleProposal_Deserialize;
+
+/**
+ *  One book's title choices for the explicit batch rename sheet.
+ *
+ *  Not a fill: a fill only writes empty fields, and a book always has a title.
+ *  This is a separate action because renaming forty books on the strength of a
+ *  heuristic is a different decision from filling in what is missing — the
+ *  reader sees each old title against each candidate and ticks the ones to take.
+ */
+export type TitleProposal_Deserialize = {
+  bookId: string;
+  /**  The title on the shelf right now, shown beside the candidate. */
+  bookTitle: string;
+  /**  Catalogue titles, best first. Never the title already on the shelf. */
+  candidates: Candidate_Deserialize[];
+  /**
+   *  Whether the first candidate clears the normal match bar. A weak answer
+   *  is still shown, but nothing is ticked by default: this sheet asks the
+   *  reader, it does not vote by proxy.
+   */
+  confident: boolean;
+  /**  Why there is nothing to choose from. Distinct from a weak match. */
+  skipped?: string | null;
+};
+
+/**
+ *  One book's title choices for the explicit batch rename sheet.
+ *
+ *  Not a fill: a fill only writes empty fields, and a book always has a title.
+ *  This is a separate action because renaming forty books on the strength of a
+ *  heuristic is a different decision from filling in what is missing — the
+ *  reader sees each old title against each candidate and ticks the ones to take.
+ */
+export type TitleProposal_Serialize = {
+  bookId: string;
+  /**  The title on the shelf right now, shown beside the candidate. */
+  bookTitle: string;
+  /**  Catalogue titles, best first. Never the title already on the shelf. */
+  candidates: Candidate_Serialize[];
+  /**
+   *  Whether the first candidate clears the normal match bar. A weak answer
+   *  is still shown, but nothing is ticked by default: this sheet asks the
+   *  reader, it does not vote by proxy.
+   */
+  confident: boolean;
+  /**  Why there is nothing to choose from. Distinct from a weak match. */
+  skipped: string | null;
+};
+
+/**  One accepted rename, as the preview sends it. */
+export type TitleRename = {
+  id: string;
+  title: string;
 };
 
 /**

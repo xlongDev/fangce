@@ -3,7 +3,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, isDesktopRuntime } from "@/lib/ipc";
 import { demoEnabled, demoProposals } from "@/lib/demo";
 import { showToast } from "@/stores/toasts";
-import type { Candidate, CustomSourceDef, MetadataFill, Proposal } from "@/types/ipc";
+import type {
+  Candidate,
+  CustomSourceDef,
+  MetadataFill,
+  Proposal,
+  TitleProposal,
+  TitleRename,
+} from "@/types/ipc";
 
 /** A source key: `douban` / `neodb`, or a reader-defined source's row id. */
 export type Source = string;
@@ -128,6 +135,39 @@ export function useMetadataApply() {
       void queryClient.invalidateQueries({ queryKey: ["operations"] });
       // The proposals were computed against metadata that no longer exists.
       void queryClient.invalidateQueries({ queryKey: ["metadata", "propose"] });
+    },
+  });
+}
+
+/**
+ * Title choices for the fill sheet's 改书名 switch. Not `useMetadataPropose`:
+ * a fill's answer is "what is missing", a rename's answer is "what this book is
+ * called", and the rows that show them make different promises.
+ *
+ * `enabled` is the switch itself. Turning it on must not reuse an answer cached
+ * before the reader asked for renames — the fill and the title lookups are two
+ * different catalogues' questions, and only the second one writes a title.
+ */
+export function useTitleProposals(ids: string[], enabled = true) {
+  return useQuery<TitleProposal[]>({
+    queryKey: ["metadata", "titles", ids],
+    queryFn: () => ipc.metadataProposeTitles(ids),
+    enabled: enabled && ids.length > 0 && isDesktopRuntime,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+/** Writes only the titles the reader ticked. One transaction, one undo. */
+export function useTitleApply() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (items: TitleRename[]) => ipc.metadataApplyTitles(items),
+    onSuccess: (written) => {
+      showToast("success", `改了 ${written} 本书名`);
+      void queryClient.invalidateQueries({ queryKey: ["books"] });
+      void queryClient.invalidateQueries({ queryKey: ["operations"] });
+      void queryClient.invalidateQueries({ queryKey: ["metadata", "titles"] });
     },
   });
 }

@@ -24,7 +24,10 @@ test("a long author name marquees on hover instead of staying truncated", async 
   await page.goto("/?demo=1");
   await expect(page.locator("[data-book-cover]").first()).toBeVisible();
 
-  const slot = page.locator("[data-marquee]").first();
+  // The title now uses the same slot; the author assertions below must name
+  // their slot or they would start measuring the wrong line.
+  await expect(page.locator('[data-marquee-kind="title"]').first()).toBeVisible();
+  const slot = page.locator('[data-marquee-kind="author"]').first();
   await expect(slot).toBeVisible();
 
   const measured = await slot.evaluate((el) => {
@@ -55,7 +58,8 @@ test("a long author name marquees on hover instead of staying truncated", async 
   const overflow = measured.content - measured.slot;
   const x = () =>
     page.evaluate(() => {
-      const inner = document.querySelector("[data-marquee]")!.firstElementChild as HTMLElement;
+      const inner = document.querySelector('[data-marquee-kind="author"]')!
+        .firstElementChild as HTMLElement;
       const match = /matrix\(([^)]+)\)/.exec(getComputedStyle(inner).transform);
       return match ? Math.round(Number((match[1] ?? "").split(",")[4] ?? 0)) : 0;
     });

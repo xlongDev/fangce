@@ -4,7 +4,7 @@ import { demoEnabled, demoProposals } from "@/lib/demo";
 import { ipc } from "@/lib/ipc";
 import { hasSomething, toFill } from "@/lib/metadata";
 import { showToast } from "@/stores/toasts";
-import type { Proposal } from "@/types/ipc";
+import type { Proposal, TitleRename } from "@/types/ipc";
 
 /**
  * 整架补全: the loop that fills a whole shelf, one batch at a time.
@@ -43,9 +43,20 @@ export interface FillRun {
   /** Books left unanswered when the run paused or finished, so the reader can
    *  send just those again instead of reselecting the whole shelf. */
   pending: string[];
-  /** The cover decision this run was started with; a retry must not change it. */
+  /** The cover and title decisions this run started with; a retry must not
+   *  change them, or 「重试待补全」 would silently start a different job. */
   replaceCovers: boolean;
-  /** Ask only the books still pending, with the same cover decision. */
+  renameTitles: boolean;
+  /** Titles the reader already picked in the preview, carried into a run
+   *  started with 后台运行 so it cannot silently use a different candidate. */
+  preferredTitles: TitleRename[];
+  /** Books whose title was rewritten by this run. */
+  renamed: number;
+  /** The pill is a background affordance: only 「后台运行」 turns it on.
+   *  A run watched in its dialog stays in the dialog. */
+  background: boolean;
+  setBackground: (background: boolean) => void;
+  /** Ask only the books still pending, with the same decisions. */
   retryPending: () => void;
   /** Why it stopped before the end, or `null` when it ran to completion. */
   stopped: string | null;
@@ -56,7 +67,12 @@ export interface FillRun {
   sheetOpen: boolean;
   openSheet: () => void;
   closeSheet: () => void;
-  start: (ids: string[], replaceCovers?: boolean) => void;
+  start: (
+    ids: string[],
+    replaceCovers?: boolean,
+    renameTitles?: boolean,
+    preferredTitles?: TitleRename[],
+  ) => void;
   cancel: () => void;
   reset: () => void;
 }
@@ -104,6 +120,10 @@ const idle = {
   cooldownMs: 0,
   pending: [] as string[],
   replaceCovers: false,
+  renameTitles: false,
+  preferredTitles: [] as TitleRename[],
+  renamed: 0,
+  background: false,
   stopped: null as string | null,
   collapsed: false,
   sheetOpen: false,
@@ -116,15 +136,17 @@ export const useFillRun = create<FillRun>((set, get) => ({
     set(idle);
   },
   setCollapsed: (collapsed) => set({ collapsed }),
-  openSheet: () => set({ sheetOpen: true }),
+  // 回到完整界面就把常驻条收起来：进度又有了落脚处，不必占着右下角。
+  openSheet: () => set({ sheetOpen: true, background: false }),
   closeSheet: () => set({ sheetOpen: false }),
+  setBackground: (background) => set({ background }),
   cancel: () => {
     set({ cancelled: true });
     // Shown by every surface reading the store: the press is acknowledged now,
     // even though the batch in flight has to finish before the loop can exit.
     wakePause?.();
   },
-  start: (ids, replaceCovers = false) => {
+  start: (ids, replaceCovers = false, renameTitles = false, preferredTitles = []) => {
     // One run at a time: two loops would interleave transactions and report
     // progress that belongs to neither. Say so rather than dropping the click.
     if (get().running) {
@@ -132,29 +154,46 @@ export const useFillRun = create<FillRun>((set, get) => ({
       return;
     }
     if (ids.length === 0) return;
-    set({ ...idle, running: true, total: ids.length, replaceCovers });
-    void loop(ids, replaceCovers, set, get);
+    set({
+      ...idle,
+      running: true,
+      total: ids.length,
+      replaceCovers,
+      renameTitles,
+      preferredTitles,
+    });
+    void loop(ids, replaceCovers, renameTitles, preferredTitles, set, get);
   },
   retryPending: () => {
-    const { pending, replaceCovers, running } = get();
+    const { pending, replaceCovers, renameTitles, preferredTitles, running } = get();
     if (running) {
       showToast("error", "正在补全元信息，等这轮结束再重试。");
       return;
     }
     if (pending.length === 0) return;
-    set({ ...idle, running: true, total: pending.length, replaceCovers });
-    void loop(pending, replaceCovers, set, get);
+    set({
+      ...idle,
+      running: true,
+      total: pending.length,
+      replaceCovers,
+      renameTitles,
+      preferredTitles,
+    });
+    void loop(pending, replaceCovers, renameTitles, preferredTitles, set, get);
   },
 }));
 
 async function loop(
   ids: string[],
   replaceCovers: boolean,
+  renameTitles: boolean,
+  preferredTitles: TitleRename[],
   set: (partial: Partial<FillRun>) => void,
   get: () => FillRun,
 ) {
   let done = 0;
   let written = 0;
+  let renamed = 0;
   let skipped = 0;
   let failed = 0;
   const failures: Proposal[] = [];
@@ -218,6 +257,41 @@ async function loop(
           : // oxlint-disable-next-line no-await-in-loop -- 同上：写要按批落盘，不然进度是假的。
             await ipc.metadataApply(worth.map(toFill));
       }
+      // Renames ride the same batches, but never the same decision: a preview
+      // carries the exact titles the reader ticked, while a run without one
+      // only takes the high-confidence first answer. A title lookup that
+      // fails must not throw away the fills just written.
+      if (renameTitles && !demo) {
+        try {
+          const chosen = new Map(
+            preferredTitles
+              .filter((title) => slice.includes(title.id))
+              .map((title) => [title.id, title]),
+          );
+          const picks = [...chosen.values()];
+          if (chosen.size < slice.length) {
+            // oxlint-disable-next-line no-await-in-loop -- 一批一问，下一批要等这批写完
+            const titleRows = await ipc.metadataProposeTitles(
+              slice.filter((id) => !chosen.has(id)),
+            );
+            picks.push(
+              ...titleRows.flatMap((row) => {
+                const candidate = row.candidates[0];
+                return row.confident && candidate
+                  ? [{ id: row.bookId, title: candidate.title }]
+                  : [];
+              }),
+            );
+          }
+          if (picks.length > 0) {
+            // oxlint-disable-next-line no-await-in-loop -- 同上：改名是另一笔事务。
+            renamed += await ipc.metadataApplyTitles(picks);
+          }
+        } catch {
+          // The fill counts already stand; a missing title is one more thing
+          // the reader can do from the book's own sheet.
+        }
+      }
       failed += broke.length;
       failures.push(...broke);
       // Every throttled book is still unanswered, including one that has used
@@ -225,7 +299,7 @@ async function loop(
       done += slice.length - held.length;
       deferred = queue.slice(at).filter((id) => tries.has(id)).length;
       cooldownMs = held.reduce((longest, p) => Math.max(longest, p.throttledForMs ?? 0), 0);
-      set({ done, written, skipped, failed, failures, deferred, cooldownMs });
+      set({ done, written, renamed, skipped, failed, failures, deferred, cooldownMs });
 
       // Two consecutive batches that are mostly 「wait」 mean the provider is
       // refusing this machine, not that these books are hard to find. Stop
@@ -273,6 +347,7 @@ async function loop(
       stopped,
       done,
       written,
+      renamed,
       skipped,
       failed,
       failures,

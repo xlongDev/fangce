@@ -35,7 +35,7 @@ function describe(state: FillRun): string {
       ? "整架补全已暂停"
       : "整架补全已停止"
     : "整架补全完成";
-  const counts = `已补全 ${state.written} 本，跳过 ${state.skipped} 本`;
+  const counts = `已补全 ${state.written} 本${state.renamed > 0 ? `，改名 ${state.renamed} 本` : ""}，跳过 ${state.skipped} 本`;
   const extra = [
     state.failed > 0 ? `失败 ${state.failed} 本` : null,
     state.pending.length > 0 ? `待补全 ${state.pending.length} 本` : null,
@@ -63,9 +63,12 @@ export function FillRunPill() {
   const reset = useFillRun((s) => s.reset);
   const collapsed = useFillRun((s) => s.collapsed);
   const setCollapsed = useFillRun((s) => s.setCollapsed);
+  const background = useFillRun((s) => s.background);
   const { countHidden, peekHandlers, keepPeek } = useRunPillPeek(collapsed);
   const wasRunning = useRef(false);
-  const slot = useRunPillSlot("fill", total > 0);
+  // 没点「后台运行」时进度就在补全弹窗里，右下角不再多出一条通知条。
+  const visible = background && total > 0;
+  const slot = useRunPillSlot("fill", visible);
 
   useEffect(() => {
     const was = wasRunning.current;
@@ -97,7 +100,7 @@ export function FillRunPill() {
   return (
     <OverlayPortal>
       <AnimatePresence>
-        {total > 0 && (
+        {visible && (
           <motion.div
             data-fill-run-pill
             {...entrance}

@@ -6,6 +6,10 @@ import { cn } from "@/lib/cn";
 interface MarqueeTextProps {
   children: ReactNode;
   className?: string;
+  /** Which slot this is, so tests can tell a title from an author line. */
+  kind?: string;
+  /** Full text for the tooltip when the painted string is shortened. */
+  title?: string;
 }
 
 /** Seconds held at each end of the slide before it turns around. */
@@ -38,7 +42,7 @@ const MASK =
  * `prefers-reduced-motion` disables the scroll outright, so a reader who asked
  * for less motion never sees it.
  */
-export function MarqueeText({ children, className }: MarqueeTextProps) {
+export function MarqueeText({ children, className, kind, title }: MarqueeTextProps) {
   const outerRef = useRef<HTMLSpanElement>(null);
   const innerRef = useRef<HTMLSpanElement>(null);
   const [overflow, setOverflow] = useState(0);
@@ -74,6 +78,8 @@ export function MarqueeText({ children, className }: MarqueeTextProps) {
       // difference between the two branches is a class name and a mask, and
       // neither survives a `getByRole` or a text match.
       data-marquee
+      data-marquee-kind={kind}
+      title={title}
       className={cn("block overflow-hidden", className)}
       // The mask would fade the ellipsis itself on a name that fits, so it is
       // only there while there is something to slide.

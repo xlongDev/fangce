@@ -408,7 +408,7 @@ export function ReaderHeaderBar({
       </GlassIconButton>
       <HeaderCover bookId={bookId} coverUrl={coverUrl} boxRef={coverBoxRef} />
       <div className="min-w-0 flex-1">
-        <p className="text-text-1 truncate text-sm font-medium" data-reader-title>
+        <p className="text-text-1 truncate text-sm font-medium" data-reader-title title={title}>
           {title}
         </p>
         <p className="text-text-3 truncate text-xs" data-reader-chapter>

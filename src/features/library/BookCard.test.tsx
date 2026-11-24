@@ -56,6 +56,7 @@ function renderCard(
   onAskExport: (book: BookSummary) => void = () => {},
   onSendToKindle?: (book: BookSummary) => void,
   kindlePhase?: "sending" | "success" | "error",
+  variant: "grid" | "list" = "grid",
 ) {
   return render(
     <BookCard
@@ -66,6 +67,7 @@ function renderCard(
       onAskExport={onAskExport}
       onSendToKindle={onSendToKindle}
       kindlePhase={kindlePhase}
+      variant={variant}
       onExportFile={() => {}}
       onEditTags={() => {}}
       onEditMeta={() => {}}
@@ -109,13 +111,55 @@ describe("BookCard — format / file size row (T2/T3)", () => {
     // `MarqueeText` always measures zero overflow here and always takes the
     // `truncate` branch. Whether a long name really scrolls is a real-engine
     // question, and `e2e/shelf-marquee.spec.ts` is where it is asked.
-    const authorSlot = container.querySelector("[data-marquee]");
+    const authorSlot = container.querySelector('[data-marquee-kind="author"]');
     const sizeSpan = container.querySelector("span.shrink-0");
     expect(authorSlot).not.toBeNull();
     expect(authorSlot!.className).toContain("flex-1");
     expect(authorSlot!.className).toContain("min-w-0");
     expect(sizeSpan).not.toBeNull();
     expect(sizeSpan!.textContent).toMatch(/4\.3 MB/);
+  });
+
+  it("paints the full title for hover scrolling and names the subtitle in the tooltip", () => {
+    const { container } = renderCard({
+      title: "国家构建",
+      subtitle: "21世纪的国家治理与世界秩序",
+    });
+    const slot = container.querySelector('[data-marquee-kind="title"]');
+    expect(slot?.textContent).toBe("国家构建");
+    expect(slot?.getAttribute("title")).toBe("国家构建：21世纪的国家治理与世界秩序");
+  });
+
+  it("list view gives the subtitle its own line, including one embedded in the title", () => {
+    const { container } = renderCard(
+      { title: "国家构建：21世纪的国家治理与世界秩序" },
+      () => {},
+      undefined,
+      undefined,
+      "list",
+    );
+    expect(container.querySelector('[data-marquee-kind="title"]')?.textContent).toBe("国家构建");
+    expect(container.querySelector('[data-marquee-kind="subtitle"]')?.textContent).toBe(
+      "21世纪的国家治理与世界秩序",
+    );
+  });
+
+  it("list view uses the subtitle field when the title has none", () => {
+    const { container } = renderCard(
+      { title: "国家构建", subtitle: "21世纪的国家治理与世界秩序" },
+      () => {},
+      undefined,
+      undefined,
+      "list",
+    );
+    expect(container.querySelector('[data-marquee-kind="subtitle"]')?.textContent).toBe(
+      "21世纪的国家治理与世界秩序",
+    );
+  });
+
+  it("grid keeps the subtitle out of its own line", () => {
+    const { container } = renderCard({ title: "国家构建", subtitle: "21世纪的国家治理与世界秩序" });
+    expect(container.querySelector('[data-marquee-kind="subtitle"]')).toBeNull();
   });
 
   it("renders the format even when there are no authors", () => {

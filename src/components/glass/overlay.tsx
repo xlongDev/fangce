@@ -45,6 +45,12 @@ interface GlassDialogProps {
   /** Tailwind width class, defaults to a comfortable palette width. */
   widthClass?: string;
   /**
+   * Extra classes on the dialog surface. A sheet whose content grows with a
+   * selection can exceed the window; such a caller supplies its own height
+   * cap and scrolling here instead of letting the centred pane be clipped.
+   */
+  contentClassName?: string;
+  /**
    * Runs before the dialog acts on Escape, and can stand it down with
    * `preventDefault`.
    *
@@ -65,6 +71,7 @@ export function GlassDialog({
   description,
   children,
   widthClass = "w-[min(92vw,640px)]",
+  contentClassName,
   onEscapeKeyDown,
 }: GlassDialogProps) {
   const m = useMotion();
@@ -141,6 +148,7 @@ export function GlassDialog({
                   // window's for a dialog opened where there is no pane.
                   "fixed top-1/2 left-[var(--dialog-centre,50%)] z-50 -translate-x-1/2 -translate-y-1/2",
                   widthClass,
+                  contentClassName,
                   "glass-2 shadow-panel rounded-2xl p-5 outline-none",
                 )}
                 initial={{ opacity: 0, scale: m.reduce ? 1 : 0.96, y: m.reduce ? 0 : 8 }}

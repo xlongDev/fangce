@@ -1,15 +1,48 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/ipc", () => ({
-  ipc: { metadataPropose: vi.fn(), metadataApply: vi.fn() },
+  ipc: {
+    metadataPropose: vi.fn(),
+    metadataApply: vi.fn(),
+    metadataProposeTitles: vi.fn(),
+    metadataApplyTitles: vi.fn(),
+  },
 }));
 
 import { ipc } from "@/lib/ipc";
 import { CHUNK, useFillRun } from "@/stores/fillRun";
-import type { Proposal_Serialize } from "@/types/ipc";
+import type { Candidate_Serialize, Proposal_Serialize, TitleProposal_Serialize } from "@/types/ipc";
 
 const propose = vi.mocked(ipc.metadataPropose);
 const apply = vi.mocked(ipc.metadataApply);
+const proposeTitles = vi.mocked(ipc.metadataProposeTitles);
+const applyTitles = vi.mocked(ipc.metadataApplyTitles);
+
+const titleProposal = (id: string): TitleProposal_Serialize => {
+  const candidate: Candidate_Serialize = {
+    source: "neodb",
+    title: `${id}（目录名）`,
+    subtitle: null,
+    authors: [],
+    publisher: null,
+    publishedYear: null,
+    description: null,
+    rating: null,
+    ratingCount: null,
+    doubanUrl: null,
+    language: null,
+    isbn: null,
+    coverUrl: null,
+    matchScore: 0.9,
+  };
+  return {
+    bookId: id,
+    bookTitle: id,
+    candidates: [candidate],
+    confident: true,
+    skipped: null,
+  };
+};
 
 const proposal = (id: string, over: Partial<Proposal_Serialize> = {}): Proposal_Serialize => ({
   bookId: id,
@@ -45,6 +78,10 @@ beforeEach(() => {
   useFillRun.getState().reset();
   propose.mockImplementation((asked: string[]) => Promise.resolve(asked.map((id) => proposal(id))));
   apply.mockImplementation((items: unknown[]) => Promise.resolve(items.length));
+  proposeTitles.mockImplementation((asked: string[]) =>
+    Promise.resolve(asked.map((id) => titleProposal(id))),
+  );
+  applyTitles.mockImplementation((items: unknown[]) => Promise.resolve(items.length));
 });
 
 describe("the whole-shelf run", () => {
@@ -61,6 +98,35 @@ describe("the whole-shelf run", () => {
     expect(state.done).toBe(CHUNK + 1);
     expect(state.written).toBe(CHUNK + 1);
     expect(state.stopped).toBeNull();
+    // A run started without 后台运行 has no shell pill to show.
+    expect(state.background).toBe(false);
+  });
+
+  /** The rename switch is carried to every batch, like the cover switch. */
+  it("carries the rename decision to every batch", async () => {
+    useFillRun.getState().start(ids(CHUNK + 1), false, true);
+    await vi.waitFor(() => expect(useFillRun.getState().running).toBe(false));
+
+    expect(proposeTitles).toHaveBeenCalledTimes(2);
+    expect(proposeTitles.mock.calls[0]![0]).toHaveLength(CHUNK);
+    expect(proposeTitles.mock.calls[1]![0]).toHaveLength(1);
+    expect(applyTitles).toHaveBeenCalledTimes(2);
+    expect(useFillRun.getState().renamed).toBe(CHUNK + 1);
+  });
+
+  /** A run started from a preview must not silently swap the title the
+   *  reader picked for the catalogue's first answer. */
+  it("keeps preview-picked titles and only asks about the rest", async () => {
+    const picked = [{ id: "b0", title: "读者选的书名" }];
+    useFillRun.getState().start(ids(2), false, true, picked);
+    await vi.waitFor(() => expect(useFillRun.getState().running).toBe(false));
+
+    expect(proposeTitles).toHaveBeenCalledTimes(1);
+    expect(proposeTitles.mock.calls[0]![0]).toEqual(["b1"]);
+    expect(applyTitles).toHaveBeenCalledWith([
+      { id: "b0", title: "读者选的书名" },
+      { id: "b1", title: "b1（目录名）" },
+    ]);
   });
 
   /** 替换已有封面 is a decision the whole run carries to every batch,

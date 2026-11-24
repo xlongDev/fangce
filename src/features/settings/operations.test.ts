@@ -86,6 +86,10 @@ describe("the kind chips", () => {
     expect(kinds("fill_metadata")).toEqual(["all", "fill"]);
   });
 
+  it("files a batch rename under 改信息, not 补全", () => {
+    expect(kinds("rename_titles")).toEqual(["all", "metadata"]);
+  });
+
   it("files everything that removes a book under 删除", () => {
     expect(kinds("trash")).toContain("delete");
     expect(kinds("purge")).toContain("delete");
