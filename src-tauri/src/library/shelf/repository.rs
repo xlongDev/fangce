@@ -4,6 +4,7 @@
 //! on them; they are fetched with one grouped query per list rather than one
 //! query per book.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use rusqlite::types::Value;
@@ -953,7 +954,13 @@ pub fn insert(tx: &Transaction<'_>, book: &NewBook<'_>) -> AppResult<()> {
         ],
     )?;
 
-    for (position, name) in book.authors.iter().enumerate() {
+    // One book must not link the same author twice — OPF files can repeat a
+    // dc:creator, and the (book_id, author_id) unique index would reject it.
+    // Keep the first occurrence's position.
+    let mut seen = HashSet::new();
+    for (position, name) in
+        book.authors.iter().enumerate().filter(|(_, name)| seen.insert(name.as_str()))
+    {
         let author_id = upsert_author(tx, name)?;
         tx.execute(
             "INSERT INTO book_authors (book_id, author_id, position) VALUES (?1, ?2, ?3)",
@@ -1269,7 +1276,8 @@ pub fn update_metadata(tx: &Transaction<'_>, id: &str, patch: &BookMetadataPatch
     }
 
     tx.execute("DELETE FROM book_authors WHERE book_id = ?1", params![id])?;
-    for (position, name) in authors.iter().enumerate() {
+    let mut seen = HashSet::new();
+    for (position, name) in authors.iter().enumerate().filter(|(_, name)| seen.insert(**name)) {
         let author_id = upsert_author(tx, name)?;
         tx.execute(
             "INSERT INTO book_authors (book_id, author_id, position) VALUES (?1, ?2, ?3)",
@@ -1420,6 +1428,17 @@ mod tests {
         assert_eq!(books.len(), 2);
         let first = books.iter().find(|b| b.id == "b2").expect("b2");
         assert_eq!(first.authors, ["刘慈欣", "某人"], "作者顺序必须保留");
+    }
+
+    #[test]
+    fn repeated_authors_are_linked_once() {
+        let conn = seed();
+        // Some OPF files list the same dc:creator twice. The unique index on
+        // (book_id, author_id) used to reject the whole import.
+        add(&conn, "b1", "短经典", &["威廉·特雷弗", "彼得·施塔姆", "威廉·特雷弗"], "h1");
+
+        let book = get(&conn, "b1").expect("get").expect("b1");
+        assert_eq!(book.authors, ["威廉·特雷弗", "彼得·施塔姆"], "重复作者只保留首次出现");
     }
 
     #[test]
@@ -1892,6 +1911,17 @@ mod tests {
             .query_row("SELECT sort_title FROM books WHERE id = 'b1'", [], |row| row.get(0))
             .expect("sort_title");
         assert_eq!(sort_title, "three-body problem");
+    }
+
+    #[test]
+    fn editing_authors_deduplicates_repeated_names() {
+        let conn = seed();
+        add(&conn, "b1", "书一", &["原作者"], "h1");
+
+        edit(&conn, "b1", &draft("书一", &["甲", "乙", "甲"]));
+
+        let book = get(&conn, "b1").expect("get").expect("b1");
+        assert_eq!(book.authors, ["甲", "乙"], "编辑面板的重复作者同样只留一次");
     }
 
     #[test]
