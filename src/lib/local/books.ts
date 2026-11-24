@@ -22,6 +22,7 @@ import type {
   LibraryFacets,
   LibraryStats,
 } from "@/lib/bindings";
+import { foldLanguage } from "@/features/library/shelfQuery";
 import { filename } from "@/lib/filename";
 import { countChars, pdfLines } from "@/lib/local/blocks";
 import * as db from "@/lib/local/db";
@@ -272,8 +273,8 @@ function matches(
     return false;
   }
   if (skip !== "language" && query.languages?.length) {
-    const wanted = query.languages.map((value) => value.toLowerCase());
-    if (!book.language || !wanted.includes(book.language.toLowerCase())) return false;
+    const wanted = query.languages.map(foldLanguage);
+    if (!book.language || !wanted.includes(foldLanguage(book.language))) return false;
   }
   if (skip !== "publisher" && query.publishers?.length) {
     if (!book.publisher || !query.publishers.includes(book.publisher)) return false;
@@ -356,7 +357,7 @@ export async function bookFacets(query: BookQuery): Promise<LibraryFacets> {
 
   return {
     formats: tally((book) => book.format),
-    languages: tally((book) => book.language?.toLowerCase()),
+    languages: tally((book) => (book.language ? foldLanguage(book.language) : undefined)),
     publishers: tally((book) => book.publisher),
     status: (["unread", "reading", "finished"] as const).map((value) => ({
       value,

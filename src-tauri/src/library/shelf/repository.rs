@@ -507,11 +507,11 @@ fn conditions(query: &BookQuery, skip: Option<Dimension>) -> (Vec<String>, Vec<V
         binds.extend(query.formats.iter().map(|format| Value::Text(format.as_str().to_string())));
     }
     if keep(Dimension::Language) {
-        // `to_ascii_lowercase` matches SQLite's `lower()` (ASCII only), so an
-        // old filter saved as `ZH-CN` still selects the `zh-CN` bucket.
+        // Fold the bound values the same way the facet groups rows. An old
+        // filter saved as `zho` still selects the `zh` chip and its books.
         let languages: Vec<String> =
-            query.languages.iter().map(|value| value.to_ascii_lowercase()).collect();
-        push_in(&mut conditions, &mut binds, "lower(b.language)", &languages);
+            query.languages.iter().map(|value| fold_language(value)).collect();
+        push_in(&mut conditions, &mut binds, &language_key(), &languages);
     }
     if keep(Dimension::Publisher) {
         push_in(&mut conditions, &mut binds, "b.publisher", &query.publishers);
@@ -626,18 +626,45 @@ fn push_page(sql: &mut String, binds: &mut Vec<Value>, query: &BookQuery) {
     }
 }
 
+/// Spellings that name the same language, and nothing more speculative.
+/// `und` (undetermined) and OPF typos stay as they are — a bucket must not
+/// silently claim a language the source never gave. Mirrored in
+/// `shelfQuery.ts::foldLanguage`.
+const LANGUAGE_ALIASES: &[(&str, &str)] =
+    &[("zho", "zh"), ("zh_cn", "zh-cn"), ("english", "en"), ("简体中文", "zh-hans")];
+
+/// One SQL expression for the canonical language key, shared by the facet and
+/// the filter so a chip always selects exactly the books it counts.
+fn language_key() -> String {
+    let mut sql = String::from("CASE lower(b.language) ");
+    for (from, to) in LANGUAGE_ALIASES {
+        sql.push_str(&format!("WHEN '{from}' THEN '{to}' "));
+    }
+    sql.push_str("ELSE lower(b.language) END");
+    sql
+}
+
+/// The Rust half of the same fold, for values bound into that expression.
+fn fold_language(value: &str) -> String {
+    let lower = value.to_ascii_lowercase();
+    LANGUAGE_ALIASES
+        .iter()
+        .find(|(from, _)| *from == lower.as_str())
+        .map(|(_, to)| (*to).to_string())
+        .unwrap_or(lower)
+}
+
 /// Counts for the shelf's filter panel.
 ///
 /// One `GROUP BY` per text dimension rather than one query per value: a shelf
 /// of two thousand books asks this on every filter change, and the alternative
 /// is a dozen round trips through the same table scan.
 pub fn facets(conn: &Connection, query: &BookQuery) -> AppResult<LibraryFacets> {
+    let language = language_key();
     Ok(LibraryFacets {
         formats: facet_counts(conn, query, Dimension::Format, "b.format")?,
-        // Publishers keep their casing; languages fold it. The same `lower()`
-        // is used by the filter below, so the chip's value is also what selects
-        // every book in its bucket — `ZH` and `zh` are one language, not two.
-        languages: facet_counts(conn, query, Dimension::Language, "lower(b.language)")?,
+        // Publishers keep their casing; languages fold through the alias table.
+        languages: facet_counts(conn, query, Dimension::Language, &language)?,
         publishers: facet_counts(conn, query, Dimension::Publisher, "b.publisher")?,
         status: status_counts(conn, query)?,
         covers: cover_counts(conn, query)?,
@@ -1980,6 +2007,48 @@ mod tests {
             .map(|facet| (facet.value.clone(), facet.count))
             .collect();
         assert_eq!(languages, [("zh".to_string(), 2), ("en".to_string(), 1)]);
+    }
+
+    #[test]
+    fn unambiguous_language_aliases_share_a_facet_and_a_filter() {
+        let conn = filtered_shelf();
+        add_as(&conn, "b4", "Dune Messiah", &["Herbert"], "h4", BookFormat::Epub, 8192);
+        conn.execute_batch(
+            "UPDATE books SET language = 'zho' WHERE id = 'b1';
+             UPDATE books SET language = '简体中文' WHERE id = 'b2';
+             UPDATE books SET language = 'zh_cn' WHERE id = 'b3';
+             UPDATE books SET language = 'English' WHERE id = 'b4';",
+        )
+        .expect("seed aliases");
+
+        let languages: Vec<(String, i64)> = facets(&conn, &BookQuery::default())
+            .expect("facets")
+            .languages
+            .iter()
+            .map(|facet| (facet.value.clone(), facet.count))
+            .collect();
+        assert_eq!(
+            languages,
+            [
+                ("en".to_string(), 1),
+                ("zh".to_string(), 1),
+                ("zh-cn".to_string(), 1),
+                ("zh-hans".to_string(), 1),
+            ]
+        );
+
+        let titles = |value: &str| {
+            let query = BookQuery { languages: vec![value.into()], ..BookQuery::default() };
+            list(&conn, &query)
+                .expect("list")
+                .into_iter()
+                .map(|book| book.title)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(titles("ZH"), ["三体"]);
+        assert_eq!(titles("zh-CN"), ["Piranesi"]);
+        assert_eq!(titles("en"), ["Dune Messiah"]);
+        assert_eq!(titles("简体中文"), ["Dune"]);
     }
 
     #[test]

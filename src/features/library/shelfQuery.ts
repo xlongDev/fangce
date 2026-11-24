@@ -56,6 +56,25 @@ export function toggleValue<T>(list: readonly T[], value: T): T[] {
 }
 
 /**
+ * The four spellings that name the same language and nothing more speculative.
+ * Mirrored by `LANGUAGE_ALIASES` in `repository.rs`: `und` and OPF typos stay
+ * as they are, because folding them would claim a language the source never
+ * gave. Read-path only — the stored value is never rewritten.
+ */
+const LANGUAGE_ALIASES = new Map<string, string>([
+  ["zho", "zh"],
+  ["zh_cn", "zh-cn"],
+  ["english", "en"],
+  ["简体中文", "zh-hans"],
+]);
+
+/** The chip's value, shared by the count, the filter and the saved selection. */
+export function foldLanguage(value: string): string {
+  const lower = value.toLowerCase();
+  return LANGUAGE_ALIASES.get(lower) ?? lower;
+}
+
+/**
  * Build the `BookQuery` the shelf reads.
  *
  * The `recent` filter used to force `sort: recentlyRead` here, which made the

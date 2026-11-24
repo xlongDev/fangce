@@ -7,6 +7,7 @@ import { CHIP, CHIP_IDLE, CHIP_ON } from "@/features/library/chip";
 import {
   NO_FILTERS,
   activeFilterCount,
+  foldLanguage,
   toggleValue,
   type ShelfFilters,
 } from "@/features/library/shelfQuery";
@@ -104,12 +105,12 @@ export function ShelfFilterMenu({
     onChange({ ...filters, formats: toggleValue(filters.formats, format) });
   const togglePublisher = (value: string) =>
     onChange({ ...filters, publishers: toggleValue(filters.publishers, value) });
-  // A filter saved before case folding shipped can still say `ZH-CN` while the
-  // facet now says `zh-cn`. Fold both sides so the chip stays checked and one
-  // click removes it instead of adding a second spelling of the same value.
+  // A filter saved before folding shipped can still say `ZH-CN` or `zho`
+  // while the facet now says `zh-cn` or `zh`. Fold both sides so the chip
+  // stays checked and one click removes it instead of adding a second spelling.
   const toggleLanguage = (value: string) => {
-    const folded = filters.languages.map((language) => language.toLowerCase());
-    onChange({ ...filters, languages: toggleValue(folded, value.toLowerCase()) });
+    const folded = filters.languages.map(foldLanguage);
+    onChange({ ...filters, languages: toggleValue(folded, foldLanguage(value)) });
   };
 
   return (
@@ -199,7 +200,7 @@ export function ShelfFilterMenu({
             {facets?.languages.map((facet) => (
               <OptionChip
                 key={facet.value}
-                on={filters.languages.some((language) => language.toLowerCase() === facet.value)}
+                on={filters.languages.some((language) => foldLanguage(language) === facet.value)}
                 count={facet.count}
                 onClick={() => toggleLanguage(facet.value)}
               >

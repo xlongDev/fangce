@@ -4,6 +4,7 @@ import {
   NO_FILTERS,
   activeFilterCount,
   buildBookQuery,
+  foldLanguage,
   resolveTagFilter,
   toggleValue,
   type ShelfFilters,
@@ -133,5 +134,22 @@ describe("shelf filters", () => {
     // older caller's request byte-identical.
     expect(buildBookQuery("all", "recentlyAdded", "", null).trash).toBeUndefined();
     expect(buildBookQuery("favorites", "recentlyAdded", "", null).trash).toBeUndefined();
+  });
+});
+
+describe("foldLanguage", () => {
+  it("folds the four unambiguous aliases onto their canonical chip", () => {
+    expect(foldLanguage("zho")).toBe("zh");
+    expect(foldLanguage("ZH")).toBe("zh");
+    expect(foldLanguage("zh_cn")).toBe("zh-cn");
+    expect(foldLanguage("ZH-CN")).toBe("zh-cn");
+    expect(foldLanguage("English")).toBe("en");
+    expect(foldLanguage("简体中文")).toBe("zh-hans");
+  });
+
+  it("leaves undetermined values and OPF typos alone", () => {
+    for (const value of ["und", "afp", "zh-wr", "zh-cmn-hans", "cn", "cht"]) {
+      expect(foldLanguage(value), value).toBe(value);
+    }
   });
 });
