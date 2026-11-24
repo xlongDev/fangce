@@ -16,7 +16,7 @@ import {
 import { GlassDialog } from "@/components/glass/overlay";
 import { GlassButton, GlassIconButton } from "@/components/glass/button";
 import { MarqueeText } from "@/components/common/MarqueeText";
-import { authorLine, formatFileSize } from "@/features/library/format";
+import { authorLine, authorNames, formatFileSize } from "@/features/library/format";
 import { cn } from "@/lib/cn";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { EASE_LAND, SPRING, useMotion } from "@/lib/motion";
@@ -110,7 +110,11 @@ export function BookCard({
   onToggleSelect,
   variant = "grid",
 }: BookCardProps) {
+  const names = authorNames(book);
   const authors = authorLine(book);
+  /** Which author the line stands for when there is only one. */
+  const soloAuthor = names.length === 1 ? names[0] : null;
+  const [authorPicker, setAuthorPicker] = useState(false);
   /** The grid paints the raw title and lets the slot truncate it; hover then
    *  slides the whole string into view. The tooltip always names the subtitle,
    *  whether it lives in its own field or inside the title. */
@@ -129,9 +133,17 @@ export function BookCard({
   // separate subtitle line, so its title keeps only the main part.
   const paintedTitle = variant === "list" ? displayTitle(book.title) : book.title;
   const canSend = isDesktopRuntime && book.format === "epub" && !!onSendToKindle;
-  const searchableAuthor =
-    !selecting && book.authors.length === 1 ? (book.authors[0] ?? null) : null;
-  const canSearchAuthor = !!onSearchAuthor && searchableAuthor !== null;
+  const canSearchAuthor = !!onSearchAuthor && !selecting && names.length > 0;
+  // The list can afford one target per name; the whole line must not light up
+  // when only one of them is under the pointer.
+  const splitAuthors = variant === "list" && names.length > 1;
+  const authorTitle = !canSearchAuthor
+    ? undefined
+    : soloAuthor
+      ? `筛选《${soloAuthor}》的全部书籍`
+      : variant === "grid"
+        ? "选择作者"
+        : "点击作者筛选";
   const m = useMotion();
   const star = useAnimationControls();
   const halo = useAnimationControls();
@@ -263,11 +275,20 @@ export function BookCard({
           // The author line lives inside this button, so the hit test keeps the
           // DOM flat: no nested button, no second tab stop. Keyboard users still
           // reach the same books through the shelf's search field.
-          if (
-            canSearchAuthor &&
-            (event.target as HTMLElement).closest('[data-marquee-kind="author"]')
-          ) {
-            onSearchAuthor?.(searchableAuthor!);
+          const target = event.target as HTMLElement;
+          const hit = target.closest('[data-marquee-kind="author"]');
+          if (canSearchAuthor && hit) {
+            const picked = target.closest("[data-author]")?.getAttribute("data-author");
+            if (soloAuthor) onSearchAuthor?.(soloAuthor);
+            else if (variant === "list" && picked) onSearchAuthor?.(picked);
+            // A grid author line scrolls; a name can be off-screen at the
+            // moment of the click, so the whole line asks which one was meant.
+            else if (variant === "grid") setAuthorPicker(true);
+            else {
+              if (selecting) onToggleSelect?.(book);
+              else open();
+              return;
+            }
             return;
           }
           if (selecting) onToggleSelect?.(book);
@@ -393,13 +414,21 @@ export function BookCard({
               // see overflow.
               <MarqueeText
                 kind="author"
-                title={canSearchAuthor ? `筛选《${searchableAuthor}》的全部书籍` : undefined}
+                title={authorTitle}
                 className={cn(
                   "min-w-0 flex-1",
-                  canSearchAuthor && "hover:text-accent cursor-pointer",
+                  canSearchAuthor && "cursor-pointer",
+                  canSearchAuthor && !splitAuthors && "hover:text-accent",
                 )}
               >
-                {authors}
+                {splitAuthors
+                  ? names.map((name, index) => (
+                      <span key={name} data-author={name} className="hover:text-accent">
+                        {index > 0 && " / "}
+                        {name}
+                      </span>
+                    ))
+                  : authors}
               </MarqueeText>
             ) : (
               <span className="min-w-0 flex-1" aria-hidden="true" />
@@ -613,6 +642,35 @@ export function BookCard({
             <Trash size={13} />
           </GlassIconButton>
         </div>
+      )}
+
+      {canSearchAuthor && variant === "grid" && names.length > 1 && (
+        <GlassDialog
+          open={authorPicker}
+          onOpenChange={(next) => {
+            if (!next) setAuthorPicker(false);
+          }}
+          title="选择作者"
+          description={`《${book.title}》有多位作者，选一位查看其书籍。`}
+          widthClass="w-[min(92vw,360px)]"
+        >
+          <div className="space-y-1.5">
+            {names.map((name) => (
+              <GlassButton
+                key={name}
+                size="sm"
+                variant="subtle"
+                className="w-full justify-start"
+                onClick={() => {
+                  setAuthorPicker(false);
+                  onSearchAuthor?.(name);
+                }}
+              >
+                {name}
+              </GlassButton>
+            ))}
+          </div>
+        </GlassDialog>
       )}
     </motion.div>
   );

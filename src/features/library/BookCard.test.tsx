@@ -176,7 +176,7 @@ describe("BookCard — format / file size row (T2/T3)", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  it("leaves a multi-author line inert, since one click cannot name an author", async () => {
+  it("asks which author when a grid line has more than one and scrolls", async () => {
     const onSearchAuthor = vi.fn();
     const onOpen = vi.fn();
     const { container } = renderCard(
@@ -191,8 +191,37 @@ describe("BookCard — format / file size row (T2/T3)", () => {
 
     await userEvent.click(container.querySelector('[data-marquee-kind="author"]')!);
 
-    expect(onSearchAuthor).not.toHaveBeenCalled();
-    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("dialog", { name: "选择作者" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "李四" }));
+    expect(onSearchAuthor).toHaveBeenCalledWith("李四");
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("lets the roomier list line click one author directly", async () => {
+    const onSearchAuthor = vi.fn();
+    const onOpen = vi.fn();
+    const { container } = renderCard(
+      { authors: ["张三", "李四"] },
+      () => {},
+      undefined,
+      undefined,
+      "list",
+      onSearchAuthor,
+      onOpen,
+    );
+
+    const line = container.querySelector('[data-marquee-kind="author"]')!;
+    expect(line.className).not.toContain("hover:text-accent");
+    for (const name of ["张三", "李四"]) {
+      expect(container.querySelector(`[data-author="${name}"]`)!.className).toContain(
+        "hover:text-accent",
+      );
+    }
+
+    await userEvent.click(container.querySelector('[data-author="李四"]')!);
+
+    expect(onSearchAuthor).toHaveBeenCalledWith("李四");
+    expect(onOpen).not.toHaveBeenCalled();
   });
 
   it("keeps the whole label run in one marquee slot, with a full-text tooltip", () => {

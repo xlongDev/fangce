@@ -104,3 +104,47 @@ test("clicking a single author searches the shelf instead of opening the book", 
   await expect(page.getByLabel("搜索书名或作者")).toHaveValue("伊坂幸太郎");
   await expect(page.locator("[data-shelf-scroller]")).toBeVisible();
 });
+
+/** The grid's author line scrolls, so a click cannot mean "the visible name".
+ *  It asks instead; the chosen name goes through the same search callback. */
+test("a multi-author grid card asks which author to search", async ({ page }) => {
+  await page.goto(SHELF);
+  await expect(page.locator("[data-book-cover]").first()).toBeVisible();
+
+  await page.locator('[data-marquee-kind="author"]', { hasText: "伦道夫·尼斯" }).first().click();
+
+  const dialog = page.getByRole("dialog", { name: "选择作者" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "乔治·威廉斯" }).click();
+  await expect(page.getByLabel("搜索书名或作者")).toHaveValue("乔治·威廉斯");
+});
+
+/** The list has room for whole names, so it skips the picker and makes each
+ *  author its own click target. */
+test("a multi-author list card searches the name that was clicked", async ({ page }) => {
+  await page.goto(SHELF);
+  await expect(page.locator("[data-book-cover]").first()).toBeVisible();
+  await page.getByRole("button", { name: "列表视图" }).click();
+
+  const first = page.locator('[data-author="伦道夫·尼斯"]').first();
+  const second = page.locator('[data-author="乔治·威廉斯"]').first();
+  await first.hover();
+  // Only the name under the pointer takes the accent; the sibling keeps the
+  // line's resting colour.
+  await expect
+    .poll(
+      async () => {
+        const [a, b] = await Promise.all([
+          first.evaluate((el) => getComputedStyle(el).color),
+          second.evaluate((el) => getComputedStyle(el).color),
+        ]);
+        return a !== b;
+      },
+      { timeout: 3000 },
+    )
+    .toBe(true);
+
+  await second.click();
+
+  await expect(page.getByLabel("搜索书名或作者")).toHaveValue("乔治·威廉斯");
+});

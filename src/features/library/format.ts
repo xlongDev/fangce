@@ -103,11 +103,16 @@ const PLACEHOLDER_AUTHORS = new Set([
   "不详",
 ]);
 
-export function authorLine(book: BookSummary): string {
+/** Real author names, in the book's order. Placeholders are not people to
+ *  search for, so both the painted line and the author actions use this. */
+export function authorNames(book: BookSummary): string[] {
   return book.authors
     .map((name) => name.trim())
-    .filter((name) => name.length > 0 && !PLACEHOLDER_AUTHORS.has(name.toLowerCase()))
-    .join(" / ");
+    .filter((name) => name.length > 0 && !PLACEHOLDER_AUTHORS.has(name.toLowerCase()));
+}
+
+export function authorLine(book: BookSummary): string {
+  return authorNames(book).join(" / ");
 }
 
 /**
