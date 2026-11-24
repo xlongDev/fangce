@@ -2346,9 +2346,14 @@ test("dragging the band sideways in 竖排 follows the hand, not the axis", asyn
   await page.mouse.move(gx, gy);
   await page.mouse.down();
   await page.mouse.move(gx - 120, gy, { steps: 12 });
-  const dragged = await rulerDrawn(page);
+  // 拖拽的落位由 React state + 重绘跟进，CI WebKit 上读得太早就是按住那一帧
+  // 的 5.5px（旧注释里的 0 / 5.5 就是这个）。等它真的跟上，别读单次快照。
+  await expect
+    .poll(async () => baseline - (await rulerDrawn(page)).band.left, {
+      message: "竖排下向左拖，带子没有跟着手往左走",
+    })
+    .toBeGreaterThan(80);
   await page.mouse.up();
-  expect(baseline - dragged.band.left, "竖排下向左拖，带子没有跟着手往左走").toBeGreaterThan(80);
 });
 
 test("in the scrolled layout the arrows walk the band, and the page follows past the trigger", async ({

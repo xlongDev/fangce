@@ -635,36 +635,35 @@ test("push rasterises the incoming page before the live sheet travels", async ({
       },
       { capture: true },
     );
+    // CI 的 WebKit 把翻页动画交给合成器：getAnimations() 不一定报 running，
+    // rAF 又只有 ~5Hz —— 按这两个条件采样，300ms 的翻页会一帧都采不到
+    // （2026-11-24 CI 实测 0 帧，等到超时）。改用翻页层自己的存在窗口 +
+    // 定时器采样，采到的指纹仍然覆盖整段 travel。
     const tick = () => {
-      if (!document.querySelector("[data-pdf-turn]") && w.pushRaster.fps.length > 0) {
-        w.pushRaster.done = true;
+      const turning = !!document.querySelector("[data-pdf-turn]");
+      if (!turning) {
+        if (w.pushRaster.fps.length > 0) {
+          w.pushRaster.done = true;
+          window.clearInterval(timer);
+        }
         return;
       }
       const canvas = document.querySelector<HTMLCanvasElement>("[data-pdf-page] canvas");
-      const live = canvas
-        ?.getAnimations()
-        .find((animation) =>
-          (animation.effect as KeyframeEffect | null)
-            ?.getKeyframes()
-            .some((frame) => typeof frame.transform === "string"),
-        );
-      if (canvas && live && live.playState === "running") {
-        if (Number.isNaN(w.pushRaster.runningAt)) w.pushRaster.runningAt = performance.now();
-        const ctx = canvas.getContext("2d");
-        let fp = 0;
-        if (ctx) {
-          for (const fy of [0.12, 0.22, 0.32, 0.42, 0.52]) {
-            const data = ctx.getImageData(0, Math.floor(canvas.height * fy), canvas.width, 1).data;
-            for (let i = 0; i < data.length; i += 31) {
-              fp = (fp + data[i]! * ((i % 7) + 1)) % 1000000007;
-            }
+      if (!canvas) return;
+      if (Number.isNaN(w.pushRaster.runningAt)) w.pushRaster.runningAt = performance.now();
+      const ctx = canvas.getContext("2d");
+      let fp = 0;
+      if (ctx) {
+        for (const fy of [0.12, 0.22, 0.32, 0.42, 0.52]) {
+          const data = ctx.getImageData(0, Math.floor(canvas.height * fy), canvas.width, 1).data;
+          for (let i = 0; i < data.length; i += 31) {
+            fp = (fp + data[i]! * ((i % 7) + 1)) % 1000000007;
           }
         }
-        w.pushRaster.fps.push(fp);
       }
-      requestAnimationFrame(tick);
+      w.pushRaster.fps.push(fp);
     };
-    requestAnimationFrame(tick);
+    const timer = window.setInterval(tick, 10);
   });
 
   await page.keyboard.press("ArrowRight");
@@ -691,9 +690,9 @@ test("push rasterises the incoming page before the live sheet travels", async ({
   expect(new Set(witness.fps).size).toBe(1);
   // A warm page is blitted inside the keydown task. If the observer misses
   // that write the turn falls through to its timeout — 700 ms of dead air
-  // after the click. This ceiling is deliberately loose; it only rules out
-  // the fallback path, not normal CI jitter.
-  expect(witness.runningAt - witness.keyAt).toBeLessThan(300);
+  // after the click. The ceiling sits between normal CI jitter (measured
+  // 327 ms on WebKit) and that 700 ms fallback; it only rules out the latter.
+  expect(witness.runningAt - witness.keyAt).toBeLessThan(500);
 });
 
 /** How many transform animations are riding each live page canvas right now. */
