@@ -639,17 +639,31 @@ test("push rasterises the incoming page before the live sheet travels", async ({
     // rAF 又只有 ~5Hz —— 按这两个条件采样，300ms 的翻页会一帧都采不到
     // （2026-11-24 CI 实测 0 帧，等到超时）。改用翻页层自己的存在窗口 +
     // 定时器采样，采到的指纹仍然覆盖整段 travel。
+    // 产品用 whenPageRastered 等所有页写下 data-pdf-raster 才放行动画。
+    // 用 MutationObserver 精确接住那一刻：翻页刚开始时上一次的属性还在，
+    // 轮询会把旧页那一帧也采进来（CI 实测两个指纹 = 一次正常 blit）。
+    let rastered = false;
+    const observer = new MutationObserver(() => {
+      const wrappers = [...document.querySelectorAll("[data-pdf-page]")];
+      if (wrappers.length > 0 && wrappers.every((el) => el.hasAttribute("data-pdf-raster"))) {
+        rastered = true;
+      }
+    });
+    for (const el of document.querySelectorAll("[data-pdf-page]")) {
+      observer.observe(el, { attributes: true, attributeFilter: ["data-pdf-raster"] });
+    }
     const tick = () => {
       const turning = !!document.querySelector("[data-pdf-turn]");
       if (!turning) {
         if (w.pushRaster.fps.length > 0) {
           w.pushRaster.done = true;
           window.clearInterval(timer);
+          observer.disconnect();
         }
         return;
       }
       const canvas = document.querySelector<HTMLCanvasElement>("[data-pdf-page] canvas");
-      if (!canvas) return;
+      if (!canvas || !rastered) return;
       if (Number.isNaN(w.pushRaster.runningAt)) w.pushRaster.runningAt = performance.now();
       const ctx = canvas.getContext("2d");
       let fp = 0;
