@@ -108,6 +108,8 @@ export interface ReaderHeaderBarProps extends ReaderToolButtonsProps {
   coverUrl: string | null;
   coverBoxRef: RefObject<HTMLSpanElement | null>;
   title: string;
+  /** Shown in the title's tooltip, never in the header row itself. */
+  subtitle?: string | null;
   /** 1-based position in the chapter list, or the page number for a PDF. */
   index: number;
   total: number;
@@ -386,6 +388,7 @@ export function ReaderHeaderBar({
   coverUrl,
   coverBoxRef,
   title,
+  subtitle,
   index,
   total,
   isPdf,
@@ -408,7 +411,11 @@ export function ReaderHeaderBar({
       </GlassIconButton>
       <HeaderCover bookId={bookId} coverUrl={coverUrl} boxRef={coverBoxRef} />
       <div className="min-w-0 flex-1">
-        <p className="text-text-1 truncate text-sm font-medium" data-reader-title title={title}>
+        <p
+          className="text-text-1 truncate text-sm font-medium"
+          data-reader-title
+          title={subtitle && !title.includes(subtitle) ? `${title}：${subtitle}` : title}
+        >
           {title}
         </p>
         <p className="text-text-3 truncate text-xs" data-reader-chapter>

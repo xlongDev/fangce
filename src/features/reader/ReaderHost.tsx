@@ -185,6 +185,7 @@ export function ReaderHost({
       bookId={bookId}
       pair={pair}
       title={bookSummary.title}
+      subtitle={bookSummary.subtitle}
       coverUrl={bookSummary.coverUrl ?? null}
       bookLanguage={bookSummary.language ?? null}
       format={bookSummary.format}

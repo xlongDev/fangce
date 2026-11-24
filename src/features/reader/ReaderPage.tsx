@@ -195,6 +195,8 @@ const NO_FONTS: LocalFont[] = [];
 interface ReaderViewProps {
   bookId: string;
   title: string;
+  /** Metadata subtitle; only used to complete the header's title tooltip. */
+  subtitle?: string | null;
   /** Cover on the `fangce` resource protocol, for the TTS player card. */
   coverUrl: string | null;
   /** Book's own language tag, for the TTS voice picker's language lead. */
@@ -255,6 +257,7 @@ interface ReaderViewProps {
 export function ReaderView({
   bookId,
   title,
+  subtitle,
   coverUrl,
   bookLanguage,
   format,
@@ -2210,6 +2213,7 @@ export function ReaderView({
       coverUrl={coverUrl}
       coverBoxRef={coverBoxRef}
       title={title}
+      subtitle={subtitle}
       index={headerIndex}
       total={headerTotal}
       chapterLabel={headerChapter}
