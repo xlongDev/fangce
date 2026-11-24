@@ -507,7 +507,11 @@ fn conditions(query: &BookQuery, skip: Option<Dimension>) -> (Vec<String>, Vec<V
         binds.extend(query.formats.iter().map(|format| Value::Text(format.as_str().to_string())));
     }
     if keep(Dimension::Language) {
-        push_in(&mut conditions, &mut binds, "b.language", &query.languages);
+        // `to_ascii_lowercase` matches SQLite's `lower()` (ASCII only), so an
+        // old filter saved as `ZH-CN` still selects the `zh-CN` bucket.
+        let languages: Vec<String> =
+            query.languages.iter().map(|value| value.to_ascii_lowercase()).collect();
+        push_in(&mut conditions, &mut binds, "lower(b.language)", &languages);
     }
     if keep(Dimension::Publisher) {
         push_in(&mut conditions, &mut binds, "b.publisher", &query.publishers);
@@ -630,7 +634,10 @@ fn push_page(sql: &mut String, binds: &mut Vec<Value>, query: &BookQuery) {
 pub fn facets(conn: &Connection, query: &BookQuery) -> AppResult<LibraryFacets> {
     Ok(LibraryFacets {
         formats: facet_counts(conn, query, Dimension::Format, "b.format")?,
-        languages: facet_counts(conn, query, Dimension::Language, "b.language")?,
+        // Publishers keep their casing; languages fold it. The same `lower()`
+        // is used by the filter below, so the chip's value is also what selects
+        // every book in its bucket — `ZH` and `zh` are one language, not two.
+        languages: facet_counts(conn, query, Dimension::Language, "lower(b.language)")?,
         publishers: facet_counts(conn, query, Dimension::Publisher, "b.publisher")?,
         status: status_counts(conn, query)?,
         covers: cover_counts(conn, query)?,
@@ -1955,13 +1962,24 @@ mod tests {
     }
 
     #[test]
-    fn a_language_filter_matches_the_stored_value_exactly() {
+    fn a_language_filter_and_its_facet_fold_case() {
         let conn = filtered_shelf();
-        let query = BookQuery { languages: vec!["en".into()], ..BookQuery::default() };
-        assert_eq!(list(&conn, &query).expect("list").len(), 2);
+        conn.execute_batch("UPDATE books SET language = 'ZH' WHERE id = 'b2';")
+            .expect("make two casings of one language");
+
+        let query = BookQuery { languages: vec!["Zh".into()], ..BookQuery::default() };
+        assert_eq!(list(&conn, &query).expect("list").len(), 2, "zh 与 ZH 是同一个筛选值");
 
         let unknown = BookQuery { languages: vec!["fr".into()], ..BookQuery::default() };
         assert!(list(&conn, &unknown).expect("list").is_empty());
+
+        let languages: Vec<(String, i64)> = facets(&conn, &BookQuery::default())
+            .expect("facets")
+            .languages
+            .iter()
+            .map(|facet| (facet.value.clone(), facet.count))
+            .collect();
+        assert_eq!(languages, [("zh".to_string(), 2), ("en".to_string(), 1)]);
     }
 
     #[test]

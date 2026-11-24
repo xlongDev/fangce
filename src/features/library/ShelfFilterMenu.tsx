@@ -102,8 +102,15 @@ export function ShelfFilterMenu({
   const active = activeFilterCount(filters);
   const toggleFormat = (format: BookFormat) =>
     onChange({ ...filters, formats: toggleValue(filters.formats, format) });
-  const toggleText = (key: "languages" | "publishers", value: string) =>
-    onChange({ ...filters, [key]: toggleValue(filters[key], value) });
+  const togglePublisher = (value: string) =>
+    onChange({ ...filters, publishers: toggleValue(filters.publishers, value) });
+  // A filter saved before case folding shipped can still say `ZH-CN` while the
+  // facet now says `zh-cn`. Fold both sides so the chip stays checked and one
+  // click removes it instead of adding a second spelling of the same value.
+  const toggleLanguage = (value: string) => {
+    const folded = filters.languages.map((language) => language.toLowerCase());
+    onChange({ ...filters, languages: toggleValue(folded, value.toLowerCase()) });
+  };
 
   return (
     <GlassMenu
@@ -192,9 +199,9 @@ export function ShelfFilterMenu({
             {facets?.languages.map((facet) => (
               <OptionChip
                 key={facet.value}
-                on={filters.languages.includes(facet.value)}
+                on={filters.languages.some((language) => language.toLowerCase() === facet.value)}
                 count={facet.count}
-                onClick={() => toggleText("languages", facet.value)}
+                onClick={() => toggleLanguage(facet.value)}
               >
                 {facet.value}
               </OptionChip>
@@ -209,7 +216,7 @@ export function ShelfFilterMenu({
                 key={facet.value}
                 on={filters.publishers.includes(facet.value)}
                 count={facet.count}
-                onClick={() => toggleText("publishers", facet.value)}
+                onClick={() => togglePublisher(facet.value)}
               >
                 {facet.value}
               </OptionChip>

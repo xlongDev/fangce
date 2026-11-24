@@ -272,7 +272,8 @@ function matches(
     return false;
   }
   if (skip !== "language" && query.languages?.length) {
-    if (!book.language || !query.languages.includes(book.language)) return false;
+    const wanted = query.languages.map((value) => value.toLowerCase());
+    if (!book.language || !wanted.includes(book.language.toLowerCase())) return false;
   }
   if (skip !== "publisher" && query.publishers?.length) {
     if (!book.publisher || !query.publishers.includes(book.publisher)) return false;
@@ -355,7 +356,7 @@ export async function bookFacets(query: BookQuery): Promise<LibraryFacets> {
 
   return {
     formats: tally((book) => book.format),
-    languages: tally((book) => book.language),
+    languages: tally((book) => book.language?.toLowerCase()),
     publishers: tally((book) => book.publisher),
     status: (["unread", "reading", "finished"] as const).map((value) => ({
       value,
