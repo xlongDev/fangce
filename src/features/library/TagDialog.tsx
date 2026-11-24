@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Check } from "@phosphor-icons/react";
+import { Check, CircleNotch, Sparkle } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
 import { cn } from "@/lib/cn";
+import { ipc, isDesktopRuntime } from "@/lib/ipc";
 import type { BookSummary, TagSummary } from "@/types/ipc";
 
 /**
@@ -99,6 +100,11 @@ function TagDialogBody({ single, startTags, allTags, busy, onCancel, onSave }: T
   const known = allTags.map((tag) => tag.name);
   const [selected, setSelected] = useState<string[]>(() => [...startTags]);
   const [draft, setDraft] = useState("");
+  /** The model's words are staged here, not written: 保存 still owns the only
+   *  write. Keeping them separate lets a chip say which ones came from AI. */
+  const [aiTags, setAiTags] = useState<string[]>([]);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiNote, setAiNote] = useState<string | null>(null);
 
   const current = startTags;
   const add = selected.filter((name) => !includes(current, name));
@@ -122,6 +128,38 @@ function TagDialogBody({ single, startTags, allTags, busy, onCancel, onSave }: T
     const picking = existing ?? name;
     if (!includes(selected, picking)) setSelected((prev) => [...prev, picking]);
     setDraft("");
+  };
+
+  /** One book at a time: the model reads this book's own description, and the
+   *  suggestions join *this* sheet's checkbox list. Nothing is written here —
+   *  the reader can untick any word before pressing 保存. */
+  const askAi = async () => {
+    if (!single || aiBusy) return;
+    setAiBusy(true);
+    setAiNote(null);
+    try {
+      const run = await ipc.tagSuggest([single.id]);
+      const tags = run.suggestions.find((item) => item.bookId === single.id)?.tags ?? [];
+      setAiTags(tags);
+      if (tags.length === 0) {
+        setAiNote(
+          run.considered === 0
+            ? "这本书已经有标签；AI 建议只给还没有标签的书生成。"
+            : "这次没有生成可用标签。",
+        );
+        return;
+      }
+      setSelected((prev) => [...prev, ...tags.filter((name) => !includes(prev, name))]);
+      setAiNote(`已加入 ${tags.length} 个 AI 建议，确认后保存。`);
+    } catch (error) {
+      setAiNote(
+        String(error).includes("已经有标签")
+          ? "这本书已经有标签；AI 建议只给还没有标签的书生成。"
+          : `没有拿到 AI 建议：${String(error)}`,
+      );
+    } finally {
+      setAiBusy(false);
+    }
   };
 
   // Existing tags in the backend's order, then whatever was just invented.
@@ -199,6 +237,7 @@ function TagDialogBody({ single, startTags, allTags, busy, onCancel, onSave }: T
                     <span className="text-text-3">#</span>
                   )}
                   {name}
+                  {includes(aiTags, name) && <span className="text-text-3">· AI</span>}
                   {fresh && on && <span className="text-text-3">· 新</span>}
                 </button>
               );
@@ -216,6 +255,23 @@ function TagDialogBody({ single, startTags, allTags, busy, onCancel, onSave }: T
           </div>
         )}
       </div>
+
+      {/* On the desktop the model can draft labels into this very list. The
+          browser has no backend command, so the entry is not offered there. */}
+      {single && isDesktopRuntime && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <GlassButton
+            size="sm"
+            variant="subtle"
+            onClick={() => void askAi()}
+            disabled={busy || aiBusy}
+          >
+            {aiBusy ? <CircleNotch size={13} className="animate-spin" /> : <Sparkle size={13} />}
+            {aiBusy ? "正在生成建议" : "AI 生成标签"}
+          </GlassButton>
+          {aiNote && <p className="text-text-3 text-[11.5px] leading-relaxed">{aiNote}</p>}
+        </div>
+      )}
 
       <div className="mt-4 flex justify-end gap-2">
         <GlassButton variant="subtle" onClick={onCancel} disabled={busy}>

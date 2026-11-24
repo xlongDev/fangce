@@ -1,9 +1,15 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TagDialog } from "@/features/library/TagDialog";
 import type { BookSummary, TagSummary } from "@/types/ipc";
+
+const tagSuggest = vi.fn();
+vi.mock("@/lib/ipc", () => ({
+  ipc: { tagSuggest: (...args: unknown[]) => tagSuggest(...args) },
+  isDesktopRuntime: true,
+}));
 
 const book: BookSummary = {
   id: "b1",
@@ -47,6 +53,8 @@ function openMany(books: BookSummary[], tags: TagSummary[], saved = vi.fn()) {
 const withTags = (id: string, tags: string[]): BookSummary => ({ ...book, id, tags });
 
 describe("标签面板", () => {
+  beforeEach(() => tagSuggest.mockReset());
+
   /** 273 个标签的库里，翻找不是工作方式，打字才是。 */
   it("输入就过滤，只留下匹配的标签", async () => {
     const { user, field } = open(all("长篇小说", "心理学", "美国文学"));
@@ -92,6 +100,56 @@ describe("标签面板", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
 
     expect(saved).toHaveBeenCalledWith({ add: ["心理学"], remove: [] });
+  });
+
+  /** AI 的建议只是勾选，不是写入：仍由弹窗自己的保存按钮决定。 */
+  it("AI 生成的标签进入待保存列表，取消了就不写", async () => {
+    tagSuggest.mockResolvedValueOnce({
+      suggestions: [{ bookId: "b1", title: "三体", tags: ["科幻", "中国文学"] }],
+      considered: 1,
+      remaining: 0,
+      failedBatches: 0,
+    });
+    const { user, saved } = open(all("科幻", "中国文学"));
+
+    await user.click(screen.getByRole("button", { name: /AI 生成标签/ }));
+
+    expect(tagSuggest).toHaveBeenCalledWith(["b1"]);
+    expect(screen.getByText(/已加入 2 个 AI 建议/)).toBeTruthy();
+    const chip = screen.getByRole("button", { name: "科幻· AI" });
+    expect(chip.getAttribute("aria-pressed")).toBe("true");
+
+    await user.click(chip);
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    expect(saved).toHaveBeenCalledWith({ add: ["中国文学"], remove: [] });
+  });
+
+  /** The backend deliberately skips tagged books; the dialog says so instead
+   *  of presenting an empty, unexplained no-op. */
+  it("已有标签的书点 AI 会说明为什么不生成", async () => {
+    tagSuggest.mockResolvedValueOnce({
+      suggestions: [],
+      considered: 0,
+      remaining: 0,
+      failedBatches: 0,
+    });
+    const { user, saved } = open(all("科幻"));
+
+    await user.click(screen.getByRole("button", { name: /AI 生成标签/ }));
+
+    expect(screen.getByText(/已经有标签/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(saved).not.toHaveBeenCalled();
+  });
+
+  it("后端拒绝已打标签的书时不把原始错误甩给读者", async () => {
+    tagSuggest.mockRejectedValueOnce(new Error("选中的书都已经有标签了"));
+    const { user } = open(all("科幻"));
+
+    await user.click(screen.getByRole("button", { name: /AI 生成标签/ }));
+
+    expect(screen.getByText(/这本书已经有标签/)).toBeTruthy();
+    expect(screen.queryByText(/选中的书都已经/)).toBeNull();
   });
 
   describe("多本", () => {
