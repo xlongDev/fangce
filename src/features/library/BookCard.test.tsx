@@ -57,11 +57,13 @@ function renderCard(
   onSendToKindle?: (book: BookSummary) => void,
   kindlePhase?: "sending" | "success" | "error",
   variant: "grid" | "list" = "grid",
+  onSearchAuthor?: (name: string) => void,
+  onOpen: (book: BookSummary) => void = () => {},
 ) {
   return render(
     <BookCard
       book={{ ...baseBook, ...book } as BookSummary}
-      onOpen={() => {}}
+      onOpen={onOpen}
       onToggleFavorite={() => {}}
       onAskDelete={() => {}}
       onAskExport={onAskExport}
@@ -71,6 +73,7 @@ function renderCard(
       onExportFile={() => {}}
       onEditTags={() => {}}
       onEditMeta={() => {}}
+      onSearchAuthor={onSearchAuthor}
     />,
   );
 }
@@ -160,6 +163,36 @@ describe("BookCard — format / file size row (T2/T3)", () => {
   it("grid keeps the subtitle out of its own line", () => {
     const { container } = renderCard({ title: "国家构建", subtitle: "21世纪的国家治理与世界秩序" });
     expect(container.querySelector('[data-marquee-kind="subtitle"]')).toBeNull();
+  });
+
+  it("turns a single author line into a shelf search, not a book open", async () => {
+    const onSearchAuthor = vi.fn();
+    const onOpen = vi.fn();
+    renderCard({}, () => {}, undefined, undefined, "grid", onSearchAuthor, onOpen);
+
+    await userEvent.click(screen.getByText("张三"));
+
+    expect(onSearchAuthor).toHaveBeenCalledWith("张三");
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("leaves a multi-author line inert, since one click cannot name an author", async () => {
+    const onSearchAuthor = vi.fn();
+    const onOpen = vi.fn();
+    const { container } = renderCard(
+      { authors: ["张三", "李四"] },
+      () => {},
+      undefined,
+      undefined,
+      "grid",
+      onSearchAuthor,
+      onOpen,
+    );
+
+    await userEvent.click(container.querySelector('[data-marquee-kind="author"]')!);
+
+    expect(onSearchAuthor).not.toHaveBeenCalled();
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the whole label run in one marquee slot, with a full-text tooltip", () => {

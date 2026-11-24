@@ -85,3 +85,22 @@ test("the filter panel is one liquid pane, legible over covers", async ({ page }
   expect(alpha).toBeLessThan(0.85);
   expect(style.rim).not.toBe("rgba(0, 0, 0, 0)");
 });
+
+/**
+ * A one-author card has a shortcut into the shelf search. It must land back on
+ * the shelf, not open the book: the author line sits inside the card's own
+ * button, so the click is discriminated by where it landed.
+ */
+test("clicking a single author searches the shelf instead of opening the book", async ({
+  page,
+}) => {
+  await page.goto(SHELF);
+  await expect(page.locator("[data-book-cover]").first()).toBeVisible();
+
+  const author = page.locator('[data-marquee-kind="author"]', { hasText: "伊坂幸太郎" }).first();
+  await expect(author).toHaveAttribute("title", /筛选/);
+  await author.click();
+
+  await expect(page.getByLabel("搜索书名或作者")).toHaveValue("伊坂幸太郎");
+  await expect(page.locator("[data-shelf-scroller]")).toBeVisible();
+});

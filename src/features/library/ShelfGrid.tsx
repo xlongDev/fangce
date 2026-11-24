@@ -42,6 +42,7 @@ export function ShelfGrid({
   onExportFile,
   onEditTags,
   onEditMeta,
+  onSearchAuthor,
   onImport,
   onClearSearch,
   onRetry,
@@ -71,6 +72,7 @@ export function ShelfGrid({
   onExportFile: (book: BookSummary) => void;
   onEditTags: (book: BookSummary) => void;
   onEditMeta: (book: BookSummary) => void;
+  onSearchAuthor?: (name: string) => void;
   onImport: () => void;
   /** Clear the shelf's search, from the empty state that search produced. */
   onClearSearch: () => void;
@@ -236,6 +238,7 @@ export function ShelfGrid({
                 onExportFile={onExportFile}
                 onEditTags={onEditTags}
                 onEditMeta={onEditMeta}
+                onSearchAuthor={onSearchAuthor}
               />
             ))
           ),

@@ -639,6 +639,14 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         onExportFile={(target) => exportFile.mutate({ id: target.id })}
         onEditTags={(target) => setTagTarget([target])}
         onEditMeta={setMetaTarget}
+        // A single-author line is a shortcut into the shelf's own search. Go
+        // back to the whole shelf first: narrowing to an author from inside a
+        // tag or recent shelf would otherwise hide that author's other books.
+        onSearchAuthor={(name) => {
+          setShelfView("all", { search: name });
+          setFilters(NO_FILTERS);
+          if (filter !== "all") navigate("/");
+        }}
         onImport={startImport}
         // The shelf's own way out of a search that matched nothing. It used
         // to be the 13px ✕ inside the search field and nothing else, so a

@@ -56,6 +56,9 @@ interface BookCardProps {
   onExportFile: (book: BookSummary) => void;
   onEditTags: (book: BookSummary) => void;
   onEditMeta: (book: BookSummary) => void;
+  /** Single-author cards only: filter the shelf by that name. Multi-author
+   *  lines stay inert — clicking one would have to guess which name was meant. */
+  onSearchAuthor?: (name: string) => void;
   /** Batch-manage mode: clicks toggle selection instead of opening. */
   selecting?: boolean;
   selected?: boolean;
@@ -101,6 +104,7 @@ export function BookCard({
   onExportFile,
   onEditTags,
   onEditMeta,
+  onSearchAuthor,
   selecting = false,
   selected = false,
   onToggleSelect,
@@ -125,6 +129,9 @@ export function BookCard({
   // separate subtitle line, so its title keeps only the main part.
   const paintedTitle = variant === "list" ? displayTitle(book.title) : book.title;
   const canSend = isDesktopRuntime && book.format === "epub" && !!onSendToKindle;
+  const searchableAuthor =
+    !selecting && book.authors.length === 1 ? (book.authors[0] ?? null) : null;
+  const canSearchAuthor = !!onSearchAuthor && searchableAuthor !== null;
   const m = useMotion();
   const star = useAnimationControls();
   const halo = useAnimationControls();
@@ -252,7 +259,20 @@ export function BookCard({
     >
       <button
         type="button"
-        onClick={() => (selecting ? onToggleSelect?.(book) : open())}
+        onClick={(event) => {
+          // The author line lives inside this button, so the hit test keeps the
+          // DOM flat: no nested button, no second tab stop. Keyboard users still
+          // reach the same books through the shelf's search field.
+          if (
+            canSearchAuthor &&
+            (event.target as HTMLElement).closest('[data-marquee-kind="author"]')
+          ) {
+            onSearchAuthor?.(searchableAuthor!);
+            return;
+          }
+          if (selecting) onToggleSelect?.(book);
+          else open();
+        }}
         aria-pressed={selecting ? selected : undefined}
         className={cn(
           "focus-visible:focus-ring text-left disabled:opacity-50",
@@ -371,7 +391,14 @@ export function BookCard({
               // actually shrink the slot — without it the inner span would
               // measure wider than its parent and the marquee would never
               // see overflow.
-              <MarqueeText kind="author" className="min-w-0 flex-1">
+              <MarqueeText
+                kind="author"
+                title={canSearchAuthor ? `筛选《${searchableAuthor}》的全部书籍` : undefined}
+                className={cn(
+                  "min-w-0 flex-1",
+                  canSearchAuthor && "hover:text-accent cursor-pointer",
+                )}
+              >
                 {authors}
               </MarqueeText>
             ) : (
