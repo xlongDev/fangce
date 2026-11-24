@@ -30,7 +30,10 @@ const THIRD = "长日将尽";
 function titles(page: Page): Promise<string[]> {
   return page.evaluate(() =>
     [...document.querySelectorAll("[data-book-cover]")].map(
-      (cover) => cover.closest("button")?.querySelector("p")?.textContent ?? "",
+      // The author/format line became a <p> when the card label was reworked,
+      // so the first <p> is no longer the title. MarqueeText tags the title.
+      (cover) =>
+        cover.closest("button")?.querySelector("[data-marquee-kind='title']")?.textContent ?? "",
     ),
   );
 }

@@ -68,6 +68,10 @@ jobs:
               --jq '[.artifacts[] | select(.name == "github-pages")] | length')
             if [ "$count" -ge 1 ]; then
               echo "Pages artifact visible after ${attempt} attempt(s)"
+              # gh 和 deploy-pages 的 octokit 查的是同一个列表，却会落到 API 的
+              # 不同副本：2026-11-24 见过 gh 刚看到、5ms 后 deploy 仍是 0 个。
+              # 等它跨过最终一致性窗口，再交给 deploy-pages。
+              sleep 5
               exit 0
             fi
             echo "Attempt ${attempt}: artifact not listed yet, retrying in 5s"
