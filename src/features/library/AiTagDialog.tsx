@@ -171,8 +171,11 @@ export function AiTagDialog({
             }));
             apply.mutate(items, {
               onSuccess: () => {
-                // 在飞的只是最后一批：全部写完，没有下一批要接。
-                if (data.remaining > 0) useTagRun.getState().start(ids);
+                // 在飞的只是最后一批：全部写完，没有下一批要接，也就没有后台任务。
+                if (data.remaining > 0) {
+                  useTagRun.getState().start(ids);
+                  useTagRun.getState().setBackground(true);
+                }
                 close();
               },
               onError: (err) => {
@@ -213,6 +216,7 @@ export function AiTagDialog({
   const runInBackground = () => {
     if (autoApply) {
       startReview();
+      useTagRun.getState().setBackground(true);
       close();
       return;
     }
@@ -223,8 +227,10 @@ export function AiTagDialog({
       return;
     }
     // 没有在飞结果可复用（初始态或预览态），照旧让 store 重新发起。
+    // start 会从 idle 重置，所以标记要在它之后打，才轮得到胶囊显示。
     stopRef.current = true;
     useTagRun.getState().start(ids);
+    useTagRun.getState().setBackground(true);
     close();
   };
 

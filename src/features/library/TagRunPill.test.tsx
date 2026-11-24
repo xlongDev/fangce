@@ -42,11 +42,32 @@ function reviewState(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   useTagRun.getState().reset();
+  // 这些用例直接驱动胶囊，等于读者点过「后台运行」。
+  useTagRun.setState({ background: true });
   navigateTo.mockClear();
 });
 
 describe("批量打标签的常驻胶囊", () => {
-  it("生成中能返回界面，也能停止", async () => {
+  it("没点后台运行时不显示：进度留在对话框里", () => {
+    act(() => {
+      useTagRun.setState({ background: false, review: null });
+      useTagRun.setState({
+        running: true,
+        total: 10,
+        done: 4,
+      });
+    });
+    show();
+
+    expect(document.querySelector("[data-tag-run-pill]")).toBeNull();
+    expect(document.querySelector("[data-tag-run-surface]")).toBeNull();
+
+    // 审阅模式同样不能冒出来。
+    act(() => reviewState());
+    expect(document.querySelector("[data-tag-run-pill]")).toBeNull();
+  });
+
+  it("生成中能返回界面，回到对话框后胶囊收起", async () => {
     act(() => reviewState());
     show();
 
@@ -55,6 +76,14 @@ describe("批量打标签的常驻胶囊", () => {
     expect(useTagRun.getState().reviewSheetOpen).toBe(true);
     // 对话框只挂书架页：必须先回书架再开窗，否则按钮点了没反应。
     expect(navigateTo).toHaveBeenCalledWith("/");
+    // 进度又有了落脚处，右下角这条该让位（同 fillRun 的 openSheet）。
+    // 只验 store 标志：退场动画期间 AnimatePresence 仍挂着 DOM。
+    expect(useTagRun.getState().background).toBe(false);
+  });
+
+  it("生成中能停止", async () => {
+    act(() => reviewState());
+    show();
 
     await userEvent.click(screen.getByRole("button", { name: "停止" }));
     expect(useTagRun.getState().review!.cancelled).toBe(true);

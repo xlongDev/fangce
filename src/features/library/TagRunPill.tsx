@@ -44,6 +44,7 @@ export function TagRunPill() {
   const clearReview = useTagRun((s) => s.dismissReview);
   const collapsed = useTagRun((s) => s.collapsed);
   const setCollapsed = useTagRun((s) => s.setCollapsed);
+  const background = useTagRun((s) => s.background);
   const { countHidden, peekHandlers, keepPeek } = useRunPillPeek(collapsed);
   const wasRunning = useRef(false);
   const wasReviewRunning = useRef(false);
@@ -78,7 +79,10 @@ export function TagRunPill() {
   const reviewRunning = review?.running ?? false;
   const showWrite = total > 0 && !review;
   const showReview = review !== null;
-  const slot = useRunPillSlot("tag", showWrite || showReview);
+  // 没点「后台运行」时进度就在对话框里，右下角不再多出一条通知条。
+  // 两个结束 effect 不受影响：前台照常刷新书架并提示。
+  const visible = background && (showWrite || showReview);
+  const slot = useRunPillSlot("tag", visible);
 
   // 「返回界面」要先回书架：对话框挂在 ShelfBatchBar（书架页），后台跑时
   // 读者可能已在阅读器或设置页。只置 reviewSheetOpen 不导航，对话框没挂载。
@@ -121,7 +125,7 @@ export function TagRunPill() {
   return (
     <OverlayPortal>
       <AnimatePresence>
-        {(showWrite || showReview) && (
+        {visible && (
           <motion.div
             data-tag-run-pill
             {...entrance}

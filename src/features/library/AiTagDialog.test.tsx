@@ -202,6 +202,8 @@ describe("AI 打标签", () => {
 
     await user.click(screen.getByRole("switch", { name: SWITCH }));
     await user.click(screen.getByRole("button", { name: /生成全部建议/ }));
+    // 前台跑不点亮右下角胶囊的开关。
+    expect(useTagRun.getState().background).toBe(false);
 
     expect(await screen.findByText("三体")).toBeTruthy();
     expect(tagSuggestApply).not.toHaveBeenCalled();
@@ -455,6 +457,8 @@ describe("AI 打标签", () => {
     const rest = tagSuggest.mock.calls.slice(1).flatMap(([part]) => part as string[]);
     expect(rest).not.toContain("b0");
     expect(tagSuggestApply).not.toHaveBeenCalled();
+    // 前台切审阅同样不点亮后台胶囊。
+    expect(useTagRun.getState().background).toBe(false);
   });
 
   /** 逐批在飞转后台：不重拉同一批 —— 在飞的结果先写库，store 从下一批接手。
@@ -506,6 +510,7 @@ describe("AI 打标签", () => {
     });
     await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
     await vi.waitFor(() => expect(useTagRun.getState().running).toBe(false));
+    expect(useTagRun.getState().background).toBe(true);
 
     // 第一批的结果被原样写入，没有为它再发一次 tagSuggest。
     expect(tagSuggestApply).toHaveBeenCalledWith([
@@ -531,6 +536,7 @@ describe("AI 打标签", () => {
     await user.click(screen.getByRole("button", { name: "后台运行" }));
 
     expect(onClose).toHaveBeenCalled();
+    expect(useTagRun.getState().background).toBe(true);
     await vi.waitFor(() => expect(useTagRun.getState().review?.running).toBe(false));
     const review = useTagRun.getState().review!;
     expect(review.rows.map((r) => r.title)).toEqual(["三体"]);

@@ -186,6 +186,20 @@ it("审阅界面生成中也能打开，关闭面板不丢建议", async () => {
   expect(useTagRun.getState().review!.rows).toHaveLength(1); // 关窗不清建议
 });
 
+/** 新一轮必须清掉上一轮的后台标记与进度：否则前台新任务会冒出旧胶囊，
+ *  审阅结束后写入态进度也会复活。 */
+it("新一轮从 idle 起跑，不继承上一轮的后台标记", async () => {
+  suggest.mockResolvedValue(answer(0));
+  useTagRun.getState().start(ids);
+  await vi.waitFor(() => expect(useTagRun.getState().running).toBe(false));
+  useTagRun.getState().setBackground(true);
+
+  useTagRun.getState().startReview(["b1"]);
+  expect(useTagRun.getState().background).toBe(false);
+  expect(useTagRun.getState().total).toBe(0);
+  await vi.waitFor(() => expect(useTagRun.getState().review?.running).toBe(false));
+});
+
 /** 旧循环在飞时开新一轮：旧结果回来不能灌进新任务（generation token）。 */
 it("重开一轮后，旧循环的在飞结果不污染新任务", async () => {
   let release!: () => void;

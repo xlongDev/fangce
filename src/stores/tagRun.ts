@@ -61,6 +61,9 @@ export interface TagRunState {
   review: TagReview | null;
   /** 胶囊上的「审阅」把对话框打开。放 store，跨组件又不碰 React effect。 */
   reviewSheetOpen: boolean;
+  /** 只有点了「后台运行」才置 true：前台生成时进度留在对话框里，不弹胶囊。 */
+  background: boolean;
+  setBackground: (background: boolean) => void;
   /** 胶囊折叠成小徽章（照 GuideBatchPill）；纯展示态。 */
   collapsed: boolean;
   setCollapsed: (collapsed: boolean) => void;
@@ -88,6 +91,7 @@ const idle = {
   stopped: null as string | null,
   review: null as TagReview | null,
   reviewSheetOpen: false,
+  background: false,
   collapsed: false,
 };
 
@@ -103,6 +107,7 @@ export const useTagRun = create<TagRunState>((set, get) => ({
     set(idle);
   },
   setCollapsed: (collapsed) => set({ collapsed }),
+  setBackground: (background) => set({ background }),
   cancel: () => set({ cancelled: true }),
   cancelReview: () => {
     const review = get().review;
@@ -116,7 +121,8 @@ export const useTagRun = create<TagRunState>((set, get) => ({
    *  effect。生成中也允许 —— 对话框的进度卡片就是那套完整界面。 */
   requestReview: () => {
     const review = get().review;
-    if (review) set({ reviewSheetOpen: true });
+    // 回到对话框就有完整进度界面了，右下角那条该收起来（同 fillRun.openSheet）。
+    if (review) set({ reviewSheetOpen: true, background: false });
   },
   closeReviewSheet: () => set({ reviewSheetOpen: false }),
   /** 只撤掉胶囊入口；对话框的成功态由它自己显示，读者点「完成」再关窗。 */
@@ -139,8 +145,10 @@ export const useTagRun = create<TagRunState>((set, get) => ({
     }
     if (ids.length === 0) return;
     const token = ++reviewToken;
+    // 与 start 一样从 idle 起跑：否则上一轮留下的 total/background 会让
+    // 前台这条新任务继承旧胶囊，或审阅结束后又冒出写入态的进度条。
     set({
-      collapsed: false,
+      ...idle,
       review: {
         ids,
         rows: seed ? [...seed] : [],
