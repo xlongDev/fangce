@@ -230,7 +230,14 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
           className="text-text-1 placeholder:text-text-3 h-full w-full min-w-0 bg-transparent text-sm outline-none"
         />
       </div>
-      <div ref={listRef} className="relative -mx-1 max-h-[60vh] overflow-y-auto px-1">
+      {/* Fixed height, not max-height: the dialog otherwise shrinks to fit
+          every query and grows back on the next, which reads as a jump. The
+          search body already reserves the same box. */}
+      <div
+        ref={listRef}
+        data-palette-list
+        className="relative -mx-1 h-[min(60vh,420px)] overflow-y-auto px-1"
+      >
         {/* One highlight for the whole list, absolutely placed under the active
             row. It never unmounts, so a hover re-targets a CSS transform instead
             of tearing down a layout-animated element and re-rasterising the

@@ -208,6 +208,30 @@ test("a book cover keeps its size when the title is long", async ({ page }) => {
   expect(after.height / before.height).toBeGreaterThan(0.9);
 });
 
+/**
+ * The palette reserves one result box for every query. A max-height let the
+ * pane shrink to the rows on screen and grow back on the next keystroke, which
+ * moved the whole dialog under the reader's pointer.
+ */
+test("the palette keeps its height while the query changes", async ({ page }) => {
+  await page.goto("/?demo=1");
+  await expect(page.locator("[data-shelf-scroller]")).toBeVisible();
+  await page.keyboard.press("Control+k");
+
+  const dialog = page.getByRole("dialog");
+  const list = dialog.locator("[data-palette-list]");
+  await expect(list).toBeVisible();
+
+  const heights: number[] = [];
+  for (const query of ["", "shu", "书", ""]) {
+    await dialog.getByRole("textbox").fill(query);
+    // offsetHeight is the layout height: the dialog's entry transform scales
+    // getBoundingClientRect but cannot change this.
+    heights.push(await list.evaluate((el) => (el as HTMLElement).offsetHeight));
+  }
+  expect(new Set(heights).size).toBe(1);
+});
+
 test("a copy press still reaches the book", async ({ page }) => {
   await openKindleBook(page);
 
