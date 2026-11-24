@@ -11,9 +11,9 @@ import { useBookmarks } from "@/hooks/useBookmarks";
  *
  * Two editions of one book on the shelf is not a state a reader asked for, and
  * merging them is not reversible — so this is a question, never a decision made
- * for them. Note that the safe answer is the *second* button: leaving both
- * editions on the shelf costs a duplicate tile, migrating and being wrong costs
- * the highlights.
+ * for them. Skipping drops the edition this import just added and leaves the
+ * original untouched; keeping both costs a duplicate tile, migrating and being
+ * wrong costs the highlights.
  */
 export function MigrateEditionDialog({
   edition,
@@ -21,12 +21,14 @@ export function MigrateEditionDialog({
   error = null,
   onMigrate,
   onKeepBoth,
+  onSkip,
 }: {
   edition: Edition | null;
   busy?: boolean;
   error?: string | null;
   onMigrate: (edition: Edition) => void;
   onKeepBoth: (edition: Edition) => void;
+  onSkip: (edition: Edition) => void;
 }) {
   const oldId = edition?.from.id ?? null;
   const annotations = useAnnotations(oldId);
@@ -58,13 +60,19 @@ export function MigrateEditionDialog({
             按原文重新定位到新版本上，然后移除旧的那一本。新版本里改过的段落会找不到原文，迁移完会报出来。
           </p>
         </div>
+        <p className="text-text-3 text-xs">
+          跳过会撤销这次导入、删掉刚导入的这一本，保留原来的，标注和进度都不动。
+        </p>
         {error && <p className="text-danger text-xs">{error}</p>}
         <div className="flex justify-end gap-2">
+          <GlassButton variant="ghost" disabled={busy} onClick={() => onSkip(edition)}>
+            跳过
+          </GlassButton>
           <GlassButton variant="ghost" disabled={busy} onClick={() => onKeepBoth(edition)}>
             两本都留
           </GlassButton>
           <GlassButton variant="primary" disabled={busy} onClick={() => onMigrate(edition)}>
-            {busy ? "正在迁移…" : "迁移并移除旧的"}
+            {busy ? "正在处理…" : "迁移并移除旧的"}
           </GlassButton>
         </div>
       </div>

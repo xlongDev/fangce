@@ -468,6 +468,25 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
     setEditionError(null);
   };
 
+  /** Undo the import of the new edition: purge its row and files, leave the
+   * original untouched, and take its receipt out of the import summary.
+   * A skipped book has no marks of its own, so there is nothing to lose. */
+  const skipEdition = (pair: Edition) => {
+    purgeBooks.mutate([pair.to.id], {
+      onSuccess: () => {
+        setEdition(null);
+        setEditionError(null);
+        setLastOutcomes(
+          (current) =>
+            current?.filter(
+              (outcome) => outcome.kind !== "imported" || outcome.id !== pair.to.id,
+            ) ?? null,
+        );
+        showToast("success", "已跳过，新导入的那本已移除");
+      },
+    });
+  };
+
   const runMigration = (pair: Edition) => {
     setEditionError(null);
     migrateEdition.mutate(
@@ -819,10 +838,11 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         <Suspense fallback={null}>
           <MigrateEditionDialog
             edition={edition}
-            busy={migrateEdition.isPending}
+            busy={migrateEdition.isPending || purgeBooks.isPending}
             error={editionError}
             onMigrate={runMigration}
             onKeepBoth={keepBoth}
+            onSkip={skipEdition}
           />
         </Suspense>
       )}
