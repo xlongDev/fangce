@@ -162,6 +162,18 @@ describe("BookCard — format / file size row (T2/T3)", () => {
     expect(container.querySelector('[data-marquee-kind="subtitle"]')).toBeNull();
   });
 
+  it("keeps the whole label run in one marquee slot, with a full-text tooltip", () => {
+    const { container } = renderCard({ tags: ["悬疑惊悚", "推理小说", "犯罪"] });
+    const slot = container.querySelector('[data-marquee-kind="tags"]');
+    expect(slot?.textContent).toBe("#悬疑惊悚  #推理小说  #犯罪");
+    expect(slot?.getAttribute("title")).toBe("#悬疑惊悚  #推理小说  #犯罪");
+  });
+
+  it("reserves the label line without adding an empty marquee on an untagged shelf", () => {
+    const { container } = renderCard({ tags: [] });
+    expect(container.querySelector('[data-marquee-kind="tags"]')).toBeNull();
+  });
+
   it("renders the format even when there are no authors", () => {
     renderCard({ authors: [] });
     expect(screen.getByText(/EPUB/)).toBeInTheDocument();

@@ -119,6 +119,8 @@ export function BookCard({
   const colon = book.title.search(/[:：]/);
   const inlineSubtitle = colon >= 2 ? book.title.slice(colon + 1).trim() : "";
   const subtitleLine = book.subtitle?.trim() || inlineSubtitle || null;
+  /** All labels stay in one slot; the marquee reveals the tail on hover. */
+  const tagLine = book.tags.map((tag) => `#${tag}`).join("  ");
   // The grid paints the whole string so hover can reveal it. The list has a
   // separate subtitle line, so its title keeps only the main part.
   const paintedTitle = variant === "list" ? displayTitle(book.title) : book.title;
@@ -380,17 +382,27 @@ export function BookCard({
               {book.fileSize > 0 && ` · ${formatFileSize(book.fileSize)}`}
             </span>
           </p>
-          {/* Labels get one extra line that truncates rather than reflowing the
-              grid. On a shelf where any book at all has labels, every tile keeps
-              that line — an empty one still holds its height — because the window
-              counts rows and cannot know that this tile is a line shorter than the
-              ones beside it. A shelf with no labels keeps the two-line rhythm it
-              had. */}
-          {(book.tags.length > 0 || reserveTags) && (
-            <p className="text-accent mt-1 truncate text-[11px]">
-              {book.tags.length > 0 ? book.tags.map((tag) => `#${tag}`).join("  ") : "\u00a0"}
-            </p>
-          )}
+          {/* Labels get one extra line rather than reflowing the grid. On a shelf
+              where any book at all has labels, every tile keeps that line — an
+              empty one still holds its height — because the window counts rows
+              and cannot know that this tile is a line shorter than the ones
+              beside it. A shelf with no labels keeps the two-line rhythm it had.
+              A long run of labels now slides on hover like the author line, so
+              the third tag is reachable without counting the chips by eye. */}
+          {(book.tags.length > 0 || reserveTags) &&
+            (book.tags.length > 0 ? (
+              <MarqueeText
+                kind="tags"
+                title={tagLine}
+                className="text-accent mt-1 block min-w-0 text-[11px]"
+              >
+                {tagLine}
+              </MarqueeText>
+            ) : (
+              <span className="text-accent mt-1 block min-w-0 text-[11px]" aria-hidden="true">
+                {"\u00a0"}
+              </span>
+            ))}
         </span>
       </button>
 

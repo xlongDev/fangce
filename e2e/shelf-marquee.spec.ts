@@ -71,3 +71,48 @@ test("a long author name marquees on hover instead of staying truncated", async 
   // statement about the runner rather than about the marquee.
   await expect.poll(x, { timeout: 15_000 }).toBeLessThanOrEqual(-(overflow - 1));
 });
+
+/**
+ * The label line is the other slot that gets cut off on a 138px tile: three
+ * short CJK tags already overflow it. It uses the same marquee, so the same
+ * evidence applies — the fixture overflows, the slot noticed, and hovering
+ * actually moves the run. `?tags=1` is what puts labels on the demo shelf.
+ */
+test("a long label run marquees on hover instead of hiding the last tag", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/?demo=1&tags=1");
+  await expect(page.locator("[data-book-cover]").first()).toBeVisible();
+
+  const slot = page.locator('[data-marquee-kind="tags"]').first();
+  await expect(slot).toBeVisible();
+
+  const measured = await slot.evaluate((el) => {
+    const inner = el.firstElementChild as HTMLElement;
+    return {
+      slot: el.clientWidth,
+      content: inner.scrollWidth,
+      innerClass: inner.className,
+      inline: el.getAttribute("style") ?? "",
+      text: el.textContent ?? "",
+      title: el.getAttribute("title"),
+    };
+  });
+  expect(
+    measured.content,
+    `the fixture has to overflow for this to mean anything (slot ${measured.slot}px, content ${measured.content}px)`,
+  ).toBeGreaterThan(measured.slot + 8);
+  expect(measured.innerClass).toContain("w-max");
+  expect(measured.inline).toContain("mask-image");
+  expect(measured.title).toBe(measured.text);
+
+  await slot.hover();
+  const overflow = measured.content - measured.slot;
+  const x = () =>
+    page.evaluate(() => {
+      const inner = document.querySelector('[data-marquee-kind="tags"]')!
+        .firstElementChild as HTMLElement;
+      const match = /matrix\(([^)]+)\)/.exec(getComputedStyle(inner).transform);
+      return match ? Math.round(Number((match[1] ?? "").split(",")[4] ?? 0)) : 0;
+    });
+  await expect.poll(x, { timeout: 15_000 }).toBeLessThanOrEqual(-(overflow - 1));
+});
