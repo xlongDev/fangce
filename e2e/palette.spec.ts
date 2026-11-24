@@ -180,6 +180,34 @@ test("the palette cursor glides between rows as one element", async ({ page }) =
   expect(await cursor.evaluate((el) => getComputedStyle(el).transitionDuration)).toBe("0.34s");
 });
 
+/**
+ * A cover keeps its box when the row's title is long. Tailwind's base
+ * `img{max-width:100%}` caps the picture at its flex wrapper: without
+ * `shrink-0` there, a long title squeezed the wrapper to 8px and the cover
+ * became a narrow strip while its height stayed 28px.
+ */
+test("a book cover keeps its size when the title is long", async ({ page }) => {
+  await page.goto("/?demo=1");
+  await expect(page.locator("[data-shelf-scroller]")).toBeVisible();
+  await page.keyboard.press("Control+k");
+
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("textbox").fill("生病");
+  const cover = dialog.locator("li[data-row] img");
+  await expect(cover).toBeVisible();
+  const before = (await cover.boundingBox())!;
+  await dialog
+    .locator("li[data-row] button span.block.truncate")
+    .first()
+    .evaluate((el) => (el.textContent = "我们为什么会生病".repeat(12)));
+  const after = (await cover.boundingBox())!;
+
+  // Compare against the same cover before the title grew: engines round
+  // subpixel widths differently, but a squeezed slot loses most of its width.
+  expect(after.width / before.width).toBeGreaterThan(0.9);
+  expect(after.height / before.height).toBeGreaterThan(0.9);
+});
+
 test("a copy press still reaches the book", async ({ page }) => {
   await openKindleBook(page);
 

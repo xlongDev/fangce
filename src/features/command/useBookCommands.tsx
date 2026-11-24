@@ -57,7 +57,18 @@ function bookCommand(book: BookSummary): Command {
     // The palette scores on title plus keywords, so an author match has to be
     // a keyword too — otherwise the row is filtered straight back out.
     keywords: [...book.authors, ...book.tags, "book", "打开"],
-    icon: <BookOpenText size={16} />,
+    // The palette's icon slot is a ReactNode: a book's cover goes there
+    // verbatim, so a row identifies the edition and not just the title.
+    icon: book.coverUrl ? (
+      <img
+        src={book.coverUrl}
+        alt=""
+        className="h-7 w-[21px] shrink-0 rounded-[3px] object-cover"
+        draggable={false}
+      />
+    ) : (
+      <BookOpenText size={16} />
+    ),
     run: () => navigateTo(`/reader?book=${book.id}`),
   };
 }

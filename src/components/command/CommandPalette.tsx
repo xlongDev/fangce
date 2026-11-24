@@ -276,7 +276,10 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
                       )}
                     >
                       <span className="flex min-w-0 items-center gap-2.5">
-                        <span className="text-text-2">{entry.command.icon}</span>
+                        {/* Without shrink-0 a long title squeezes this slot,
+                            and Tailwind's base img{max-width:100%} then makes
+                            a cover narrow while its height stays fixed. */}
+                        <span className="text-text-2 shrink-0">{entry.command.icon}</span>
                         <span className="min-w-0">
                           <span className="block truncate text-sm">{entry.command.title}</span>
                           {entry.command.description && (
