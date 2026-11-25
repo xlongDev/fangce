@@ -378,6 +378,16 @@ export const commands = {
   bookImport: (paths: string[], password: string | null, options?: InvokeOptions) =>
     __TAURI_INVOKE<ImportOutcome[]>("book_import", { paths, password }, options),
   /**
+   *  `book.scanPaths` — turn every import source into book files.
+   *
+   *  Dropped folders can sit beside loose files in one batch, so the expansion
+   *  lives here rather than in the UI. The walk is read-only and runs on a
+   *  blocking task like every other directory walk; the answer is absolute paths
+   *  for `book.import` — one pipeline, one dedupe, one receipt.
+   */
+  bookScanPaths: (paths: string[], options?: InvokeOptions) =>
+    __TAURI_INVOKE<string[]>("book_scan_paths", { paths }, options),
+  /**
    *  `book.export` — saves a copy of the book's own file wherever the reader
    *  asks for it.
    *

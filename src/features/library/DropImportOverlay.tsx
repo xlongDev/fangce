@@ -72,7 +72,7 @@ export function DropImportOverlay() {
 
           <p className="relative text-base font-semibold">松开即可导入</p>
           <p className="text-text-2 relative mt-1.5 text-[13.5px]">
-            松手就会开始导入，支持这些格式：
+            文件或文件夹都可以拖进来，支持这些格式：
           </p>
 
           <div className="relative mt-4 flex max-w-[36ch] flex-wrap justify-center gap-1.5">

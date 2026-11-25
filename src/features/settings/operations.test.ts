@@ -82,6 +82,10 @@ describe("the kind chips", () => {
     expect(kinds("cover")).toContain("cover");
   });
 
+  it("files a favorite toggle under 收藏 only", () => {
+    expect(kinds("favorite")).toEqual(["all", "favorite"]);
+  });
+
   it("files a fill under 补全 only", () => {
     expect(kinds("fill_metadata")).toEqual(["all", "fill"]);
   });

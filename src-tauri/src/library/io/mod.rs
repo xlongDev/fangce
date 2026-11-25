@@ -7,6 +7,7 @@ pub mod catalog;
 pub mod characters;
 pub mod clippings;
 pub mod export;
+pub mod folder;
 pub mod import;
 pub mod pack;
 pub mod script;

@@ -19,7 +19,12 @@ import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
 import { ContinueReadingCard } from "@/features/library/ContinueReadingCard";
 import { DropImportOverlay } from "@/features/library/DropImportOverlay";
 import { ImportSummary } from "@/features/library/ImportSummary";
-import { pickBookFiles, pickPaths } from "@/features/library/importFiles";
+import {
+  expandImportPaths,
+  pickBookFiles,
+  pickFolder,
+  pickPaths,
+} from "@/features/library/importFiles";
 import { ShelfBatchBar } from "@/features/library/ShelfBatchBar";
 import { ShelfGrid } from "@/features/library/ShelfGrid";
 import { ShelfHeader } from "@/features/library/ShelfHeader";
@@ -502,8 +507,24 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
     );
   };
 
+  // A folder is a source of paths, not a book: expand it (and any loose files
+  // dropped beside it) once, then hand everything to the one import mutation.
+  const importExpanded = async (paths: string[]) => {
+    if (paths.length === 0) return;
+    try {
+      const expanded = await expandImportPaths(paths);
+      if (expanded.length === 0) {
+        showToast("error", "没有找到可导入的书籍");
+        return;
+      }
+      importPaths(expanded);
+    } catch (error) {
+      showToast("error", `读取文件夹失败：${String(error)}`);
+    }
+  };
+
   // Tauri intercepts native drops and reports absolute file paths.
-  const dragging = useDragDropImport((paths) => importPaths(paths));
+  const dragging = useDragDropImport((paths) => void importExpanded(paths));
 
   // The web build has no native drag-drop channel, but the page can see an
   // HTML5 one: same overlay, same mutation, only the source of the files
@@ -545,6 +566,11 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
       return;
     }
     void pickPaths().then(importPaths);
+  };
+
+  const startFolderImport = async () => {
+    const folder = await pickFolder();
+    if (folder) await importExpanded([folder]);
   };
 
   // The palette's 导入书籍 command and ⌘O cannot reach into this page's
@@ -704,6 +730,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         onClippings={() => setClippingsOpen(true)}
         onSource={() => setSourceOpen(true)}
         onImport={startImport}
+        onImportFolder={() => void startFolderImport()}
         onCalibre={() => setCalibreOpen(true)}
         trashEmpty={!stats.data || stats.data.trashed === 0}
         onEmptyTrash={() => setEmptyTrashOpen(true)}

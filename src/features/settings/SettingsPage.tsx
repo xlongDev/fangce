@@ -961,6 +961,7 @@ export const KINDS: OperationKind[] = [
       action === "update_metadata_cover" ||
       action === "rename_titles",
   },
+  { key: "favorite", label: "收藏", matches: (action) => action === "favorite" },
   { key: "fill", label: "补全", matches: (action) => action === "fill_metadata" },
   {
     key: "cover",
@@ -1019,7 +1020,7 @@ function OperationsSection() {
         </p>
       ) : calls.length === 0 ? (
         <p className="text-text-3 px-5 py-3 text-[13px]">
-          还没有记录。改一本书的信息、贴个标签、或者删一本书，都会记在这里。
+          还没有记录。改一本书的信息、贴标签、收藏、或者删一本书，都会记在这里。
         </p>
       ) : (
         <>
@@ -1236,7 +1237,7 @@ function OperationsDay({
 export interface OperationCall {
   callId: string;
   at: number;
-  /** What the call did: `update_metadata`, `fill_metadata`, `trash`, … The
+  /** What the call did: `update_metadata`, `favorite`, `fill_metadata`, `trash`, … The
    *  filter chips read this, so a new action is one line here and one there. */
   action: string;
   summary: string;

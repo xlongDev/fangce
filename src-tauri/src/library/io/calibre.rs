@@ -45,7 +45,7 @@ const REQUIRED: &[(&str, &[&str])] = &[
 /// One file 方册 can actually open, best first. A Calibre book often carries
 /// both EPUB and AZW3; importing both would put the same novel on the shelf
 /// twice (different bytes, so hash-dedupe cannot see them). One file per book.
-const FORMAT_ORDER: &[&str] =
+pub(crate) const FORMAT_ORDER: &[&str] =
     &["epub", "pdf", "azw3", "mobi", "azw", "prc", "fb2", "cbz", "markdown", "txt"];
 
 /// Optional metadata. The four tables in [`REQUIRED`] are what makes a file a

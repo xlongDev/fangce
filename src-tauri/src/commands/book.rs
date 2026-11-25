@@ -360,6 +360,20 @@ pub async fn book_cover_save(
     .map_err(|err| AppError::Message(format!("保存封面任务被中断：{err}")))?
 }
 
+/// `book.scanPaths` — turn every import source into book files.
+///
+/// Dropped folders can sit beside loose files in one batch, so the expansion
+/// lives here rather than in the UI. The walk is read-only and runs on a
+/// blocking task like every other directory walk; the answer is absolute paths
+/// for `book.import` — one pipeline, one dedupe, one receipt.
+#[tauri::command]
+#[specta::specta]
+pub async fn book_scan_paths(paths: Vec<String>) -> AppResult<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(move || Ok(library::folder::expand(&paths)))
+        .await
+        .unwrap_or_else(|err| Err(AppError::Message(format!("扫描导入路径失败：{err}"))))
+}
+
 /// `book.import`
 ///
 /// Takes absolute paths chosen by the native file dialog or dropped onto the
@@ -653,7 +667,11 @@ pub fn library_duplicates(
 #[tauri::command]
 #[specta::specta]
 pub fn book_set_favorite(state: State<'_, AppState>, id: String, favorite: bool) -> AppResult<()> {
-    state.library.with(|conn| crate::library::repository::set_favorite(conn, &id, favorite))
+    state.library.with_tx(|tx| {
+        let changes = ops::favorite_changes(tx, std::slice::from_ref(&id), favorite)?;
+        repository::set_favorite(tx, &id, favorite)?;
+        ops::record_favorites(tx, &changes, favorite)
+    })
 }
 
 /// `book.setFavoriteMany` — the batch bar's 收藏 / 取消收藏, one transaction.
@@ -664,7 +682,11 @@ pub fn book_set_favorite_many(
     ids: Vec<String>,
     favorite: bool,
 ) -> AppResult<()> {
-    state.library.with_tx(|tx| crate::library::repository::set_favorite_many(tx, &ids, favorite))
+    state.library.with_tx(|tx| {
+        let changes = ops::favorite_changes(tx, &ids, favorite)?;
+        repository::set_favorite_many(tx, &ids, favorite)?;
+        ops::record_favorites(tx, &changes, favorite)
+    })
 }
 
 /// `book.update` — rewrites title, authors and the descriptive fields, and

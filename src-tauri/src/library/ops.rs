@@ -5,13 +5,14 @@
 //! without an undo is only a receipt, though: so a metadata write stores the
 //! values it replaced, and [`undo`] puts them back.
 //!
-//! What is recorded: writes to metadata, labels and the shelf's membership.
+//! What is recorded: writes to metadata, labels, the favorite flag and the
+//! shelf's membership.
 //! What is not: reading, searching, and the reading position — this is a record
 //! of changes, not of surveillance.
 
 use std::path::Path;
 
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -291,6 +292,45 @@ pub fn record_details(
     write(conn, source, action, summary, &rows)
 }
 
+/// The ids whose favorite flag really changes, paired with the old flag.
+///
+/// A batch selection can include books already in the target state. Logging
+/// those would make undo clear a favorite the reader never set here.
+pub fn favorite_changes(
+    conn: &Connection,
+    ids: &[String],
+    favorite: bool,
+) -> AppResult<Vec<(String, bool)>> {
+    let mut out = Vec::new();
+    for id in ids {
+        let before: i64 = conn
+            .query_row("SELECT favorite FROM books WHERE id = ?1", params![id], |row| row.get(0))
+            .optional()?
+            .ok_or_else(|| AppError::NotFound(id.clone()))?;
+        let before = before != 0;
+        if before != favorite {
+            out.push((id.clone(), before));
+        }
+    }
+    Ok(out)
+}
+
+/// [`record`] for a favorite toggle: one call (one undo button) for the batch.
+pub fn record_favorites(
+    conn: &Connection,
+    changes: &[(String, bool)],
+    favorite: bool,
+) -> AppResult<()> {
+    let rows: Vec<(String, Value)> = changes
+        .iter()
+        .map(|(id, before)| (id.clone(), json!({ "v": 1, "favorite": before })))
+        .collect();
+    let verb = if favorite { "收藏了" } else { "取消收藏" };
+    let summary =
+        if changes.len() == 1 { verb.to_string() } else { format!("{verb} {} 本", changes.len()) };
+    record_details(conn, Source::Ui, FAVORITE_ACTION, &summary, &rows)
+}
+
 fn write(
     conn: &Connection,
     source: Source,
@@ -391,6 +431,7 @@ fn can_undo(action: &str, detail: Option<&str>) -> bool {
     match action {
         ADDED_TAGS_ACTION => added_tags(detail).is_some(),
         ADDED_NOTES_ACTION => added_note_id(detail).is_some(),
+        FAVORITE_ACTION => favorite_before(detail).is_some(),
         _ => before_fields(detail).is_some(),
     }
 }
@@ -400,6 +441,10 @@ pub const ADDED_TAGS_ACTION: &str = "ai_tags";
 
 /// A note draft has no previous value: its inverse is clearing the note again.
 pub const ADDED_NOTES_ACTION: &str = "ai_notes";
+
+/// A favorite toggle's inverse is the old flag, and nothing else. A metadata
+/// before-image would clear fields this write never touched when undone.
+pub const FAVORITE_ACTION: &str = "favorite";
 
 /// The detail line for a note draft. `book_id` in the log names the book; the
 /// annotation id travels in the detail because undo has to reach that row.
@@ -436,6 +481,15 @@ fn added_tags(detail: Option<&str>) -> Option<Vec<String>> {
     Some(names)
 }
 
+/// The old flag on a favorite row; `None` for any other detail shape.
+fn favorite_before(detail: Option<&str>) -> Option<bool> {
+    let detail: Value = serde_json::from_str(detail?).ok()?;
+    if detail.get("v").and_then(Value::as_u64) != Some(1) {
+        return None;
+    }
+    detail.get("favorite")?.as_bool()
+}
+
 /// Puts back what one call changed.
 ///
 /// Idempotent by construction: it writes the values the books had before, so a
@@ -467,6 +521,22 @@ pub fn undo(tx: &Transaction<'_>, call_id: &str, covers_dir: &Path) -> AppResult
                     match crate::library::tags::assign(tx, std::slice::from_ref(id), &[], &tags) {
                         Ok(()) => undone += 1,
                         // The book is gone; its labels went with it.
+                        Err(AppError::NotFound(_)) => skipped += 1,
+                        Err(err) => return Err(err),
+                    }
+                }
+                _ => skipped += 1,
+            }
+            continue;
+        }
+        // A favorite write stores only the old flag. Putting it back through
+        // the same repository path keeps this undo away from the eleven
+        // metadata fields a before-image would have cleared.
+        if action == FAVORITE_ACTION {
+            match (book_id, favorite_before(detail.as_deref())) {
+                (Some(id), Some(before)) => {
+                    match crate::library::repository::set_favorite(tx, id, before) {
+                        Ok(()) => undone += 1,
                         Err(AppError::NotFound(_)) => skipped += 1,
                         Err(err) => return Err(err),
                     }
@@ -1172,6 +1242,45 @@ mod tests {
             .expect("record");
         let rows = library.with(|conn| list(conn, 10)).expect("list");
         assert!(!rows[0].undoable, "没有 before 就没有撤销");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A batch that unfavorites two books is one call and one undo. Unchanged
+    /// books stay out of the log, and undo must not clear the metadata a
+    /// before-image would have rewritten on its way to the old flag.
+    #[test]
+    fn favorite_toggle_is_recorded_and_undone() {
+        let (dir, library) = harness("ops-favorite");
+        let ids = ["b1".to_string(), "b2".to_string()];
+        library
+            .with_tx(|tx| {
+                tx.execute_batch("UPDATE books SET favorite = 1 WHERE id IN ('b1', 'b2');")?;
+                let changes = favorite_changes(tx, &ids, false)?;
+                assert_eq!(changes.len(), 2, "两本都从收藏变取消");
+                assert!(changes.iter().all(|(_, before)| *before));
+                // A book already in the target state is not part of the call.
+                assert!(favorite_changes(tx, &ids[..1], true)?.is_empty());
+                repository::set_favorite_many(tx, &ids, false)?;
+                record_favorites(tx, &changes, false)
+            })
+            .expect("unfavorite");
+
+        let rows = library.with(|conn| list(conn, 10)).expect("list");
+        assert_eq!(rows.len(), 2, "一批两本，一次调用");
+        assert_eq!(rows[0].call_id, rows[1].call_id);
+        assert_eq!(rows[0].action, FAVORITE_ACTION);
+        assert_eq!(rows[0].summary, "取消收藏 2 本");
+        assert!(rows.iter().all(|row| row.undoable));
+
+        let call_id = rows[0].call_id.clone();
+        let outcome = library.with_tx(|tx| undo(tx, &call_id, &covers_dir(&dir))).expect("undo");
+        assert_eq!(outcome, Undo { undone: 2, skipped: 0 });
+
+        for id in ["b1", "b2"] {
+            let book = library.with(|conn| repository::get(conn, id)).expect("get").expect("book");
+            assert!(book.favorite, "收藏状态回到原样");
+            assert!(book.publisher.is_some(), "别的字段没被碰");
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

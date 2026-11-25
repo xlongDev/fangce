@@ -1,8 +1,17 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { FilePlus, Folder, FolderOpen, Globe, Highlighter, Trash } from "@phosphor-icons/react";
+import {
+  FilePlus,
+  Folder,
+  FolderOpen,
+  FolderSimple,
+  Globe,
+  Highlighter,
+  Trash,
+} from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
+import { GlassMenu, GlassMenuItem } from "@/components/glass/menu";
 import { IconSwap } from "@/components/motion/IconSwap";
 import { IMPORT_BOOKS_SHORTCUT } from "@/features/command/registerCoreCommands";
 import { effectiveKeys, formatShortcut } from "@/lib/commands";
@@ -58,6 +67,7 @@ export function ShelfHeader({
   onClippings,
   onSource,
   onImport,
+  onImportFolder,
   onCalibre,
   trashEmpty = true,
   onEmptyTrash,
@@ -71,6 +81,9 @@ export function ShelfHeader({
   /** Scan an external Calibre library. Labelled, and disabled in the web build
    *  where there is no directory to pick; the scan itself is read-only. */
   onCalibre: () => void;
+  /** The folder row in the 导入书籍 menu. Desktop-only: the browser has no
+   *  directory to hand over. */
+  onImportFolder: () => void;
   /** Whether the bin is empty — the only state in which 清空回收站 has nothing
    *  to do. Defaults to `true` so a caller that forgets cannot offer a button
    *  that empties a bin it never measured. */
@@ -82,6 +95,40 @@ export function ShelfHeader({
   const [calibreHover, setCalibreHover] = useState(false);
   const keyOverrides = useSettings((state) => state.keyOverrides);
   const [importKey] = effectiveKeys("book.import", [IMPORT_BOOKS_SHORTCUT], keyOverrides) ?? [];
+  // One primary, two sources. A native dialog picks files *or* a folder, never
+  // both at once, so the desktop keeps the choice in a menu on the button;
+  // the browser has no directory to pick and keeps a direct click.
+  const importButton = (
+    <GlassButton
+      size="md"
+      variant="accent-glass"
+      className="group"
+      disabled={importing}
+      onClick={isDesktopRuntime ? undefined : onImport}
+      trailing={
+        isDesktopRuntime ? (
+          // A real keycap, not faint text glued to the label: the border gives
+          // ⌘O a shape so the letter O cannot be read as a zero, and mono keeps
+          // the two glyphs distinct. The fill is deliberately faint — the
+          // border, not a tinted block, is what makes it read as a key. One
+          // keycap is one chord, so the space is dropped here; the settings
+          // panel keeps it, where the text is longer and needs the room.
+          importKey && (
+            <kbd className="border-accent/30 bg-accent/4 text-accent -ml-1 rounded border px-1.5 py-1 font-mono text-[11px] leading-none">
+              {formatShortcut(importKey).replace(/\s/g, "")}
+            </kbd>
+          )
+        ) : (
+          // The web build has no directory dialog, so the useful hint there is
+          // the one it can actually honour.
+          <span className="text-[11px] opacity-75">可拖入文件</span>
+        )
+      }
+    >
+      <FilePlus size={15} className={`${TOOLBAR_ICON} motion-safe:group-hover:-translate-y-0.5`} />{" "}
+      导入书籍
+    </GlassButton>
+  );
   return (
     <header className="px-8 pt-8 pb-6">
       <p className="text-text-2 text-sm">{greeting(now)}</p>
@@ -170,39 +217,25 @@ export function ShelfHeader({
                 aria-hidden="true"
                 className="bg-hairline mx-1 h-5 w-px shrink-0"
               />
-              <GlassButton
-                size="md"
-                variant="accent-glass"
-                className="group"
-                disabled={importing}
-                onClick={onImport}
-                trailing={
-                  isDesktopRuntime ? (
-                    // A real keycap, not faint text glued to the label: the
-                    // border gives ⌘O a shape so the letter O cannot be read
-                    // as a zero, and mono keeps the two glyphs distinct. The
-                    // fill is deliberately faint — the border, not a tinted
-                    // block, is what makes it read as a key. One keycap is one
-                    // chord, so the space is dropped here; the settings panel
-                    // keeps it, where the text is longer and needs the room.
-                    importKey && (
-                      <kbd className="border-accent/30 bg-accent/4 text-accent -ml-1 rounded border px-1.5 py-1 font-mono text-[11px] leading-none">
-                        {formatShortcut(importKey).replace(/\s/g, "")}
-                      </kbd>
-                    )
-                  ) : (
-                    // The web build has no directory dialog, so the useful
-                    // hint there is the one it can actually honour.
-                    <span className="text-[11px] opacity-75">可拖入文件</span>
-                  )
-                }
-              >
-                <FilePlus
-                  size={15}
-                  className={`${TOOLBAR_ICON} motion-safe:group-hover:-translate-y-0.5`}
-                />{" "}
-                导入书籍
-              </GlassButton>
+              {isDesktopRuntime ? (
+                <GlassMenu label="导入书籍" trigger={importButton}>
+                  <GlassMenuItem
+                    icon={<FilePlus size={15} />}
+                    label="选择书籍文件"
+                    onClick={onImport}
+                  />
+                  <GlassMenuItem
+                    icon={<FolderSimple size={15} />}
+                    label="选择文件夹（批量）"
+                    onClick={onImportFolder}
+                  />
+                  <p className="text-text-3 px-2.5 pt-1.5 pb-0.5 text-[11px]">
+                    也可以直接拖入文件或文件夹
+                  </p>
+                </GlassMenu>
+              ) : (
+                importButton
+              )}
             </>
           )}
         </div>

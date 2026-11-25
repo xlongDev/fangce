@@ -1,6 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { PACK_EXTENSIONS } from "@/features/library/pack";
+import { ipc } from "@/lib/ipc";
 import { acceptOf, pickFiles as pickBrowserFiles } from "@/lib/pickFile";
 
 /** Every extension `BookFormat::from_path` accepts; kept here so the dialog and
@@ -50,6 +51,30 @@ export async function pickPaths(): Promise<string[]> {
     // through `pickBookFiles` instead.
     return [];
   }
+}
+
+/** Native folder picker for the batch import. The directory is scanned by
+ *  `book.scanFolder` before anything is imported, so picking one is not a
+ *  promise that every file inside is a book. */
+export async function pickFolder(): Promise<string | null> {
+  try {
+    const picked = await open({
+      directory: true,
+      multiple: false,
+      title: "选择要导入书籍的文件夹",
+    });
+    return typeof picked === "string" ? picked : null;
+  } catch {
+    // No dialog outside the Tauri shell; callers never render this button there.
+    return null;
+  }
+}
+
+/** A folder is just another import source: Rust expands it into book files,
+ *  leaving loose files untouched. The picker and a native drop both use this,
+ *  so there is only one shape of batch on this side of IPC. */
+export function expandImportPaths(paths: string[]): Promise<string[]> {
+  return ipc.bookScanPaths(paths);
 }
 
 /**
