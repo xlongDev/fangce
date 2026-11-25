@@ -32,9 +32,12 @@ use crate::state::AppState;
 /// Progress of one batch, counted in input ids (duplicates included) so the
 /// bar can go from `0/N` to `N/N` without knowing how the mail was split.
 pub const KINDLE_SEND_PROGRESS_EVENT: &str = "kindle://send-progress";
-/// Conservative ceiling for one attachment. Amazon's web uploader takes 200 MB
-/// but the email path is much smaller; refusing early beats a silent bounce.
-const MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
+/// Amazon's email path accepts a 50 MB total per message. A single attachment
+/// may use the whole message; larger books belong on the web uploader (200 MB).
+/// Note: MIME base64 inflates the wire size ~33%, so a relay with a smaller
+/// per-message cap will bounce a full-size attachment — that is the reader's
+/// SMTP provider to pick, not a limit we can detect here.
+const MAX_ATTACHMENT_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_ATTACHMENTS_PER_MESSAGE: usize = 25;
 const MAX_MESSAGE_BYTES: u64 = 50 * 1024 * 1024;
 const CONFIG_KEY: &str = "send.kindle";
@@ -202,7 +205,7 @@ fn safe_title(title: &str) -> String {
 fn check_size(size: u64) -> AppResult<()> {
     if size == 0 || size > MAX_ATTACHMENT_BYTES {
         return Err(AppError::InvalidArgument(
-            "EPUB 文件为空或超过 25 MB，请改用 Send to Kindle 网页上传".into(),
+            "EPUB 文件为空或超过 50 MB，请改用 Send to Kindle 网页上传".into(),
         ));
     }
     Ok(())
@@ -603,8 +606,8 @@ mod tests {
     #[test]
     fn one_attachment_ceiling_is_shared_by_single_and_batch() {
         assert!(check_size(0).is_err(), "空文件不能发");
-        assert!(check_size(MAX_ATTACHMENT_BYTES + 1).is_err(), "超过 25 MB 不能发");
-        assert!(check_size(MAX_ATTACHMENT_BYTES).is_ok(), "恰好 25 MB 可以发");
+        assert!(check_size(MAX_ATTACHMENT_BYTES + 1).is_err(), "超过 50 MB 不能发");
+        assert!(check_size(MAX_ATTACHMENT_BYTES).is_ok(), "恰好 50 MB 可以发");
         assert!(epub_only(BookFormat::Epub).is_ok());
         assert!(
             epub_only(BookFormat::Text)
@@ -628,13 +631,20 @@ mod tests {
         let groups = group_attachments(many);
         assert_eq!(groups.iter().map(Vec::len).collect::<Vec<_>>(), vec![25, 1]);
 
+        let half = (MAX_MESSAGE_BYTES / 2) as usize; // 25 MB each
+        let pair = (0..2).map(|_| pending("half", half)).collect();
+        let groups = group_attachments(pair);
+        assert_eq!(groups.len(), 1, "两份 25 MB 恰好 50 MB，可以同封");
+
+        // A full-size attachment equals the whole message budget, so it takes
+        // a message of its own instead of being left out or overfilling one.
         let full = (0..2).map(|_| pending("big", MAX_ATTACHMENT_BYTES as usize)).collect();
         let groups = group_attachments(full);
-        assert_eq!(groups.len(), 1, "两份 25 MB 恰好 50 MB，可以同封");
+        assert_eq!(groups.iter().map(Vec::len).collect::<Vec<_>>(), vec![1, 1]);
 
         let over = (0..3).map(|_| pending("big", MAX_ATTACHMENT_BYTES as usize)).collect();
         let groups = group_attachments(over);
-        assert_eq!(groups.iter().map(Vec::len).collect::<Vec<_>>(), vec![2, 1]);
+        assert_eq!(groups.iter().map(Vec::len).collect::<Vec<_>>(), vec![1, 1, 1]);
         for group in groups {
             let bytes: u64 = group.iter().map(|item| item.bytes.len() as u64).sum();
             assert!(group.len() <= MAX_ATTACHMENTS_PER_MESSAGE);

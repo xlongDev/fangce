@@ -50,7 +50,7 @@ function KindleForm({ initial, loadError }: { initial: KindleConfig; loadError: 
       id="kindle"
       icon={PaperPlaneTilt}
       title="发送到 Kindle"
-      description="把书架上的 EPUB 作为附件发到 Kindle 个人文档邮箱，由亚马逊转成 Kindle 格式。附件上限 25 MB；发件邮箱需先加入「已批准的个人文档电子邮件地址」。"
+      description="把书架上的 EPUB 作为附件发到 Kindle 个人文档邮箱，由亚马逊转成 Kindle 格式。单封总大小上限 50 MB；发件邮箱需先加入「已批准的个人文档电子邮件地址」。"
       badge={<Unsaved dirty={dirty} />}
     >
       {loadError && (

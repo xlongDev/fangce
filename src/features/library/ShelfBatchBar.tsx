@@ -649,7 +649,7 @@ export function ShelfBatchBar({
           if (!next && !kindleBatch.isPending) setKindleIds(null);
         }}
         title="批量发送到 Kindle"
-        description={`选中的 ${kindleIds?.length ?? 0} 本会提交到 Kindle。每封最多 25 个附件、附件总计 50 MB，超出会自动拆分；非 EPUB、空文件或超过 25 MB 的书会跳过。`}
+        description={`选中的 ${kindleIds?.length ?? 0} 本会提交到 Kindle。每封最多 25 个附件、附件总计 50 MB，超出会自动拆分；非 EPUB、空文件或超过 50 MB 的书会跳过。`}
         widthClass="w-[min(92vw,440px)]"
       >
         <div className="flex justify-end gap-2">
