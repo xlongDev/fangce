@@ -57,6 +57,7 @@ use tokio_tungstenite::tungstenite::handshake::client::Request as WsRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue, Response, StatusCode};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, client_async_tls};
 
+use crate::ai::AiConfig;
 use crate::error::{AppError, AppResult};
 
 /// The public token every Edge client sends. It is not a secret — it ships in
@@ -105,6 +106,10 @@ const MAX_TEXT_CHARS: usize = 1_000;
 /// How long one utterance may take. A socket that never answers has to surface
 /// as a message the reader can act on, not as a player that never starts.
 const SPEAK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// One voice synthesis, whether it answers over the Edge socket or an HTTP
+/// `/audio/speech`, may not take longer than this.
+const CUSTOM_SPEAK_TIMEOUT: Duration = Duration::from_secs(30);
 const LIST_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Seconds to add to the local clock.
@@ -208,6 +213,13 @@ pub struct EdgeVoice {
     /// nothing rather than guessing.
     pub gender: String,
 }
+
+/// The voice id for a reader's own `/audio/speech` service. A fixed id rather
+/// than the configured model: the URI stored in reader settings must survive a
+/// model change, and only the backend knows which service answers this id.
+/// Its clips carry no word boundaries, so the renderer washes the whole
+/// utterance instead (see `edge.ts`).
+pub const CUSTOM_VOICE_ID: &str = "custom";
 
 /// Why one attempt did not produce a clip.
 #[derive(Debug)]
@@ -348,6 +360,94 @@ fn check_voice(voice: &str) -> AppResult<()> {
         return Ok(());
     }
     Err(AppError::InvalidArgument(format!("无效的语音标识：{voice}")))
+}
+
+/// The catalogue entry for a custom voice, when one is configured.
+///
+/// One fixed id: the reader's stored pick must survive a model or voice change
+/// on the service side. The service's own voice name is the row's category, so
+/// the picker says which voice the reader will actually hear.
+pub fn custom_voice(config: &AiConfig) -> Option<EdgeVoice> {
+    if config.tts_base_url.trim().is_empty() {
+        return None;
+    }
+    Some(EdgeVoice {
+        short_name: CUSTOM_VOICE_ID.to_string(),
+        name: "自定义语音".to_string(),
+        locale: "custom".to_string(),
+        categories: config.tts_voice.trim().to_string(),
+        gender: String::new(),
+    })
+}
+
+/// Synthesises one utterance through the reader's own OpenAI-compatible
+/// `/audio/speech` service.
+///
+/// The response is plain audio bytes; no service of this shape reports word
+/// boundaries, so the clip carries none and the renderer falls back to washing
+/// the whole utterance. Speed is still applied on playback, not here, which is
+/// what keeps a clip reusable at any rate.
+pub async fn speak_custom(text: &str, config: &AiConfig) -> AppResult<EdgeClip> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(AppError::InvalidArgument("没有可朗读的文本".into()));
+    }
+    if text.chars().count() > MAX_TEXT_CHARS {
+        return Err(AppError::InvalidArgument(format!(
+            "单次朗读最长 {MAX_TEXT_CHARS} 字，请分段朗读"
+        )));
+    }
+    let base = crate::net::secure_base_url(&config.tts_base_url, "语音接口地址")?;
+    let model = config.tts_model.trim();
+    let voice = config.tts_voice.trim();
+    if model.is_empty() || voice.is_empty() {
+        return Err(AppError::Message(
+            "自定义语音尚未配置完整，请到 AI 设置里填写模型和音色".into(),
+        ));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(CUSTOM_SPEAK_TIMEOUT)
+        // Same dual-stack trap as Edge: a host that answers over IPv6 but
+        // resets one layer up would fail every request on such a network.
+        .local_address(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+        .build()
+        .map_err(|err| AppError::Message(format!("无法创建语音客户端：{err}")))?;
+    let body = serde_json::json!({
+        "model": model,
+        "voice": voice,
+        "input": text,
+        "response_format": "mp3",
+    });
+    let mut request = client.post(format!("{base}/audio/speech")).json(&body);
+    let key = config.tts_api_key.trim();
+    if !key.is_empty() {
+        request = request.bearer_auth(key);
+    }
+    let response = request.send().await.map_err(|err| offline("自定义语音合成", err))?;
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        // The body is the only useful thing a failing service says: an unknown
+        // model, a bad voice id, a depleted quota. A bare status throws it away.
+        let detail = response.text().await.unwrap_or_default();
+        let detail = detail.trim();
+        // Character-bounded, not byte-bounded: cutting a UTF-8 string at an
+        // arbitrary byte would panic, and a panic in release is a crash.
+        let detail = detail.chars().take(300).collect::<String>();
+        return Err(AppError::Message(if detail.is_empty() {
+            format!("自定义语音接口返回 HTTP {status}")
+        } else {
+            format!("自定义语音接口返回 HTTP {status}：{detail}")
+        }));
+    }
+    let audio = response
+        .bytes()
+        .await
+        .map_err(|err| AppError::Message(format!("自定义语音没有返回音频：{err}")))?;
+    if audio.is_empty() {
+        return Err(AppError::Message("自定义语音没有返回音频，请检查接口配置".into()));
+    }
+    Ok(EdgeClip { audio: STANDARD.encode(&audio), words: Vec::new() })
 }
 
 /// XML-escapes the three characters that could end an element early. The text
@@ -780,6 +880,29 @@ mod tests {
         // The reader's speed is applied to the samples, so the markup must not
         // carry one: a clip has to be the same clip at every speed.
         assert!(!markup.contains("rate="), "{markup}");
+    }
+
+    #[test]
+    fn a_custom_voice_is_only_offered_when_an_address_is_configured() {
+        let mut config = AiConfig::default();
+        assert!(custom_voice(&config).is_none(), "未配置时不占 picker 的位置");
+        config.tts_base_url = "https://tts.example.com/v1".into();
+        config.tts_voice = "nova".into();
+        let voice = custom_voice(&config).expect("custom voice");
+        assert_eq!(voice.short_name, CUSTOM_VOICE_ID);
+        assert_eq!(voice.categories, "nova", "picker 要说出实际音色名");
+        assert_eq!(voice.locale, "custom", "不能混进真实语言分组");
+    }
+
+    #[test]
+    fn a_custom_voice_needs_no_network_to_reject_bad_input() {
+        let config = AiConfig::default();
+        let invalid = tauri::async_runtime::block_on(speak_custom("你好", &config));
+        assert!(invalid.is_err(), "空地址必须当场报错，而不是发出一个请求");
+        let config =
+            AiConfig { tts_base_url: "https://tts.example.com/v1".into(), ..AiConfig::default() };
+        let incomplete = tauri::async_runtime::block_on(speak_custom("你好", &config));
+        assert!(incomplete.is_err(), "缺模型与音色必须当场报错");
     }
 
     #[test]

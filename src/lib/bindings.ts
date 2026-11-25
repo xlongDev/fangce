@@ -1132,7 +1132,12 @@ export const commands = {
    */
   notesDraftApply: (items: AiNoteDraft[], options?: InvokeOptions) =>
     __TAURI_INVOKE<number>("notes_draft_apply", { items }, options),
-  /**  `tts.edgeVoices` — every voice the service offers. */
+  /**
+   *  `tts.edgeVoices` — every voice the service offers, plus the reader's own
+   *  service when one is configured. The custom voice is an `EdgeVoice` too: the
+   *  renderer's catalogue, picker and cache-invalidation rules then need no
+   *  third shape to know about.
+   */
   ttsEdgeVoices: (options?: InvokeOptions) =>
     __TAURI_INVOKE<EdgeVoice[]>("tts_edge_voices", undefined, options),
   /**
@@ -1140,6 +1145,8 @@ export const commands = {
    *
    *  No rate: the clip comes back at the service's own pace and the renderer
    *  stretches it to the reader's speed, so one clip answers for every speed.
+   *  The fixed `custom` voice id switches to the reader's own endpoint; every
+   *  other id is Microsoft's.
    */
   ttsEdgeSpeak: (text: string, voice: string, options?: InvokeOptions) =>
     __TAURI_INVOKE<EdgeClip>("tts_edge_speak", { text, voice }, options),
@@ -1260,6 +1267,22 @@ export type AiConfig_Deserialize = {
   /**  Model name. Ignored by A1111, which draws with whatever is loaded. */
   imageModel?: string;
   /**
+   *  Custom read-aloud voice, one OpenAI-compatible `/audio/speech` endpoint.
+   *  Empty address means "off": the catalogue voices stay as they are.
+   *  Deliberately one backend — `/audio/speech` is the shape every reseller
+   *  speaks, and a selector for one option is a setting nobody can change.
+   */
+  ttsBaseUrl?: string;
+  /**
+   *  Key for [`Self::tts_base_url`]. A local service needs none. A credential:
+   *  sealed at rest and blanked out of backups (see `crate::secrets`).
+   */
+  ttsApiKey?: string;
+  /**  Model id sent on every synthesis request. */
+  ttsModel?: string;
+  /**  Voice id the service expects, e.g. `nova` or `alloy`. */
+  ttsVoice?: string;
+  /**
    *  Saved endpoints. Seeded from the flat fields on first save, so the
    *  switcher is never empty.
    */
@@ -1376,6 +1399,22 @@ export type AiConfig_Serialize = {
   imageApiKey: string;
   /**  Model name. Ignored by A1111, which draws with whatever is loaded. */
   imageModel: string;
+  /**
+   *  Custom read-aloud voice, one OpenAI-compatible `/audio/speech` endpoint.
+   *  Empty address means "off": the catalogue voices stay as they are.
+   *  Deliberately one backend — `/audio/speech` is the shape every reseller
+   *  speaks, and a selector for one option is a setting nobody can change.
+   */
+  ttsBaseUrl: string;
+  /**
+   *  Key for [`Self::tts_base_url`]. A local service needs none. A credential:
+   *  sealed at rest and blanked out of backups (see `crate::secrets`).
+   */
+  ttsApiKey: string;
+  /**  Model id sent on every synthesis request. */
+  ttsModel: string;
+  /**  Voice id the service expects, e.g. `nova` or `alloy`. */
+  ttsVoice: string;
   /**
    *  Saved endpoints. Seeded from the flat fields on first save, so the
    *  switcher is never empty.

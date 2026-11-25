@@ -125,6 +125,23 @@ pub struct AiConfig {
     #[serde(default)]
     pub image_model: String,
 
+    /// Custom read-aloud voice, one OpenAI-compatible `/audio/speech` endpoint.
+    /// Empty address means "off": the catalogue voices stay as they are.
+    /// Deliberately one backend — `/audio/speech` is the shape every reseller
+    /// speaks, and a selector for one option is a setting nobody can change.
+    #[serde(default)]
+    pub tts_base_url: String,
+    /// Key for [`Self::tts_base_url`]. A local service needs none. A credential:
+    /// sealed at rest and blanked out of backups (see `crate::secrets`).
+    #[serde(default)]
+    pub tts_api_key: String,
+    /// Model id sent on every synthesis request.
+    #[serde(default)]
+    pub tts_model: String,
+    /// Voice id the service expects, e.g. `nova` or `alloy`.
+    #[serde(default)]
+    pub tts_voice: String,
+
     /// Saved endpoints. Seeded from the flat fields on first save, so the
     /// switcher is never empty.
     #[serde(default)]
@@ -228,6 +245,10 @@ impl Default for AiConfig {
             image_base_url: String::new(),
             image_api_key: String::new(),
             image_model: String::new(),
+            tts_base_url: String::new(),
+            tts_api_key: String::new(),
+            tts_model: String::new(),
+            tts_voice: String::new(),
             rerank_model: String::new(),
             deepl_key: String::new(),
             profiles: Vec::new(),
@@ -333,6 +354,26 @@ pub fn set_config(library: &Library, next: &AiConfig) -> AppResult<AiConfig> {
     };
     stored.image_api_key = next.image_api_key.trim().to_string();
     stored.image_model = next.image_model.trim().to_string();
+    // An empty address is the off switch. Clear the other fields with it so a
+    // key typed once and then switched off does not sit in the database
+    // (and in a backup) doing nothing.
+    stored.tts_base_url = if next.tts_base_url.trim().is_empty() {
+        String::new()
+    } else {
+        crate::net::secure_base_url(&next.tts_base_url, "语音接口地址")?
+    };
+    if stored.tts_base_url.is_empty() {
+        stored.tts_api_key = String::new();
+        stored.tts_model = String::new();
+        stored.tts_voice = String::new();
+    } else {
+        stored.tts_api_key = next.tts_api_key.trim().to_string();
+        stored.tts_model = next.tts_model.trim().to_string();
+        stored.tts_voice = next.tts_voice.trim().to_string();
+        if stored.tts_model.is_empty() || stored.tts_voice.is_empty() {
+            return Err(AppError::InvalidArgument("自定义语音需要填模型和音色名".into()));
+        }
+    }
     stored.rerank_model = next.rerank_model.trim().to_string();
     stored.deepl_key = next.deepl_key.trim().to_string();
     stored.temperature = next.temperature.clamp(0.0, 2.0);
@@ -559,6 +600,32 @@ mod tests {
         assert_eq!(config.rag_top_k, 6);
         assert!(config.show_token_usage);
         assert_eq!(config.quick_questions.len(), DEFAULT_QUICK_QUESTIONS.len());
+    }
+
+    #[test]
+    fn turning_custom_speech_off_clears_its_credential() {
+        let harness = Harness::new("ai-tts-off");
+        set_config(
+            &harness.library,
+            &AiConfig {
+                tts_base_url: "https://tts.example.com/v1".into(),
+                tts_api_key: " secret ".into(),
+                tts_model: "tts-1".into(),
+                tts_voice: "nova".into(),
+                ..AiConfig::default()
+            },
+        )
+        .expect("save");
+        let saved = config(&harness.library).expect("config");
+        assert_eq!(saved.tts_api_key, "secret");
+        assert_eq!(saved.tts_base_url, "https://tts.example.com/v1");
+
+        set_config(&harness.library, &AiConfig { tts_base_url: "  ".into(), ..saved })
+            .expect("turn off");
+        let off = config(&harness.library).expect("config");
+        assert_eq!(off.tts_base_url, "");
+        assert!(off.tts_api_key.is_empty(), "关闭后不该留着 Key");
+        assert!(off.tts_voice.is_empty());
     }
 
     #[test]

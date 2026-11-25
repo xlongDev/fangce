@@ -163,6 +163,10 @@ const EDGE_LOCALES = new Set([
   "th-TH",
   "vi-VN",
   "id-ID",
+  // The reader's own `/audio/speech` service. Its locale is a grouping key,
+  // not a language — it keeps the custom voice out of "中文（中国）" where it
+  // would sit among voices it has nothing in common with.
+  "custom",
 ]);
 
 /** The picker's language order: the languages a reader of this app is likeliest
@@ -264,6 +268,10 @@ const baseLang = (tag: string): string => {
  *  must agree (`zh` covers `zh-CN` and `zh-TW`, but not `yue`; `en` covers
  *  `en-US` and `en-GB`). */
 export function matchesBookLang(voiceLang: string, bookLang: string): boolean {
+  // A custom voice has no language of its own: the reader points it at whatever
+  // service they like, and hiding it because the book is in a different
+  // language would make a configured voice unreachable from the picker.
+  if (voiceLang === "custom") return true;
   return baseLang(voiceLang) === baseLang(bookLang);
 }
 
@@ -354,6 +362,7 @@ export function defaultVoiceMissing(voices: readonly Voice[]): boolean {
 const VARIANT_LANGUAGES: Record<string, string> = {
   "zh-CN-liaoning": "东北话",
   "zh-CN-shaanxi": "陕西话",
+  custom: "自定义语音",
 };
 
 /** Human name for a tag (`zh-CN` → 中文（中国）); the raw tag when the browser

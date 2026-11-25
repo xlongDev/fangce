@@ -3,17 +3,20 @@ import {
   ChatCircleText,
   Database,
   ImageSquare,
+  SpeakerHigh,
   SlidersHorizontal,
   Sparkle,
 } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
+import { reloadEdgeVoices } from "@/features/reader/edge";
 import { Actions, Feedback, SettingsGroup, Unsaved } from "@/features/settings/section";
 import { SecretsNotice } from "@/features/settings/SecretsNotice";
 import { ConnectionRows } from "@/features/settings/ai/ConnectionRows";
 import { GenerationRows } from "@/features/settings/ai/GenerationRows";
 import { ImageRows } from "@/features/settings/ai/ImageRows";
 import { PromptRows } from "@/features/settings/ai/PromptRows";
+import { TtsRows } from "@/features/settings/ai/TtsRows";
 import { RetrievalRows } from "@/features/settings/ai/RetrievalRows";
 import {
   useAiConfig,
@@ -228,7 +231,12 @@ function AiForm({ initial, defaults }: { initial: AiConfigFull; defaults: AiConf
   const onSave = () => {
     setStatus(null);
     save.mutate(draft, {
-      onSuccess: () => setStatus({ tone: "ok", text: "已保存。" }),
+      onSuccess: () => {
+        // The voice catalogue is fetched once per session. Without this, a
+        // custom voice added here would not appear in the picker until restart.
+        reloadEdgeVoices();
+        setStatus({ tone: "ok", text: "已保存。" });
+      },
       onError: (error) => setStatus({ tone: "bad", text: String(error) }),
     });
   };
@@ -331,6 +339,17 @@ function AiForm({ initial, defaults }: { initial: AiConfigFull; defaults: AiConf
         badge={<Unsaved dirty={dirty} />}
       >
         <ImageRows draft={draft} set={set} />
+      </SettingsGroup>
+
+      <SettingsGroup
+        id="ai"
+        anchor="ai-voice"
+        icon={SpeakerHigh}
+        title="AI 语音"
+        description="接入自己的语音合成服务。默认关闭；填好地址后音色会单独出现在朗读列表里。"
+        badge={<Unsaved dirty={dirty} />}
+      >
+        <TtsRows draft={draft} set={set} />
       </SettingsGroup>
     </>
   );
