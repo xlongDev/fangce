@@ -14,6 +14,7 @@ import type {
   GraphProgress,
   ImportOutcome,
   ImportProgress,
+  KindleSendProgress,
   RagProgress,
   SourceProgress,
   SummaryProgress,
@@ -320,6 +321,9 @@ const IMPORT_PROGRESS_EVENT = "book://import-progress";
 /** Event the backend emits once per book while a batch delete runs. */
 const DELETE_PROGRESS_EVENT = "book://delete-progress";
 
+/** Event the backend emits while a batch of books is sent to Kindle. */
+const KINDLE_SEND_PROGRESS_EVENT = "kindle://send-progress";
+
 /** Event carrying streamed AI answer chunks. */
 const AI_STREAM_EVENT = "ai://stream";
 
@@ -403,6 +407,14 @@ export async function onDeleteProgress(
 ): Promise<UnlistenFn | undefined> {
   if (!isTauri()) return undefined;
   return listen<DeleteProgress>(DELETE_PROGRESS_EVENT, (event) => handler(event.payload));
+}
+
+/** Subscribes to batch Kindle-send progress; no-op outside the Tauri shell. */
+export async function onKindleSendProgress(
+  handler: (progress: KindleSendProgress) => void,
+): Promise<UnlistenFn | undefined> {
+  if (!isTauri()) return undefined;
+  return listen<KindleSendProgress>(KINDLE_SEND_PROGRESS_EVENT, (event) => handler(event.payload));
 }
 
 /** Subscribes to streamed AI chunks; no-op outside the Tauri shell. */

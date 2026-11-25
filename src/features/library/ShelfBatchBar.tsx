@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowCounterClockwise,
   Export,
+  PaperPlaneTilt,
   Sparkle,
   Star,
   Tag,
@@ -17,9 +18,10 @@ import { Reveal } from "@/components/motion/Reveal";
 import { cn } from "@/lib/cn";
 import { useSavePath } from "@/hooks/useSavePath";
 import { useBatchExport } from "@/hooks/useCatalogExport";
+import { useKindleSendProgress, useSendBooksToKindle } from "@/hooks/useKindle";
 import { navigateTo } from "@/features/command/registerCoreCommands";
 import { showToast } from "@/stores/toasts";
-import type { BatchExportKind } from "@/lib/bindings";
+import type { BatchExportKind, KindleBatchSummary } from "@/lib/bindings";
 import { SPRING, useMotion } from "@/lib/motion";
 import { AiErrorCard } from "@/components/common/AiErrorCard";
 import { useAiConfig } from "@/hooks/useAi";
@@ -30,6 +32,7 @@ import { useGuideBatch } from "@/stores/guideBatch";
 import { useTagRun } from "@/stores/tagRun";
 import { BatchFillDialog } from "@/features/library/BatchFillDialog";
 import { AiTagDialog } from "@/features/library/AiTagDialog";
+import { KindleSendSummary } from "@/features/library/KindleSendSummary";
 import type { ShelfSelection } from "@/features/library/useShelfSelection";
 
 /** What a batch of books can become — the same four choices as one book,
@@ -103,6 +106,12 @@ export function ShelfBatchBar({
   // Plain packs expose conversations to anyone who gets the ZIP, so carrying
   // them is opt-in. Encrypted packs start with them included.
   const [exportIncludeAi, setExportIncludeAi] = useState(false);
+  /** The Kindle sheet freezes its ids like every other batch sheet: a book
+   *  ticked behind the dialog is not part of this submission. */
+  const [kindleIds, setKindleIds] = useState<string[] | null>(null);
+  const [kindleSummary, setKindleSummary] = useState<KindleBatchSummary | null>(null);
+  const kindleBatch = useSendBooksToKindle();
+  const kindleProgress = useKindleSendProgress();
   const exportBatch = useBatchExport();
   const { choose: chooseExportPath, error: exportPathError } = useSavePath();
   /** 整架补全的进度。名字避开下面导读批处理那个 `run`。 */
@@ -218,6 +227,17 @@ export function ShelfBatchBar({
         },
       },
     );
+  };
+
+  const confirmKindleSend = () => {
+    if (!kindleIds) return;
+    kindleBatch.mutate(kindleIds, {
+      onSuccess: (summary) => {
+        setKindleIds(null);
+        setKindleSummary(summary);
+      },
+      onError: () => setKindleIds(null),
+    });
   };
 
   const encryptedExport = exportKind === "encrypted";
@@ -386,6 +406,21 @@ export function ShelfBatchBar({
                         }}
                       >
                         <Export size={13} />
+                      </GlassIconButton>
+                    )}
+                    {isDesktopRuntime && (
+                      <GlassIconButton
+                        size="sm"
+                        variant="subtle"
+                        label="发送到 Kindle"
+                        title="批量发送到 Kindle"
+                        disabled={selection.count === 0 || kindleBatch.isPending}
+                        onClick={() => {
+                          setKindleSummary(null);
+                          setKindleIds(selection.selectedBooks.map((book) => book.id));
+                        }}
+                      >
+                        <PaperPlaneTilt size={13} />
                       </GlassIconButton>
                     )}
                     <GlassButton
@@ -607,6 +642,41 @@ export function ShelfBatchBar({
           </GlassButton>
         </div>
       </GlassDialog>
+
+      <GlassDialog
+        open={kindleIds !== null}
+        onOpenChange={(next) => {
+          if (!next && !kindleBatch.isPending) setKindleIds(null);
+        }}
+        title="批量发送到 Kindle"
+        description={`选中的 ${kindleIds?.length ?? 0} 本会提交到 Kindle。每封最多 25 个附件、附件总计 50 MB，超出会自动拆分；非 EPUB、空文件或超过 25 MB 的书会跳过。`}
+        widthClass="w-[min(92vw,440px)]"
+      >
+        <div className="flex justify-end gap-2">
+          <GlassButton
+            variant="subtle"
+            disabled={kindleBatch.isPending}
+            onClick={() => setKindleIds(null)}
+          >
+            取消
+          </GlassButton>
+          <GlassButton
+            variant="primary"
+            disabled={kindleBatch.isPending}
+            onClick={confirmKindleSend}
+          >
+            {kindleBatch.isPending ? "正在发送…" : "开始发送"}
+          </GlassButton>
+        </div>
+      </GlassDialog>
+
+      {(kindleBatch.isPending || kindleSummary !== null) && (
+        <KindleSendSummary
+          summary={kindleSummary}
+          progress={kindleProgress}
+          onClose={() => setKindleSummary(null)}
+        />
+      )}
     </>
   );
 }

@@ -1059,6 +1059,13 @@ export const commands = {
    */
   bookSendToKindle: (id: string, options?: InvokeOptions) =>
     __TAURI_INVOKE<null>("book_send_to_kindle", { id }, options),
+  /**
+   *  `book.sendToKindleBatch` — one submit, many books, several messages when
+   *  the attachment count or total size crosses a relay limit. Partial failures
+   *  are data in the summary, not an `Err` that would hide the successful rows.
+   */
+  bookSendToKindleBatch: (ids: string[], options?: InvokeOptions) =>
+    __TAURI_INVOKE<KindleBatchSummary_Serialize>("book_send_to_kindle_batch", { ids }, options),
   /**  `system.info` */
   systemInfo: (options?: InvokeOptions) =>
     __TAURI_INVOKE<SystemInfo_Serialize>("system_info", undefined, options),
@@ -3041,6 +3048,70 @@ export type ImportProgress = {
   path: string;
 };
 
+/**
+ *  One row per input id, in input order. `message` is already display text —
+ *  the same string a single send would have put in its toast.
+ */
+export type KindleBatchOutcome = KindleBatchOutcome_Serialize | KindleBatchOutcome_Deserialize;
+
+/**
+ *  One row per input id, in input order. `message` is already display text —
+ *  the same string a single send would have put in its toast.
+ */
+export type KindleBatchOutcome_Deserialize = {
+  bookId: string;
+  title: string;
+  kind: KindleOutcomeKind;
+  message?: string | null;
+  /**  1-based position of the accepted message, when `kind` is `sent`. */
+  messageIndex?: number | null;
+};
+
+/**
+ *  One row per input id, in input order. `message` is already display text —
+ *  the same string a single send would have put in its toast.
+ */
+export type KindleBatchOutcome_Serialize = {
+  bookId: string;
+  title: string;
+  kind: KindleOutcomeKind;
+  message: string | null;
+  /**  1-based position of the accepted message, when `kind` is `sent`. */
+  messageIndex: number | null;
+};
+
+export type KindleBatchSummary = KindleBatchSummary_Serialize | KindleBatchSummary_Deserialize;
+
+export type KindleBatchSummary_Deserialize = {
+  /**  Input count, duplicates included; also the progress denominator. */
+  total: number;
+  unique: number;
+  sent: number;
+  invalid: number;
+  failed: number;
+  duplicate: number;
+  /**  Messages the relay accepted, not messages attempted. */
+  messages: number;
+  /**  Batch-wide config failure, when no message could be built at all. */
+  configError?: string | null;
+  outcomes: KindleBatchOutcome_Deserialize[];
+};
+
+export type KindleBatchSummary_Serialize = {
+  /**  Input count, duplicates included; also the progress denominator. */
+  total: number;
+  unique: number;
+  sent: number;
+  invalid: number;
+  failed: number;
+  duplicate: number;
+  /**  Messages the relay accepted, not messages attempted. */
+  messages: number;
+  /**  Batch-wide config failure, when no message could be built at all. */
+  configError: string | null;
+  outcomes: KindleBatchOutcome_Serialize[];
+};
+
 /**  Where the file goes and which relay carries it. */
 export type KindleConfig = KindleConfig_Serialize | KindleConfig_Deserialize;
 
@@ -3070,6 +3141,23 @@ export type KindleConfig_Serialize = {
   password: string;
   /**  The `@kindle.com` address from Personal Document Settings. */
   kindleEmail: string;
+};
+
+/**  Why one row of a batch ended the way it did. */
+export type KindleOutcomeKind =
+  /**  Attached to a message the relay accepted. */
+  | "sent"
+  /**  Rejected before any network call: format, size, missing file, config. */
+  | "invalid"
+  /**  The message carrying this book failed; no retry was attempted. */
+  | "failed"
+  /**  The same book id appeared earlier in this batch. */
+  | "duplicate";
+
+export type KindleSendProgress = {
+  done: number;
+  total: number;
+  messages: number;
 };
 
 /**  Counts for the shelf's filter panel, one list per dimension. */

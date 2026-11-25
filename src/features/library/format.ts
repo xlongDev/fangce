@@ -1,4 +1,5 @@
 import type { BookFormat, BookSummary, ImportOutcome, LibrarySort } from "@/types/ipc";
+import type { KindleBatchSummary } from "@/lib/bindings";
 
 /** Page-level shelf filter; `trash` is the bin, which reads different rows. */
 export type ShelfFilter = "all" | "recent" | "favorites" | "tags" | "trash";
@@ -154,4 +155,17 @@ export function summarizeOutcomes(outcomes: ImportOutcome[]): string {
 export function failedMessage(outcome: Extract<ImportOutcome, { kind: "failed" }>): string {
   const name = outcome.path.split("/").pop() ?? outcome.path;
   return `${name}：${outcome.message}`;
+}
+
+/** One line for a Kindle batch, in the same "only what happened" voice as an
+ *  import. Zero counts are left out so a clean batch does not read like a list
+ *  of things that did not go wrong. */
+export function summarizeKindleBatch(summary: KindleBatchSummary): string {
+  const parts: string[] = [];
+  if (summary.sent > 0) parts.push(`${summary.sent} 本已发送`);
+  if (summary.messages > 0) parts.push(`分 ${summary.messages} 封`);
+  if (summary.invalid > 0) parts.push(`${summary.invalid} 本无效`);
+  if (summary.failed > 0) parts.push(`${summary.failed} 本失败`);
+  if (summary.duplicate > 0) parts.push(`${summary.duplicate} 本重复`);
+  return parts.length > 0 ? parts.join("，") : "没有可发送的书";
 }

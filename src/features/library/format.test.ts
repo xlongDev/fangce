@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BookSummary } from "@/types/ipc";
+import type { KindleBatchSummary_Serialize } from "@/lib/bindings";
 
 import {
   authorLine,
@@ -8,6 +9,7 @@ import {
   isFoliateFormat,
   pickContinueReading,
   sortOptions,
+  summarizeKindleBatch,
   titleForFilter,
 } from "@/features/library/format";
 
@@ -202,5 +204,37 @@ describe("authorLine", () => {
 
   it("trims entries and drops the empty ones", () => {
     expect(authorLine(makeBook({ authors: ["  刘慈欣  ", ""] }))).toBe("刘慈欣");
+  });
+});
+
+function kindleBatch(counts: Partial<KindleBatchSummary_Serialize>): KindleBatchSummary_Serialize {
+  return {
+    total: 0,
+    unique: 0,
+    sent: 0,
+    invalid: 0,
+    failed: 0,
+    duplicate: 0,
+    messages: 0,
+    configError: null,
+    outcomes: [],
+    ...counts,
+  };
+}
+
+describe("summarizeKindleBatch", () => {
+  it("names only the outcomes that happened", () => {
+    expect(summarizeKindleBatch(kindleBatch({ sent: 26, messages: 2 }))).toBe(
+      "26 本已发送，分 2 封",
+    );
+    expect(summarizeKindleBatch(kindleBatch({}))).toBe("没有可发送的书");
+  });
+
+  it("keeps skips and failures visible alongside the successes", () => {
+    expect(
+      summarizeKindleBatch(
+        kindleBatch({ sent: 2, messages: 1, invalid: 1, failed: 1, duplicate: 1, total: 5 }),
+      ),
+    ).toBe("2 本已发送，分 1 封，1 本无效，1 本失败，1 本重复");
   });
 });

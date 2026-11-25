@@ -277,6 +277,7 @@ pub fn run() -> tauri::Result<()> {
             commands::kindle::kindle_get_config,
             commands::kindle::kindle_set_config,
             commands::kindle::book_send_to_kindle,
+            commands::kindle::book_send_to_kindle_batch,
             commands::tag::tag_list,
             commands::tag::tag_delete,
             commands::tag::tag_delete_many,
@@ -617,6 +618,7 @@ mod specta_bindings {
                 commands::kindle::kindle_get_config,
                 commands::kindle::kindle_set_config,
                 commands::kindle::book_send_to_kindle,
+                commands::kindle::book_send_to_kindle_batch,
                 commands::system::system_info,
                 commands::system::secrets_status,
                 commands::tag::tag_list,
@@ -645,6 +647,7 @@ mod specta_bindings {
             .typ::<commands::graph::GraphProgress>()
             .typ::<commands::summary::SummaryProgress>()
             .typ::<commands::source::SourceProgress>()
+            .typ::<commands::kindle::KindleSendProgress>()
             .error_handling(tauri_specta::ErrorHandlingMode::Throw)
             .dangerously_cast_bigints_to_number();
 
