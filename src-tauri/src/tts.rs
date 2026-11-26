@@ -173,14 +173,20 @@ fn timestamp() -> String {
 }
 
 /// One word the service reports, `at` seconds from the start of the clip.
-#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
+///
+/// `Deserialize` is for the disk cache: a cached clip must carry its word
+/// timings back or the reader's word-level wash would silently degrade to a
+/// whole-sentence highlight on every replay.
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EdgeWord {
     pub at: f64,
     pub text: String,
 }
 
 /// One utterance: its audio, and where each word sits inside it.
-#[derive(specta::Type, Debug, Clone, Serialize)]
+///
+/// `Deserialize` is for the disk cache, same reason as [`EdgeWord`].
+#[derive(specta::Type, Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgeClip {
     /// 24 kHz mono MP3, base64.

@@ -1147,6 +1147,10 @@ export const commands = {
    *  stretches it to the reader's speed, so one clip answers for every speed.
    *  The fixed `custom` voice id switches to the reader's own endpoint; every
    *  other id is Microsoft's.
+   *
+   *  The disk cache is wrapped here rather than in `tts.rs`: those synthesis
+   *  functions stay pure and hold no `AppHandle`, which keeps both their tests
+   *  and the future export path able to call them directly.
    */
   ttsEdgeSpeak: (text: string, voice: string, options?: InvokeOptions) =>
     __TAURI_INVOKE<EdgeClip>("tts_edge_speak", { text, voice }, options),
@@ -2869,7 +2873,11 @@ export type DuplicateGroup_Serialize = {
   books: DuplicateBook_Serialize[];
 };
 
-/**  One utterance: its audio, and where each word sits inside it. */
+/**
+ *  One utterance: its audio, and where each word sits inside it.
+ *
+ *  `Deserialize` is for the disk cache, same reason as [`EdgeWord`].
+ */
 export type EdgeClip = {
   /**
    *  24 kHz mono MP3, base64.
@@ -2908,7 +2916,13 @@ export type EdgeVoice = {
   gender: string;
 };
 
-/**  One word the service reports, `at` seconds from the start of the clip. */
+/**
+ *  One word the service reports, `at` seconds from the start of the clip.
+ *
+ *  `Deserialize` is for the disk cache: a cached clip must carry its word
+ *  timings back or the reader's word-level wash would silently degrade to a
+ *  whole-sentence highlight on every replay.
+ */
 export type EdgeWord = {
   at: number | null;
   text: string;

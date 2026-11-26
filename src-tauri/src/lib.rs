@@ -13,6 +13,7 @@ mod resource;
 mod secrets;
 mod state;
 mod tts;
+mod tts_cache;
 
 use std::fs;
 use std::time::Instant;
