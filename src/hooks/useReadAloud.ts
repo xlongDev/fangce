@@ -398,44 +398,96 @@ export function useReadAloud({
    * the transport can reuse the section roll-over without capturing a stale
    * section.
    */
+  // Consecutive empty sections crossed while rolling over. A chapter's plate
+  // pages carry no speech units; they are not the end of the book. Bounded so
+  // a malformed TOC cannot spin forever.
+  const emptyRollRef = useRef(0);
+  // Bumped on every `stop` and every new foliate queue. `readFrom` polls up to
+  // 2 s for a section to mount; without this, a reader who stops mid-roll has
+  // the voice resurrected when that poll finally resolves (DeepRead's
+  // sectionTokenRef). A late callback from an abandoned queue must be inert.
+  const foliateGenRef = useRef(0);
+  const stopFoliate = useCallback(() => {
+    foliateGenRef.current += 1;
+    stop();
+  }, [stop]);
+
   const readFoliateOnwards = useCallback(
-    (onFinish: () => void, fromSelection = false) => {
+    (onFinish: (from: number) => void, fromSelection = false, section?: number) => {
       const handle = foliateRef.current;
       if (!handle) return;
-      const reading = fromSelection ? handle.readFromSelection() : handle.readFrom();
+      const gen = ++foliateGenRef.current;
+      const reading = fromSelection ? handle.readFromSelection(section) : handle.readFrom(section);
       void reading.then((units) => {
-        // Empty means the book ran out; `stop` leaves the voice where it ended.
-        if (units.length === 0 || handle.bookEnd()) {
-          stop();
+        if (gen !== foliateGenRef.current) return;
+        const from = handle.ttsSection();
+        if (from < 0) {
+          stopFoliate();
           return;
         }
+        // An empty queue here means the section has no words to speak (a
+        // picture plate between chapters, or the book's very end). Roll on to
+        // the next chapter rather than going idle in the middle of the book;
+        // `goToNextChapter` resolves `null` only past the final entry, which
+        // is where the voice genuinely stops. `bookEnd()` is not consulted:
+        // following the voice scrolls foliate ahead of the queue being built.
+        if (units.length === 0) {
+          if (emptyRollRef.current >= 8) {
+            emptyRollRef.current = 0;
+            stopFoliate();
+            return;
+          }
+          emptyRollRef.current += 1;
+          onFinish(from);
+          return;
+        }
+        emptyRollRef.current = 0;
         setFoliateUnits(units);
         playBook(
           units.map((at) => at.text),
           0,
-          onFinish,
+          () => onFinish(from),
         );
       });
     },
-    [playBook, stop, foliateRef],
+    [playBook, stopFoliate, foliateRef],
   );
 
-  /** The foliate roll-over: finish this section, hand the voice to the next.
+  /** The foliate roll-over: finish this chapter, hand the voice to the next.
    *  Named as a function expression so it can hand itself to `readFoliateOnwards`
    *  as the continuation while still being memoised: the restart below hangs
    *  off its identity, and a fresh one per render would rebuild that every
-   *  time the voice moves. */
+   *  time the voice moves.
+   *
+   *  `from` is the section the outgoing queue was cut from, captured at read
+   *  time. Advancing from foliate's live `primaryIndex` is wrong: the voice's
+   *  own follow scroll can move it into the next section mid-reading, which
+   *  skips a section — or reports the book ended while a section is still
+   *  queued. The jump itself is to the next *TOC chapter*, not the next spine
+   *  section: a chapter's body is commonly followed by plate-only sections
+   *  that are no chapter at all. */
   const continueFoliate = useCallback(
-    function roll() {
+    async function roll(from?: number) {
       const handle = foliateRef.current;
-      if (!handle || handle.bookEnd()) {
-        stop();
+      const at = from ?? handle?.ttsSection() ?? -1;
+      if (!handle || at < 0) {
+        stopFoliate();
         return;
       }
-      handle.section(1);
-      readFoliateOnwards(roll);
+      const gen = foliateGenRef.current;
+      const next = await handle.goToNextChapter(at);
+      // Stopped while the target section was mounting: do not read on.
+      if (gen !== foliateGenRef.current) return;
+      if (next === null) {
+        stopFoliate();
+        return;
+      }
+      // Hand the *landing* section to the reader explicitly. Letting it fall
+      // back to the live `primaryIndex` races with the follow scroll and is
+      // the reason a roll used to read the plate page or repeat a chapter.
+      readFoliateOnwards(roll, false, next);
     },
-    [readFoliateOnwards, stop, foliateRef],
+    [readFoliateOnwards, stopFoliate, foliateRef],
   );
 
   /** The queue the voice is walking: prose units, or the foliate section's. */
@@ -818,7 +870,7 @@ export function useReadAloud({
     closeRsvp,
     rsvpWords,
     toggle,
-    stop,
+    stop: useFoliate ? stopFoliate : stop,
     step,
     skip,
     seek,

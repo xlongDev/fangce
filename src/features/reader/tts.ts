@@ -117,9 +117,6 @@ export function useTts({ trackBoundary = false }: Options = {}) {
   const voiceUri = useRef<string | null>(null);
   // Read from inside `speak`, which is created once per session.
   const trackBoundaryRef = useRef(trackBoundary);
-  // What the Edge engine calls when its queue runs out. Kept in a ref because
-  // the engine is built once and the reader passes a fresh callback per play.
-  const finishRef = useRef<(() => void) | undefined>(undefined);
   const edgeRef = useRef<EdgeEngine | null>(null);
 
   useEffect(() => {
@@ -170,7 +167,6 @@ export function useTts({ trackBoundary = false }: Options = {}) {
     generation.current += 1;
     window.speechSynthesis.cancel();
     edgeRef.current?.stop();
-    finishRef.current = undefined;
     // The failure text belongs to the session stop ends. The pill is drawn
     // while `status !== "idle" || error !== null`, so leaving it set made the
     // close button dead exactly when the engine had failed — the one state a
@@ -193,13 +189,7 @@ export function useTts({ trackBoundary = false }: Options = {}) {
       loading: setLoading,
       // Both engines announce through one place; see `publishBoundary`.
       boundary: (spot) => publishRef.current(spot),
-      done: () => {
-        const finish = finishRef.current;
-        finishRef.current = undefined;
-        finish?.();
-      },
       fail: (message) => {
-        finishRef.current = undefined;
         setError(message);
         setStatus("idle");
         setUnit(null);
@@ -221,8 +211,11 @@ export function useTts({ trackBoundary = false }: Options = {}) {
       const uri = voiceUri.current;
       if (engineOf(uri) === "edge" && uri !== null) {
         setError(null);
-        finishRef.current = onFinish;
-        edgeEngine().play(units, from, { trim, voice: uri, rate: rate.current });
+        // The engine calls this when the last clip ends. Carrying it in the
+        // play options rather than a ref here is what actually wires the
+        // reader's chapter roll-over: a ref the engine never reads would leave
+        // every Edge session silent at the end of its queue.
+        edgeEngine().play(units, from, { trim, voice: uri, rate: rate.current, onFinish });
         return;
       }
 
@@ -335,7 +328,6 @@ export function useTts({ trackBoundary = false }: Options = {}) {
       if (engineOf(uri) !== was) {
         window.speechSynthesis.cancel();
         edgeRef.current?.stop();
-        finishRef.current = undefined;
         setStatus("idle");
         setUnit(null);
         setLoading(false);

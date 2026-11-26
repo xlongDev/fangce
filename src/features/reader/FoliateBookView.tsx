@@ -18,6 +18,7 @@ import { pickFoliateHit } from "@/features/search/snippet";
 import { OverlayPortal } from "@/components/glass/overlay";
 import { EASE_OUT } from "@/lib/motion";
 import type { LayoutMode, PageTransition } from "./theme";
+import { nextChapterSection } from "./foliateChapters";
 import { DEFAULT_MARGIN_X } from "@/stores/reader";
 import { speechUnits, unitsFromOffset } from "./speech";
 import type { SpeechUnit, Span } from "./speech";
@@ -199,6 +200,25 @@ export type FoliateHandle = {
   scrollByPx: (delta: number, subpixel: number) => number;
   /** True parked on the very end of the book (auto-scroll stop). */
   bookEnd: () => boolean;
+  /** Section index the last `readFrom*` built its queue from. Read-aloud
+   *  follows the voice by scrolling, which moves foliate's `primaryIndex`
+   *  ahead while a section is still being spoken; rolling to the next section
+   *  must use the index the queue came from, not that drifted value. `-1`
+   *  before the first read. */
+  ttsSection: () => number;
+  /** Number of sections in the book. */
+  sectionCount: () => number;
+  /** Absolute section jump for a read-aloud roll-over. Unlike `section(dir)`,
+   *  this does not read the current `primaryIndex` — by the end of a section
+   *  that index can already point into the next one. */
+  goToSection: (index: number) => void;
+  /** Reads on at the next table-of-contents chapter after `from`, the section
+   *  the outgoing queue was cut from. A chapter can span several spine
+   *  sections (a body plus its plate pages), so a bare `goToSection(from + 1)`
+   *  lands on a caption page the reader never thinks of as a chapter; this
+   *  resolves the next entry's own section. Returns the section it landed on,
+   *  or `null` at the end of the book. */
+  goToNextChapter: (from: number) => Promise<number | null>;
   /** Jumps to a foliate anchor string (a CFI). */
   goToCfi: (cfi: string) => void;
   /** Jumps to a whole-book fraction, the only anchor a bookmark or a chapter
@@ -209,13 +229,15 @@ export type FoliateHandle = {
   search: (query: string) => Promise<FoliateSearchHit[]>;
   /** Undoes `search`: drops every match highlight from the sections. */
   clearSearch: () => void;
-  /** Read-aloud units of the section on screen, starting at the first block
-   *  the reader can actually see. Waits out a pending section change; resolves
-   *  empty at the end of the book. */
-  readFrom: () => Promise<SpeechUnit[]>;
+  /** Read-aloud units of `section`, or of the section on screen when omitted,
+   *  starting at the first block the reader can see. A roll-over passes the
+   *  landing section explicitly and starts at block 0 — reading the live
+   *  `primaryIndex` there races with the follow scroll. Waits out a pending
+   *  section change; resolves empty at the end of the book. */
+  readFrom: (section?: number) => Promise<SpeechUnit[]>;
   /** The same units, but starting at the sentence holding the reader's
    *  selection inside the section. */
-  readFromSelection: () => Promise<SpeechUnit[]>;
+  readFromSelection: (section?: number) => Promise<SpeechUnit[]>;
   /** Brings the unit `readFrom` handed out into view, and washes `span` — the
    *  whole unit, or the word the engine reported. `"block"` washes everything
    *  the unit sits in (the paragraph level) and `null` scrolls without
@@ -1021,6 +1043,9 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   // restyle repaints even though the anchor has not changed.
   const paintedRef = useRef<Map<string, string>>(new Map());
   const blocksRef = useRef<TextBlock[]>([]);
+  // The section the current read-aloud queue was cut from. `primaryIndex`
+  // drifts as the voice scrolls; this one is pinned until the next `readFrom*`.
+  const ttsSectionRef = useRef(-1);
   // Where the last selection started, parked for 「朗读此处」: the pill clears
   // the browser's own selection the instant it is tapped.
   const spotAnchor = useRef<{ node: Node; offset: number } | null>(null);
@@ -1921,24 +1946,35 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   }, [ttsWash, style.dark, paintTts]);
 
   /**
-   * The text blocks of the section on screen, waiting out a section switch:
-   * the paginator renders the next section a frame or two after
-   * `nextSection()` resolves, so a chapter roll-over would otherwise fall
-   * silent instead of reading on.
+   * The text blocks of a section, waiting out a section switch: the paginator
+   * renders the target a frame or two after `goTo` resolves, so a chapter
+   * roll-over would otherwise fall silent instead of reading on.
+   *
+   * `index`, when given, is the roll-over's *landing section* and is the only
+   * trustworthy answer during a roll. Reading `renderer.primaryIndex` here is
+   * wrong: following the voice scrolls foliate into the next section before
+   * the current one's last line ends, so the index drifts mid-queue. A caller
+   * that omits it wants whatever is on screen (first play, RSVP, focus).
    */
-  const collectBlocks = useCallback(async (): Promise<TextBlock[]> => {
+  const collectBlocks = useCallback(async (index?: number): Promise<TextBlock[]> => {
     const renderer = viewRef.current?.renderer;
     if (!renderer) return [];
     const collect = () => {
       const contents = renderer.getContents();
-      const primary =
-        contents.find((entry) => entry.index === renderer.primaryIndex) ?? contents[0];
-      return primary?.doc ? readBlocks(primary.doc) : [];
+      // No `contents[0]` fallback: while the target mounts, that is the
+      // *previous* section. Reading it would repeat a chapter and stop at a
+      // `bookEnd` reached only by following along. Waiting is what the poll
+      // is for.
+      const target =
+        index === undefined
+          ? contents.find((entry) => entry.index === renderer.primaryIndex)
+          : contents.find((entry) => entry.index === index);
+      return target?.doc ? readBlocks(target.doc) : [];
     };
     const poll = (attempt: number): Promise<TextBlock[]> => {
       const blocks = collect();
       if (blocks.length > 0) return Promise.resolve(blocks);
-      if (attempt >= 15 || (renderer.atEnd && attempt > 0)) return Promise.resolve([]);
+      if (attempt >= 20) return Promise.resolve([]);
       return new Promise((resolve) => window.setTimeout(resolve, 100)).then(() =>
         poll(attempt + 1),
       );
@@ -2060,6 +2096,36 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         return renderer.containerPosition - before;
       },
       bookEnd: () => viewRef.current?.renderer?.atEnd ?? false,
+      ttsSection: () => ttsSectionRef.current,
+      sectionCount: () => viewRef.current?.renderer?.sections.length ?? 0,
+      goToSection: (index) => {
+        rulerDirRef.current = 1;
+        void viewRef.current?.renderer?.goTo({ index });
+      },
+      goToNextChapter: async (from) => {
+        const view = viewRef.current;
+        const renderer = view?.renderer;
+        if (!view || !renderer) return null;
+        // Which TOC entry owns the section just read? Entries are ordered, so
+        // the owning one is the last whose href resolves at or before `from`.
+        // A book without a usable TOC falls back to the next spine section.
+        const starts = tocRef.current
+          .map((entry) => {
+            try {
+              return view.book.resolveHref?.(entry.href)?.index;
+            } catch {
+              return undefined;
+            }
+          })
+          .filter((index): index is number => typeof index === "number");
+        const target = nextChapterSection(starts, from, renderer.sections.length);
+        if (target === null) return null;
+        rulerDirRef.current = 1;
+        // Await the render: `readFrom` that follows needs the target section's
+        // document mounted, or it falls through to an empty queue and stops.
+        await renderer.goTo({ index: target });
+        return target;
+      },
       goToCfi: (cfi) => {
         const view = viewRef.current;
         if (!view || cfi === "") return;
@@ -2109,18 +2175,26 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       clearSearch: () => {
         viewRef.current?.clearSearch();
       },
-      readFrom: async () => {
-        const blocks = await collectBlocks();
+      readFrom: async (section?: number) => {
+        const blocks = await collectBlocks(section);
         if (blocks.length === 0) return [];
         blocksRef.current = blocks;
-        // Where the reader is looking, not the top of the section: tapping
-        // read-aloud mid-page must not restart the chapter.
-        return unitsFrom(blocks, firstVisibleBlock(blocks, hostRef.current), 0);
+        // The queue's own section, not the live primaryIndex: the follow
+        // scroll moves that index on while this queue is still speaking. A
+        // roll-over passes its landing section explicitly so the *next* roll
+        // advances from where this queue actually came from.
+        ttsSectionRef.current = section ?? viewRef.current?.renderer?.primaryIndex ?? -1;
+        // A roll-over starts at the chapter's first block. A fresh play from
+        // the pill starts where the reader is looking — nobody tapping
+        // read-aloud mid-page wants to restart the chapter.
+        const from = section === undefined ? firstVisibleBlock(blocks, hostRef.current) : 0;
+        return unitsFrom(blocks, from, 0);
       },
-      readFromSelection: async () => {
-        const blocks = await collectBlocks();
+      readFromSelection: async (section?: number) => {
+        const blocks = await collectBlocks(section);
         if (blocks.length === 0) return [];
         blocksRef.current = blocks;
+        ttsSectionRef.current = section ?? viewRef.current?.renderer?.primaryIndex ?? -1;
         const spot = selectionSpot(blocks);
         return unitsFrom(blocks, spot?.block ?? 0, spot?.offset ?? 0);
       },

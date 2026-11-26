@@ -11,12 +11,13 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
  * the real one calls, because reaching `fail` through the real one would mean
  * reaching the service.
  */
-const { failRef, boundaryRef } = vi.hoisted(() => ({
+const { failRef, boundaryRef, edgePlay } = vi.hoisted(() => ({
   failRef: { current: null as ((message: string) => void) | null },
   boundaryRef: {
     current: null as
       ((spot: { unit: number; charIndex: number; charLength: number } | null) => void) | null,
   },
+  edgePlay: vi.fn(),
 }));
 
 vi.mock("./edge", () => ({
@@ -28,7 +29,7 @@ vi.mock("./edge", () => ({
     failRef.current = events.fail;
     boundaryRef.current = events.boundary;
     return {
-      play: vi.fn(),
+      play: edgePlay,
       stop: vi.fn(),
       pause: vi.fn(),
       resume: vi.fn(),
@@ -61,6 +62,23 @@ beforeAll(() => {
 });
 
 describe("useTts", () => {
+  it("hands the chapter roll-over to the Edge engine", () => {
+    const { result } = renderHook(() => useTts());
+    const finish = vi.fn();
+    act(() => {
+      result.current.setVoice(EDGE_VOICE);
+      result.current.play(["第一句。"], 0, finish);
+    });
+
+    // The engine — not this hook — owns the callback: a ref kept here and
+    // never handed over is why Edge sessions used to stop at a chapter end.
+    expect(edgePlay).toHaveBeenCalledWith(
+      ["第一句。"],
+      0,
+      expect.objectContaining({ onFinish: finish, voice: EDGE_VOICE }),
+    );
+  });
+
   it("announces every word to a watcher, even without the word-level wash", () => {
     const { result } = renderHook(() => useTts());
     const watch = vi.fn();

@@ -131,8 +131,6 @@ export interface EdgeEvents {
    *  space between a seek and the first sample is a network round trip, not
    *  silence, and the player draws it as loading rather than a frozen clock. */
   loading: (pending: boolean) => void;
-  /** The queue ran out; the reader rolls into the next chapter. */
-  done: () => void;
   /** The service could not be reached. */
   fail: (message: string) => void;
 }

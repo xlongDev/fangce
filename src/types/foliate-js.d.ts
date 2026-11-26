@@ -21,6 +21,10 @@ type FoliateBookDoc = {
   /** Present when foliate could map the TOC onto the spine — the condition
    *  for its section-progress table, and so for `goToFraction`. */
   splitTOCHref?: unknown;
+  /** Resolves a TOC href to the spine section it starts at, with an anchor
+   *  factory for any fragment. Used to roll read-aloud to the next chapter
+   *  rather than the next (possibly plate-only) spine section. */
+  resolveHref?: (href: string) => { index: number; anchor?: unknown } | null;
 };
 
 /** Rects of one painted run, in the section document's own coordinates. */
@@ -154,6 +158,11 @@ declare module "foliate-js/view.js" {
     removeAttribute(qualifiedName: string): void;
     prevSection(): Promise<void>;
     nextSection(): Promise<void>;
+    /** All spine sections, in book order. */
+    readonly sections: readonly { linear?: string }[];
+    /** Absolute section jump by index; used by read-aloud roll-over, where
+     *  `primaryIndex` has already followed the voice into the next section. */
+    goTo(target: { index: number }): Promise<void>;
     /** True at the first/last page of the current section, with a neighbour
      *  section — used for explicit cross-chapter keyboard paging. */
     isAtSectionEdge(dir: 1 | -1): boolean;

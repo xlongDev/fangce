@@ -52,6 +52,12 @@ function fakeHandle(overrides: Partial<Record<string, unknown>> = {}): FoliateHa
     readFrom: vi.fn(() => Promise.resolve([] as SpeechUnit[])),
     readFromSelection: vi.fn(() => Promise.resolve([] as SpeechUnit[])),
     bookEnd: () => false,
+    ttsSection: () => 0,
+    sectionCount: () => 1,
+    goToSection: vi.fn(),
+    // No TOC in the fixture: one section per chapter, so the next section is
+    // the next chapter. Individual tests override this to model real books.
+    goToNextChapter: vi.fn((from: number) => Promise.resolve(from + 1 < 1 ? null : from + 1)),
     section: vi.fn(),
     clearTts: vi.fn(),
     focusUnit: vi.fn(),
@@ -447,6 +453,161 @@ describe("useReadAloud", () => {
     expect(onFinish).not.toBe(options.onChapterEnd);
     expect(tts.play).toHaveBeenCalledWith(["A", "B"], 0, onFinish);
     expect(result.current.units).toEqual(units);
+  });
+
+  it("rolls from the section the queue came from, not the drifted primary index", async () => {
+    const units: SpeechUnit[] = [
+      { text: "A", source: 0, start: 0, end: 1 },
+      { text: "B", source: 1, start: 0, end: 1 },
+    ];
+    const readFrom = vi.fn(() => Promise.resolve(units));
+    const goToNextChapter = vi.fn((from: number) => Promise.resolve(from + 1));
+    const section = vi.fn();
+    const tts = fakeTts();
+    const { result } = setup({
+      tts,
+      useFoliate: true,
+      foliateRef: {
+        current: fakeHandle({
+          readFrom,
+          goToNextChapter,
+          section,
+          // The voice's follow scroll has already pushed foliate into 2 while
+          // this queue still belongs to 1.
+          ttsSection: () => 1,
+          sectionCount: () => 3,
+        }),
+      },
+    });
+
+    await act(async () => result.current.toggle());
+    const finish = (tts.play as ReturnType<typeof vi.fn>).mock.calls[0]![2] as () => void;
+    await act(async () => finish());
+
+    expect(goToNextChapter).toHaveBeenCalledWith(1);
+    expect(section).not.toHaveBeenCalled();
+    expect(readFrom).toHaveBeenCalledTimes(2);
+    expect(tts.play).toHaveBeenCalledTimes(2);
+  });
+
+  it("jumps to the next TOC chapter's section, skipping plate pages", async () => {
+    // 《看见》: 第一章's body is section 4, its plate page is 5, 第二章 starts
+    // at 6. A bare `from + 1` would land on the plate and go silent.
+    const units: SpeechUnit[] = [{ text: "A", source: 0, start: 0, end: 1 }];
+    const readFrom = vi.fn(() => Promise.resolve(units));
+    const goToNextChapter = vi.fn(() => Promise.resolve(6));
+    const tts = fakeTts();
+    const { result } = setup({
+      tts,
+      useFoliate: true,
+      foliateRef: {
+        current: fakeHandle({
+          readFrom,
+          goToNextChapter,
+          ttsSection: () => 4,
+          sectionCount: () => 55,
+        }),
+      },
+    });
+
+    await act(async () => result.current.toggle());
+    const finish = (tts.play as ReturnType<typeof vi.fn>).mock.calls[0]![2] as () => void;
+    await act(async () => finish());
+
+    expect(goToNextChapter).toHaveBeenCalledWith(4);
+    // The landing section must reach the reader. Without it the second queue
+    // is collected from the drifted live index — the plate page or a repeat
+    // of chapter one — which is the cross-chapter bug, even when the jump
+    // itself was correct.
+    expect(readFrom).toHaveBeenCalledTimes(2);
+    expect(readFrom).toHaveBeenNthCalledWith(2, 6);
+    expect(tts.stop).not.toHaveBeenCalled();
+  });
+
+  it("does not resurrect the voice if stopped while the next section mounts", async () => {
+    // DeepRead's sectionTokenRef case: `readFrom` polls for a section to mount.
+    // If the reader stops during that wait, the late resolution must not start
+    // speaking a queue nobody is listening to any more.
+    const units: SpeechUnit[] = [{ text: "A", source: 0, start: 0, end: 1 }];
+    let resolveRead: ((units: SpeechUnit[]) => void) | undefined;
+    const readFrom = vi.fn(
+      () =>
+        new Promise<SpeechUnit[]>((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+    const tts = fakeTts();
+    const { result } = setup({
+      tts,
+      useFoliate: true,
+      foliateRef: {
+        current: fakeHandle({ readFrom, ttsSection: () => 0 }),
+      },
+    });
+
+    await act(async () => result.current.toggle());
+    await act(async () => result.current.stop());
+    await act(async () => resolveRead?.(units));
+
+    expect(tts.play).not.toHaveBeenCalled();
+  });
+
+  it("rolls past a wordless plate section instead of going idle", async () => {
+    const spoken: SpeechUnit[] = [{ text: "A", source: 0, start: 0, end: 1 }];
+    let section = 4;
+    const readFrom = vi.fn(() => Promise.resolve(section === 5 ? [] : spoken));
+    const goToNextChapter = vi.fn((from: number) => {
+      section = from + 1;
+      return Promise.resolve(section);
+    });
+    const tts = fakeTts();
+    const { result } = setup({
+      tts,
+      useFoliate: true,
+      foliateRef: {
+        current: fakeHandle({
+          readFrom,
+          goToNextChapter,
+          ttsSection: () => section,
+          sectionCount: () => 55,
+        }),
+      },
+    });
+
+    await act(async () => result.current.toggle());
+    const finish = (tts.play as ReturnType<typeof vi.fn>).mock.calls[0]![2] as () => void;
+    await act(async () => finish());
+
+    // One roll for the plate (empty) and one for the spoken section: the voice
+    // never stops between chapters.
+    expect(goToNextChapter).toHaveBeenCalledTimes(2);
+    expect(tts.stop).not.toHaveBeenCalled();
+    expect(tts.play).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops at the last chapter without jumping past the book", async () => {
+    const units: SpeechUnit[] = [{ text: "A", source: 0, start: 0, end: 1 }];
+    const goToNextChapter = vi.fn(() => Promise.resolve(null));
+    const tts = fakeTts();
+    const { result } = setup({
+      tts,
+      useFoliate: true,
+      foliateRef: {
+        current: fakeHandle({
+          readFrom: vi.fn(() => Promise.resolve(units)),
+          goToNextChapter,
+          ttsSection: () => 52,
+          sectionCount: () => 55,
+        }),
+      },
+    });
+
+    await act(async () => result.current.toggle());
+    const finish = (tts.play as ReturnType<typeof vi.fn>).mock.calls[0]![2] as () => void;
+    await act(async () => finish());
+
+    expect(tts.stop).toHaveBeenCalled();
+    expect(goToNextChapter).toHaveBeenCalledWith(52);
   });
 
   it("follows a word that crosses onto the next page mid-sentence", async () => {
